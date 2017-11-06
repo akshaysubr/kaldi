@@ -25,7 +25,7 @@ COPY . .
 
 RUN cd src/ && \
     ./configure --shared && \
-    make -j"$(nproc)" && \
+    make -j"$(nproc)" all ext && \
     make clean && \
     ldconfig
 
