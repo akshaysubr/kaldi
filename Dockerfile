@@ -6,10 +6,11 @@ ENV NVIDIA_KALDI_VERSION 18.01
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bzip2 \
+        gawk \
         gzip \
         libatlas3-base \
-        subversion \
         python-dev \
+        subversion \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
@@ -25,8 +26,9 @@ COPY . .
 
 RUN cd src/ && \
     ./configure --shared && \
-    make -j"$(nproc)" all ext && \
-    make clean && \
+    make -j"$(nproc)" depend && \
+    make -j"$(nproc)" && \
+    make -j"$(nproc)" ext && \
     ldconfig
 
 ENV PYTHONPATH $PYTHONPATH:/usr/local/python
