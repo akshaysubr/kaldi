@@ -28,7 +28,7 @@ all: check_required_programs sph2pipe sclite openfst
 sph2pipe sclite openfst sctk: | check_required_programs
 
 check_required_programs:
-	extras/check_dependencies.sh
+#	extras/check_dependencies.sh
 
 clean: openfst_cleaned sclite_cleaned
 
