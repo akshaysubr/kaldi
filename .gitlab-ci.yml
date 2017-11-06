@@ -260,7 +260,7 @@ stage:
 
 #### P100_R384_4GPU ####
 
-#L0_self_test--P100_R384_4GPU:
-#    <<: *L0_TEST
-#    <<: *P100_R384_4GPU
+L0_egs_voxforge--P100_R384_4GPU:
+    <<: *L0_TEST
+    <<: *P100_R384_4GPU
 
