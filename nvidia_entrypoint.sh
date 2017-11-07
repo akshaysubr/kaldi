@@ -6,7 +6,7 @@ cat <<EOF
 == Kaldi ==
 ===========
 
-NVIDIA Release ${NVIDIA_CAFFE_VERSION} (build ${NVIDIA_BUILD_ID})
+NVIDIA Release ${NVIDIA_KALDI_VERSION} (build ${NVIDIA_BUILD_ID})
 
 Container image Copyright (c) 2017, NVIDIA CORPORATION.  All rights reserved.
 Copyright 2017, Kaldi contributors.  All rights reserved.
