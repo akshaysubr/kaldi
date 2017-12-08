@@ -4,15 +4,21 @@ ENV KALDI_VERSION 5.2
 LABEL com.nvidia.kaldi.version="${KALDI_VERSION}"
 ENV NVIDIA_KALDI_VERSION 18.01
 
+ARG PYVER=2.7
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bzip2 \
         gawk \
         gzip \
         libatlas3-base \
-        python-dev \
+        python$PYVER-dev \
         subversion \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
+
+RUN rm -f /usr/bin/python && ln -s /usr/bin/python$PYVER /usr/bin/python
+RUN MAJ=`echo "$PYVER" | cut -c1-1` && \
+    rm -f /usr/bin/python$MAJ && ln -s /usr/bin/python$PYVER /usr/bin/python$MAJ
 
 WORKDIR /opt/kaldi
 

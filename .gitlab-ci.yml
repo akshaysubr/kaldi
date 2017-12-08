@@ -64,6 +64,10 @@ py2-base:
     stage: build base
     <<: *BASE
 
+py3-base:
+    stage: build base
+    <<: *BASE
+
 .devel_template : &DEVEL
     variables:
       GIT_STRATEGY: fetch
@@ -86,6 +90,10 @@ py2-base:
     - tags
 
 py2-devel:
+    stage: build devel
+    <<: *DEVEL
+
+py3-devel:
     stage: build devel
     <<: *DEVEL
 
@@ -117,6 +125,10 @@ py2-devel:
     when: manual
 
 py2-stage:
+    stage: staging
+    <<: *STAGE
+
+py3-stage:
     stage: staging
     <<: *STAGE
 
@@ -270,9 +282,15 @@ py2-stage:
 #    tags:
 #    - 1GPU
 
-#### P100_R384_4GPU ####
+#### P100_R384_4GPU Python 2 ####
 
 L0_egs_voxforge--P100_R384_4GPU:
+    <<: *L0_TEST
+    <<: *P100_R384_4GPU
+
+#### P100_R384_4GPU Python 3 ####
+
+L0_egs_voxforge--py3--P100_R384_4GPU:
     <<: *L0_TEST
     <<: *P100_R384_4GPU
 
