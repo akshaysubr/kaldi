@@ -7,11 +7,15 @@ ENV NVIDIA_KALDI_VERSION 18.04
 ARG PYVER=2.7
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        automake \
+        autoconf \
         bzip2 \
         gawk \
         gzip \
         libatlas3-base \
+        libtool \
         python$PYVER-dev \
+        python3 \
         subversion \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
@@ -23,9 +27,8 @@ RUN MAJ=`echo "$PYVER" | cut -c1-1` && \
 WORKDIR /opt/kaldi
 
 COPY tools tools
-RUN cd tools/ && \
-    make -j"$(nproc)" && \
-    make clean
+RUN cd tools/ && make -j"$(nproc)" 
+RUN cd tools/ && make clean
 
 # Copy remainder of source code
 COPY . .
