@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libatlas3-base \
         libtool \
         python$PYVER-dev \
+        python2.7 \
         python3 \
         subversion \
         zlib1g-dev && \
