@@ -7,7 +7,7 @@ CC = gcc         # used for sph2pipe
 
 # Note: OpenFst requires a relatively recent C++ compiler with C++11 support,
 # e.g. g++ >= 4.7, Apple clang >= 5.0 or LLVM clang >= 3.3.
-OPENFST_VERSION ?= 1.6.2
+OPENFST_VERSION ?= 1.6.5
 
 # Default features configured for OpenFST; can be overridden in the make command line.
 OPENFST_CONFIGURE ?= --enable-static --enable-shared --enable-far --enable-ngram-fsts
@@ -28,7 +28,7 @@ all: check_required_programs sph2pipe sclite openfst
 sph2pipe sclite openfst sctk: | check_required_programs
 
 check_required_programs:
-#	extras/check_dependencies.sh
+	extras/check_dependencies.sh
 
 clean: openfst_cleaned sclite_cleaned
 
