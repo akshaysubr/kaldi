@@ -1,8 +1,8 @@
-FROM gitlab-dl.nvidia.com:5005/dgx/cuda:9.0-cudnn7.1-devel-ubuntu16.04--18.05
+FROM gitlab-dl.nvidia.com:5005/dgx/cuda:10.0-cudnn7.2-devel-ubuntu16.04-cuda10.0--18.06
 
 ENV KALDI_VERSION 5.2
 LABEL com.nvidia.kaldi.version="${KALDI_VERSION}"
-ENV NVIDIA_KALDI_VERSION 18.05
+ENV NVIDIA_KALDI_VERSION 18.06
 
 ARG PYVER=2.7
 
