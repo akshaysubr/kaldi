@@ -100,10 +100,8 @@ class ThreadedBatchedCudaDecoder {
     //allocates reusable objects that are common across all decodings
     void Initialize(const fst::Fst<fst::StdArc> &decode_fst, std::string nnet3_rxfilename) {
       KALDI_LOG << "ThreadedBatchedCudaDecoder Initialize with " << config_.numThreads_ << " threads\n";
-
-      cuda_fst_.Initialize(decode_fst); 
-
-      //read transition model and nnet
+   
+     //read transition model and nnet
       bool binary;
       Input ki(nnet3_rxfilename, &binary);
       trans_model_.Read(ki.Stream(), binary);
@@ -111,6 +109,8 @@ class ThreadedBatchedCudaDecoder {
       SetBatchnormTestMode(true, &(am_nnet_.GetNnet()));
       SetDropoutTestMode(true, &(am_nnet_.GetNnet()));
       nnet3::CollapseModel(nnet3::CollapseModelConfig(), &(am_nnet_.GetNnet()));
+
+      cuda_fst_.Initialize(decode_fst, trans_model_); 
 
       decodable_info_=new nnet3::DecodableNnetSimpleLoopedInfo(config_.decodable_opts_,&am_nnet_);
 
@@ -240,7 +240,7 @@ class ThreadedBatchedCudaDecoder {
       std::vector<BaseFloat> samp_freqs;
       std::vector<SubVector<BaseFloat>* > data;
       std::vector<OnlineNnet2FeaturePipeline*> features;
-      std::vector<DecodableInterface*> decodables;
+      std::vector<nnet3::DecodableAmNnetLoopedOnlineCuda*> decodables;
       std::vector<int> completed_channels;         
       std::vector<Lattice*> lattices;        
 
@@ -314,7 +314,7 @@ class ThreadedBatchedCudaDecoder {
               OnlineNnet2FeaturePipeline *feature = new OnlineNnet2FeaturePipeline(feature_info);
               features.push_back(feature);
 
-              decodables.push_back(new nnet3::DecodableAmNnetLoopedOnlineCuda(trans_model_, *decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
+              decodables.push_back(new nnet3::DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
               data.push_back(new SubVector<BaseFloat>(state.wave_data.Data(), 0));
               samp_freqs.push_back(state.wave_data.SampFreq());
 

@@ -224,8 +224,8 @@ void decode_function(DecodeParams &params, int th_idx, int gpu_idx) {
           feature_info.silence_weighting_config,
           params.decodable_opts.frame_subsampling_factor);
 
-      SingleUtteranceNnet3CudaDecoder decoder(trans_model,
-          decodable_info, cuda_decoder, &feature_pipeline);
+      SingleUtteranceNnet3CudaDecoder decoder(decodable_info, 
+		cuda_decoder, &feature_pipeline);
 
       OnlineTimer decoding_timer(utt);
 
@@ -418,11 +418,17 @@ int main(int argc, char *argv[]) {
       clat_wspecifier = po.GetArg(5);
     CompactLatticeWriter clat_writer(clat_wspecifier);
 
+    TransitionModel trans_model;
+    {
+	    bool binary;
+	    Input ki(params.nnet3_rxfilename, &binary);
+	    trans_model.Read(ki.Stream(), binary);
+    }
     //read in fst and put into cuda data structure (one per device)
     fst::Fst<fst::StdArc> *decode_fst = ReadFstKaldiGeneric(fst_rxfilename);
     for(int i=0;i<num_gpus;i++) {
       cudaSetDevice(i);
-      cuda_fst[i].Initialize(*decode_fst);
+      cuda_fst[i].Initialize(*decode_fst, trans_model);
     }
 
     if(!online) chunk_length_secs = -1.0;

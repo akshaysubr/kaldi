@@ -24,6 +24,8 @@
 
 #include <numeric>
 
+#include "nnet3/decodable-online-looped.h"
+
 namespace kaldi {
 
 SingleUtteranceNnet3CudaDecoder::SingleUtteranceNnet3CudaDecoder(
@@ -32,8 +34,7 @@ SingleUtteranceNnet3CudaDecoder::SingleUtteranceNnet3CudaDecoder(
     CudaDecoder &cuda_decoder,
     OnlineNnet2FeaturePipeline *features) :
     input_feature_frame_shift_in_seconds_(features->FrameShiftInSeconds()),
-    trans_model_(trans_model),
-    decodable_(trans_model_, info,
+    decodable_(info,
                features->InputFeature(), features->IvectorFeature()),
     decoder_(cuda_decoder) {
     KALDI_ASSERT(DECODER_NDUPLICATES == 1); // FIXME we have only one decodable to use
