@@ -70,8 +70,8 @@ class BatchedCudaDecoderConfig {
 /*
  *  ThreadedBatchedCudaDecoder uses multiple levels of parallelism in order to decode quickly on CUDA GPUs.
  *  It's API is utterance centric using deferred execution.  That is a user submits work one utterance at a time
- *  and the class batches that work behind the sceen. Utterance are passed into the API with a unqiue key of type string.
- *  The user must ensure this name is unique.  APIs are provided to enque work, query the best path, and cleanup enqueued work.
+ *  and the class batches that work behind the scene. Utterance are passed into the API with a unique key of type string.
+ *  The user must ensure this name is unique.  APIs are provided to enqueue work, query the best path, and cleanup enqueued work.
  *  Once a user closes a decode handle they are free to use that key again.
  *  
  *  Example Usage is as follows:
