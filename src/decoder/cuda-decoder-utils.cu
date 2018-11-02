@@ -21,20 +21,19 @@ namespace kaldi {
 
 	/***************************************CudaFst Implementation*****************************************/
 
-	void CudaFst::Initialize(const fst::Fst<StdArc> &fst) {
+	void CudaFst::Initialize(const fst::Fst<StdArc> &fst, const TransitionModel &trans_model) {
 		nvtxRangePushA("CudaFst constructor");
 		//count states since Fst doesn't provide this functionality
 		num_states_=0;
-		for( fst::StateIterator<fst::Fst<StdArc> > iter(fst); !iter.Done(); iter.Next()) {
-			num_states_++;
-		}
+		for( fst::StateIterator<fst::Fst<StdArc> > iter(fst); !iter.Done(); iter.Next()) 
+			++num_states_;
+		
 		start_=fst.Start();
-		cudaMallocHost(&h_final_,sizeof(*h_final_)*num_states_);
 
 		//allocate and initialize offset arrays
-		cudaMallocHost(&h_e_offsets_, (num_states_+1)*sizeof(*h_e_offsets_));
-		cudaMallocHost(&h_ne_offsets_, (num_states_+1)*sizeof(*h_ne_offsets_));
-
+		h_final_.resize(num_states_);
+		h_e_offsets_.resize(num_states_+1);
+		h_ne_offsets_.resize(num_states_+1);
 		cudaMalloc((void**)&d_e_offsets_,(num_states_+1)*sizeof(*d_e_offsets_));
 		cudaMalloc((void**)&d_ne_offsets_,(num_states_+1)*sizeof(*d_ne_offsets_));
 		cudaMalloc((void**)&d_final_,(num_states_)*sizeof(*d_final_));
@@ -42,7 +41,6 @@ namespace kaldi {
 		//iterate through states and arcs and count number of arcs per state
 		e_count_=0;
 		ne_count_=0;
-		max_ilabel_=0;
 
 		// Init first offsets
 		h_ne_offsets_[0] = 0; 
@@ -50,16 +48,10 @@ namespace kaldi {
 
 		for(int i=0;i<num_states_;i++) {
 			h_final_[i]=fst.Final(i).Value();
-
 			//count emiting and non_emitting arcs
 			for (fst::ArcIterator<fst::Fst<StdArc> > aiter(fst, i); !aiter.Done(); aiter.Next()) {
 				StdArc arc = aiter.Value();
 				int32 ilabel = arc.ilabel;
-
-				if(ilabel>max_ilabel_) {
-					max_ilabel_ = ilabel;
-				}
-
 				if(ilabel!=0) { //emitting
 					e_count_++;
 				} else { //non-emitting
@@ -78,20 +70,23 @@ namespace kaldi {
 
 		arc_count_=e_count_+ne_count_;
 
-		cudaMemcpy(d_e_offsets_,h_e_offsets_,(num_states_+1)*sizeof(*d_e_offsets_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_ne_offsets_,h_ne_offsets_,(num_states_+1)*sizeof(*d_ne_offsets_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_final_,h_final_,num_states_*sizeof(*d_final_),cudaMemcpyHostToDevice);
+		cudaMemcpy(d_e_offsets_,&h_e_offsets_[0],(num_states_+1)*sizeof(*d_e_offsets_),cudaMemcpyHostToDevice);
+		cudaMemcpy(d_ne_offsets_,&h_ne_offsets_[0],(num_states_+1)*sizeof(*d_ne_offsets_),cudaMemcpyHostToDevice);
+		cudaMemcpy(d_final_,&h_final_[0],num_states_*sizeof(*d_final_),cudaMemcpyHostToDevice);
 
-		cudaMallocHost(&h_arc_weights_,arc_count_*sizeof(*h_arc_weights_));
-		cudaMallocHost(&h_arc_nextstates_,arc_count_*sizeof(*h_arc_nextstates_));
-		cudaMallocHost(&h_arc_ilabels_,arc_count_*sizeof(*h_arc_ilabels_));
-		cudaMallocHost(&h_arc_olabels_,arc_count_*sizeof(*h_arc_olabels_));
+		h_arc_weights_.resize(arc_count_);
+		h_arc_nextstates_.resize(arc_count_);
+		// ilabels (nnet3 indexing)
+		std::vector<int32> h_arc_pdf_ilabels_(arc_count_);
+		// ilabels (fst indexing)
+		h_arc_id_ilabels_.resize(arc_count_);
+		h_arc_olabels_.resize(arc_count_);
 
 		cudaMalloc(&d_arc_weights_,arc_count_*sizeof(*d_arc_weights_));
 		cudaMalloc(&d_arc_nextstates_,arc_count_*sizeof(*d_arc_nextstates_));
 
 		// Only the ilabels for the e_arc are needed on the device
-		cudaMalloc(&d_arc_ilabels_,e_count_*sizeof(*d_arc_ilabels_)); 
+		cudaMalloc(&d_arc_pdf_ilabels_,e_count_*sizeof(*d_arc_pdf_ilabels_)); 
 		// We do not need the olabels on the device - GetBestPath is on CPU
 
 		//now populate arc data
@@ -109,15 +104,18 @@ namespace kaldi {
 				}
 				h_arc_weights_[idx]=arc.weight.Value();
 				h_arc_nextstates_[idx]=arc.nextstate;
-				h_arc_ilabels_[idx]=arc.ilabel;
+  				// Converting ilabel here, to avoid reindexing when reading nnet3 output
+				h_arc_id_ilabels_[idx]=arc.ilabel;
+				int32 ilabel_pdf = trans_model.id2pdf_id_[arc.ilabel];
+				h_arc_pdf_ilabels_[idx]=ilabel_pdf;
 				h_arc_olabels_[idx]=arc.olabel;
 			}
 		}
 
-		cudaMemcpy(d_arc_weights_,h_arc_weights_,arc_count_*sizeof(*d_arc_weights_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_arc_nextstates_,h_arc_nextstates_,arc_count_*sizeof(*d_arc_nextstates_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_arc_ilabels_,h_arc_ilabels_, e_count_*sizeof(*d_arc_ilabels_),cudaMemcpyHostToDevice);
-
+		cudaMemcpy(d_arc_weights_,&h_arc_weights_[0],arc_count_*sizeof(*d_arc_weights_),cudaMemcpyHostToDevice);
+		cudaMemcpy(d_arc_nextstates_,&h_arc_nextstates_[0],arc_count_*sizeof(*d_arc_nextstates_),cudaMemcpyHostToDevice);
+		cudaMemcpy(d_arc_pdf_ilabels_,&h_arc_pdf_ilabels_[0],e_count_*sizeof(*d_arc_pdf_ilabels_),cudaMemcpyHostToDevice);
+		
 		// Making sure the graph is ready
 		cudaDeviceSynchronize();
 		KALDI_DECODER_CUDA_CHECK_ERROR();
@@ -126,22 +124,12 @@ namespace kaldi {
 
 	void CudaFst::Finalize() {
 		nvtxRangePushA("CudaFst destructor");
-		cudaFreeHost(h_final_);
-		cudaFreeHost(h_e_offsets_);
-		cudaFreeHost(h_ne_offsets_);
-
 		cudaFree(d_e_offsets_);
 		cudaFree(d_ne_offsets_);
 		cudaFree(d_final_);
-
-		cudaFreeHost(h_arc_weights_);
-		cudaFreeHost(h_arc_nextstates_);
-		cudaFreeHost(h_arc_ilabels_);
-		cudaFreeHost(h_arc_olabels_);
-
 		cudaFree(d_arc_weights_);
 		cudaFree(d_arc_nextstates_);
-		cudaFree(d_arc_ilabels_);
+		cudaFree(d_arc_pdf_ilabels_);
 		nvtxRangePop();
 	}
 

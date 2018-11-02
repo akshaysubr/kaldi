@@ -56,6 +56,7 @@ inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
 #include "util/stl-utils.h"
 #include "fst/fstlib.h"
 #include <cuda.h>
+#include "nnet3/nnet-utils.h"
 
 namespace kaldi {
 
@@ -69,7 +70,7 @@ namespace kaldi {
             CudaFst() {};
             // Creates a CSR representation of the FST,
             // then copies it to the GPU
-            void Initialize(const fst::Fst<StdArc> &fst);
+            void Initialize(const fst::Fst<StdArc> &fst, const TransitionModel &trans_model);
             void Finalize();
 
             inline uint32_t NumStates() const {  return num_states_; }
@@ -84,9 +85,6 @@ namespace kaldi {
             // Computation should start from state start_
             StateId  start_;
 
-            // We have all ilabel <= max_ilabel_
-            unsigned int max_ilabel_;              
-            
             // Number of emitting, non-emitting, and total number of arcs
             unsigned int e_count_, ne_count_, arc_count_;       
 
@@ -96,22 +94,30 @@ namespace kaldi {
             // Offset arrays are num_states_+1 in size (last state needs 
             // its +1 arc_offset)
             // Arc values for state i are stored in the range of [offset[i],offset[i+1][
-            unsigned int *h_e_offsets_,*d_e_offsets_;               //Emitting offset arrays 
-            unsigned int *h_ne_offsets_, *d_ne_offsets_;            //Non-emitting offset arrays
+
+		
+            unsigned int *d_e_offsets_;               //Emitting offset arrays 
+            std::vector<unsigned int> h_e_offsets_;
+            unsigned int *d_ne_offsets_;            //Non-emitting offset arrays
+            std::vector<unsigned int> h_ne_offsets_;
 
             // These are the values for each arc. 
             // Arcs belonging to state i are found in the range of [offsets[i], offsets[i+1][
             // Use e_offsets or ne_offsets depending on what you need (emitting/nonemitting)
             // The ilabels arrays are of size e_count_, not arc_count_
 
-            float *h_arc_weights_, *d_arc_weights_; // TODO define CostType here
-            StateId *h_arc_nextstates_, *d_arc_nextstates_;
-            int32 *h_arc_ilabels_, *d_arc_ilabels_;
-            int32 *h_arc_olabels_;
+            std::vector<float> h_arc_weights_;
+            float *d_arc_weights_; // TODO define CostType here
+            std::vector<StateId> h_arc_nextstates_;
+	    StateId *d_arc_nextstates_;
+	    std::vector<int32> h_arc_id_ilabels_;
+            int32 *d_arc_pdf_ilabels_;
+	    std::vector<int32> h_arc_olabels_;
 
             // Final costs
             // final cost of state i is h_final_[i]
-            float *h_final_, *d_final_;
+            std::vector<float> h_final_;
+            float *d_final_;
     };
 
     // InfoToken contains data that needs to be saved for the backtrack

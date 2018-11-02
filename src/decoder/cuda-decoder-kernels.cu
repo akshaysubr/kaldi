@@ -572,8 +572,8 @@ finalize_kernel:
 						CostType total_cost = prev_token_cost + arc_fixed_cost;
 						const int32 prev_state = cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[main_q_idx].x;
 						if(IS_EMITTING) {
-							const int32 arc_ilabel = cst_dev_params.d_arc_ilabels[arc_idx];
-							CostType acoustic_cost = -cst_dev_params.d_loglikelihoods.lane(ilane)[arc_ilabel]; 
+							const int32 arc_ilabel = cst_dev_params.d_arc_pdf_ilabels[arc_idx];
+							CostType acoustic_cost = -params.loglikelihoods_ptrs[ilane][arc_ilabel]; 
 							total_cost += acoustic_cost;
 						}
 						int_total_cost = floatToOrderedInt(total_cost);

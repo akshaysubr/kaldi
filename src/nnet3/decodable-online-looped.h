@@ -196,25 +196,19 @@ class DecodableAmNnetLoopedOnline: public DecodableNnetLoopedOnlineBase {
 class DecodableAmNnetLoopedOnlineCuda: public DecodableNnetLoopedOnlineBase {
  public:
   DecodableAmNnetLoopedOnlineCuda(
-      const TransitionModel &trans_model,
       const DecodableNnetSimpleLoopedInfo &info,
       OnlineFeatureInterface *input_features,
       OnlineFeatureInterface *ivector_features);
 
   ~DecodableAmNnetLoopedOnlineCuda();
 
-  // returns the output-dim of the neural net.
-  virtual int32 NumIndices() const { return trans_model_.NumTransitionIds(); }
-
-  // 'subsampled_frame' is a frame, but if frame-subsampling-factor != 1, it's a
+ // 'subsampled_frame' is a frame, but if frame-subsampling-factor != 1, it's a
   // reduced-rate output frame (e.g. a 't' index divided by 3).
-  virtual void ComputeLogLikelihoods(BaseFloat* out, int32 subsampled_frame, int32 count, void* stream);
+  BaseFloat* GetNnet3Output(int32 subsampled_frame);
+  virtual int32 NumIndices() const {return 0;} //TODO hack, should probably have a cuda-itf.
   virtual BaseFloat LogLikelihood(int32 subsampled_frame, int32 transition_id) {return 0;} //TODO hack, should probably have a cuda-itf.
  private:
-  const TransitionModel &trans_model_;
-  int32_t *trans_d_; 
   KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableAmNnetLoopedOnlineCuda);
-
 };
 
 

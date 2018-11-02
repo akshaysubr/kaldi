@@ -54,13 +54,12 @@ class SingleUtteranceNnet3CudaDecoder {
  std::vector<ChannelId> channels_;  //FIXME temp
  public:
 
-  // Constructor. The pointer 'features' is not being given to this class to own
-  // and deallocate, it is owned externally.
-  SingleUtteranceNnet3CudaDecoder(
-                              const TransitionModel &trans_model,
-                              const nnet3::DecodableNnetSimpleLoopedInfo &info,
-                              CudaDecoder &cuda_decoder,
-                              OnlineNnet2FeaturePipeline *features);
+ // Constructor. The pointer 'features' is not being given to this class to own
+ // and deallocate, it is owned externally.
+ SingleUtteranceNnet3CudaDecoder(
+		 const nnet3::DecodableNnetSimpleLoopedInfo &info,
+		 CudaDecoder &cuda_decoder,
+		 OnlineNnet2FeaturePipeline *features);
 
   /// advance the decoding as far as we can.
   void AdvanceDecoding();
@@ -85,7 +84,6 @@ class SingleUtteranceNnet3CudaDecoder {
 
   // we need to keep a reference to the transition model around only because
   // it's needed by the endpointing code.
-  const TransitionModel &trans_model_;
 
   nnet3::DecodableAmNnetLoopedOnlineCuda decodable_;
 

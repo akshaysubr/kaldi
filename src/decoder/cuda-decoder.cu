@@ -65,7 +65,6 @@ namespace kaldi {
 				KALDI_CUDA_DECODER_DIV_ROUND_UP(max_tokens_per_frame_, KALDI_CUDA_DECODER_1D_BLOCK) + 1);
 		d_main_q_arc_offsets_.Resize(nchannels_,  max_tokens_per_frame_);
 		d_state_best_int_cost_.Resize(nlanes, num_states);
-		d_loglikelihoods_.Resize(nlanes, fst_.max_ilabel_+1);
 
 		// Setting Kernel Params
 		// sent to kernels by copy
@@ -87,11 +86,10 @@ namespace kaldi {
 		h_device_params_->d_main_q_degrees_prefix_sum = d_main_q_degrees_prefix_sum_.GetInterface();
 		h_device_params_->d_main_q_degrees_block_sums_prefix_sum = d_main_q_degrees_block_sums_prefix_sum_.GetInterface();
 		h_device_params_->d_main_q_arc_offsets = d_main_q_arc_offsets_.GetInterface();
-		h_device_params_->d_loglikelihoods = d_loglikelihoods_.GetInterface();
 		h_device_params_->d_state_best_int_cost = d_state_best_int_cost_.GetInterface();
 		h_device_params_->d_arc_e_offsets = fst_.d_e_offsets_;
 		h_device_params_->d_arc_ne_offsets = fst_.d_ne_offsets_;
-		h_device_params_->d_arc_ilabels = fst_.d_arc_ilabels_;
+		h_device_params_->d_arc_pdf_ilabels = fst_.d_arc_pdf_ilabels_;
 		h_device_params_->d_arc_weights = fst_.d_arc_weights_;
 		h_device_params_->d_arc_nextstates = fst_.d_arc_nextstates_;
 		h_device_params_->d_fst_final_costs = fst_.d_final_;
@@ -268,16 +266,16 @@ namespace kaldi {
 			h_channels_counters_[ichannel].prev_main_q_global_offset = h_lanes_counters_[ilane].main_q_global_offset;
 		}
 	}
-
+/*
 	void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
 			int32 max_num_frames) {
 		std::vector<ChannelId> channels = {0};	
 		std::vector<DecodableInterface*> decodables = {decodable};	
 		AdvanceDecoding(channels, decodables, max_num_frames);
 	}
-
+*/
 	void CudaDecoder::AdvanceDecoding(const std::vector<ChannelId> &channels,
-			std::vector<DecodableInterface*> &decodables,
+			std::vector<nnet3::DecodableAmNnetLoopedOnlineCuda*> &decodables,
 			int32 max_num_frames) {
 		const int nlanes_used = channels.size();
 		if(nlanes_used <= 0)
@@ -320,7 +318,11 @@ namespace kaldi {
 
 			// Loglikelihoods from the acoustic model
 			nvtxRangePop(); // Decoding
-			ComputeLogLikelihoods(decodables);
+			for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
+				ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
+				int32 frame = num_frames_decoded_[ichannel];
+				h_kernel_params_->loglikelihoods_ptrs[ilane] = decodables[ilane]->GetNnet3Output(frame);
+			}
 			nvtxRangePushA("Decoding");
 
 			// ProcessEmitting 
@@ -547,16 +549,6 @@ namespace kaldi {
 		nvtxRangePop();
 	}
 
-
-	void CudaDecoder::ComputeLogLikelihoods(std::vector<DecodableInterface*> &decodables) {
-		KALDI_ASSERT(decodables.size() == h_kernel_params_->nlanes_used);
-		for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
-			ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
-			int32 frame = num_frames_decoded_[ichannel];
-			decodables[ilane]->ComputeLogLikelihoods(d_loglikelihoods_.lane(ilane), frame, fst_.max_ilabel_+1, compute_st_); // TODO batch
-		}
-	}
-
 	void CudaDecoder::CheckOverflow() {
 		for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
 			bool q_overflow = h_lanes_counters_[ilane].q_overflow;
@@ -675,7 +667,7 @@ namespace kaldi {
 			for (int32 i=reversed_path.size()-1; i>=1; i--) {
 				int32 arc_idx = reversed_path[i];
 
-				LatticeArc arc(fst_.h_arc_ilabels_[arc_idx], 
+				LatticeArc arc(fst_.h_arc_id_ilabels_[arc_idx], 
 						fst_.h_arc_olabels_[arc_idx],
 						LatticeWeight(fst_.h_arc_weights_[arc_idx], 0), 
 						fst_.h_arc_nextstates_[arc_idx]);

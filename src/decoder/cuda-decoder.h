@@ -18,7 +18,7 @@
 
 #include "util/stl-utils.h"
 #include "lat/kaldi-lattice.h"
-#include "itf/decodable-itf.h"
+#include "nnet3/decodable-online-looped.h"
 #include "omp.h"
 #include <cuda_runtime_api.h>
 #include <vector>
@@ -290,10 +290,8 @@ namespace kaldi {
 			/// that many frames.  If it returns false, then no tokens are alive,
 			/// which is a kind of error state.
 			void AdvanceDecoding(const std::vector<ChannelId> &channels,
-					std::vector<DecodableInterface*> &decodables,
+					std::vector<nnet3::DecodableAmNnetLoopedOnlineCuda*> &decodables,
 					int32 max_num_frames = -1);
-			void AdvanceDecoding(DecodableInterface *decodable,
-					int32 max_num_frames = -1); // batch size = 1
 
 			/// Returns the number of frames already decoded.  
 			int32 NumFramesDecoded(ChannelId ichannel) const;
@@ -621,7 +619,7 @@ namespace kaldi {
 			// we cache the results in d_main_q_arc_offsets which will be read in a coalesced fashion in expand
 			DeviceChannelMatrix<int32> d_main_q_arc_offsets_; 
 
-			DeviceLaneMatrix<CostType> d_loglikelihoods_;
+			std::vector<BaseFloat*> h_loglikehoods_ptrs_;
 			DeviceLaneMatrix<IntegerCostType> d_state_best_int_cost_; 
 
 			DeviceParams *h_device_params_, *d_device_params_;

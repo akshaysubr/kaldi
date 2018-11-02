@@ -49,7 +49,6 @@ namespace kaldi {
 		ChannelMatrixInterface<int32> d_main_q_degrees_prefix_sum; 
 		LaneMatrixInterface<int32> d_main_q_degrees_block_sums_prefix_sum; 
 		ChannelMatrixInterface<int32> d_main_q_arc_offsets; 
-		LaneMatrixInterface<CostType> d_loglikelihoods;
 		LaneMatrixInterface<IntegerCostType> d_state_best_int_cost; 
 
 		int32 max_nlanes;
@@ -57,7 +56,7 @@ namespace kaldi {
 		int32 q_capacity;
 		CostType *d_arc_weights;
 		int32 *d_arc_nextstates;
-		int32 *d_arc_ilabels;
+		int32 *d_arc_pdf_ilabels;
 		uint32 *d_arc_e_offsets;
 		uint32 *d_arc_ne_offsets;
 		CostType *d_fst_final_costs;
@@ -68,11 +67,13 @@ namespace kaldi {
 		CostType init_cost;
 	};
 
+	// TODO add STATIC_ASSERT for this struct size < 4KB
 	struct KernelParams {
 		// In AdvanceDecoding,
 		// the lane lane_id will compute the channel
 		// with channel_id = channel_to_compute[lane_id]
 		ChannelId channel_to_compute[KALDI_CUDA_DECODER_MAX_N_LANES];
+		BaseFloat *loglikelihoods_ptrs[KALDI_CUDA_DECODER_MAX_N_LANES];
 		int32 nlanes_used;
 	};
 
