@@ -82,6 +82,14 @@ namespace kaldi {
 			typedef StdArc::Label Label;
 			typedef StdArc::StateId StateId;
 
+  class CudaDecodableInterface : public DecodableInterface {
+ 		public:
+      virtual BaseFloat* GetLogLikelihoodsCudaPointer(int32 subsampled_frame) = 0;
+  };
+
+
+
+
 	template<typename T>
 		// if necessary, make a version that always use ld_ as the next power of 2
 		class DeviceMatrix {
@@ -290,7 +298,7 @@ namespace kaldi {
 			/// that many frames.  If it returns false, then no tokens are alive,
 			/// which is a kind of error state.
 			void AdvanceDecoding(const std::vector<ChannelId> &channels,
-					std::vector<nnet3::DecodableAmNnetLoopedOnlineCuda*> &decodables,
+					std::vector<CudaDecodableInterface*> &decodables,
 					int32 max_num_frames = -1);
 
 			/// Returns the number of frames already decoded.  

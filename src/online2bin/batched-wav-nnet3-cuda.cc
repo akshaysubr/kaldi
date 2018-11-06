@@ -20,7 +20,9 @@
 
 #include "feat/wave-reader.h"
 #include "cudamatrix/cu-allocator.h"
-#include "online2/online-nnet3-cuda-decoding.h"
+#include "decoder/cuda-decoder.h"
+#include "nnet3/decodable-simple-looped.h"
+#include "nnet3/decodable-online-looped.h"
 #include "online2/online-nnet2-feature-pipeline.h"
 #include "fstext/fstext-lib.h"
 #include "lat/lattice-functions.h"
@@ -36,6 +38,37 @@
 //#define REPLICATE_IN_BATCH  
 
 using namespace kaldi;
+
+class DecodableAmNnetLoopedOnlineCuda: public nnet3::DecodableNnetLoopedOnlineBase, public CudaDecodableInterface  {
+ public:
+  DecodableAmNnetLoopedOnlineCuda(
+      const nnet3::DecodableNnetSimpleLoopedInfo &info,
+      OnlineFeatureInterface *input_features,
+      OnlineFeatureInterface *ivector_features) :  DecodableNnetLoopedOnlineBase(info, input_features, ivector_features)  {};
+
+  ~DecodableAmNnetLoopedOnlineCuda() {};
+
+  //returns cuda pointer to nnet3 output
+  virtual BaseFloat* GetLogLikelihoodsCudaPointer(int32 subsampled_frame) {
+		EnsureFrameIsComputed(subsampled_frame);
+  	cudaStreamSynchronize(cudaStreamPerThread);      
+  
+  	BaseFloat *frame_nnet3_out = current_log_post_.Data()+(subsampled_frame-current_log_post_subsampled_offset_)*current_log_post_.Stride();
+  	return frame_nnet3_out;
+  };
+
+  //DecodableInterface that should never be called.  Is inherited from DecodableNnetLoopedOnlineBase
+  virtual int32 NumIndices() const { KALDI_ASSERT(false); return 0; } 
+  virtual BaseFloat LogLikelihood(int32 subsampled_frame, int32 transition_id) { KALDI_ASSERT(false); return 0; } 
+
+  virtual bool IsLastFrame(int32 subsampled_frame) const { return  nnet3::DecodableNnetLoopedOnlineBase::IsLastFrame(subsampled_frame); }
+  virtual int32 NumFramesReady() const { return nnet3::DecodableNnetLoopedOnlineBase::NumFramesReady(); }
+
+ private:
+  KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableAmNnetLoopedOnlineCuda);
+};
+
+
 
 /*************************************************
  * BatchedCudaDecoderConfig
@@ -220,9 +253,6 @@ class ThreadedBatchedCudaDecoder {
 
     void ExecuteWorker(int threadId) {
 
-      CuDevice::Instantiate().SelectGpuId(0);
-      CuDevice::Instantiate().AllowMultithreading();
-
       //reusable across decodes
       OnlineNnet2FeaturePipelineInfo feature_info(config_.feature_opts_);
       feature_info.ivector_extractor_info.use_most_recent_ivector = true;
@@ -240,7 +270,7 @@ class ThreadedBatchedCudaDecoder {
       std::vector<BaseFloat> samp_freqs;
       std::vector<SubVector<BaseFloat>* > data;
       std::vector<OnlineNnet2FeaturePipeline*> features;
-      std::vector<nnet3::DecodableAmNnetLoopedOnlineCuda*> decodables;
+      std::vector<CudaDecodableInterface*> decodables;
       std::vector<int> completed_channels;         
       std::vector<Lattice*> lattices;        
 
@@ -314,7 +344,7 @@ class ThreadedBatchedCudaDecoder {
               OnlineNnet2FeaturePipeline *feature = new OnlineNnet2FeaturePipeline(feature_info);
               features.push_back(feature);
 
-              decodables.push_back(new nnet3::DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
+              decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
               data.push_back(new SubVector<BaseFloat>(state.wave_data.Data(), 0));
               samp_freqs.push_back(state.wave_data.SampFreq());
 
@@ -522,7 +552,7 @@ int main(int argc, char *argv[]) {
       return 1;
     }
 
-    CuDevice::Instantiate().SelectGpuId(0);
+    CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
     
     ThreadedBatchedCudaDecoder CudaDecoder(batchedDecoderConfig);

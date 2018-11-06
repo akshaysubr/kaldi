@@ -111,7 +111,6 @@ class CuDevice {
     else g_cuda_allocator.Free(ptr);
   }
 
-
   /// Select a GPU for computation.  You are supposed to call this function just
   /// once, at the beginning of the program (from the main thread), or not at
   /// all.
@@ -127,9 +126,6 @@ class CuDevice {
   ///  "no"       -- Run on CPU.
   void SelectGpuId(std::string use_gpu);
 
-  /// Select a GPU by its id
-  void SelectGpuId(int id);
-  
   /// Check if the CUDA GPU is selected for use
   bool Enabled() const {
     return (device_id_ > -1);

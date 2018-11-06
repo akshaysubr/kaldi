@@ -275,7 +275,7 @@ namespace kaldi {
 	}
 */
 	void CudaDecoder::AdvanceDecoding(const std::vector<ChannelId> &channels,
-			std::vector<nnet3::DecodableAmNnetLoopedOnlineCuda*> &decodables,
+			std::vector<CudaDecodableInterface*> &decodables,
 			int32 max_num_frames) {
 		const int nlanes_used = channels.size();
 		if(nlanes_used <= 0)
@@ -321,7 +321,7 @@ namespace kaldi {
 			for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
 				ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
 				int32 frame = num_frames_decoded_[ichannel];
-				h_kernel_params_->loglikelihoods_ptrs[ilane] = decodables[ilane]->GetNnet3Output(frame);
+				h_kernel_params_->loglikelihoods_ptrs[ilane] = decodables[ilane]->GetLogLikelihoodsCudaPointer(frame);
 			}
 			nvtxRangePushA("Decoding");
 

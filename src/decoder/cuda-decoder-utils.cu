@@ -106,7 +106,7 @@ namespace kaldi {
 				h_arc_nextstates_[idx]=arc.nextstate;
   				// Converting ilabel here, to avoid reindexing when reading nnet3 output
 				h_arc_id_ilabels_[idx]=arc.ilabel;
-				int32 ilabel_pdf = trans_model.id2pdf_id_[arc.ilabel];
+				int32 ilabel_pdf = trans_model.TransitionIdToPdf(arc.ilabel);
 				h_arc_pdf_ilabels_[idx]=ilabel_pdf;
 				h_arc_olabels_[idx]=arc.olabel;
 			}
