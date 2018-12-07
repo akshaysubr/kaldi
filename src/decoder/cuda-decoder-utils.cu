@@ -34,9 +34,10 @@ namespace kaldi {
 		h_final_.resize(num_states_);
 		h_e_offsets_.resize(num_states_+1);
 		h_ne_offsets_.resize(num_states_+1);
-		cudaMalloc((void**)&d_e_offsets_,(num_states_+1)*sizeof(*d_e_offsets_));
-		cudaMalloc((void**)&d_ne_offsets_,(num_states_+1)*sizeof(*d_ne_offsets_));
-		cudaMalloc((void**)&d_final_,(num_states_)*sizeof(*d_final_));
+  	KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc((void **)&d_e_offsets_, (num_states_ + 1) * sizeof(*d_e_offsets_)));
+  	KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc((void **)&d_ne_offsets_,
+             (num_states_ + 1) * sizeof(*d_ne_offsets_)));
+  	KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc((void **)&d_final_, (num_states_) * sizeof(*d_final_)));
 
 		//iterate through states and arcs and count number of arcs per state
 		e_count_=0;
@@ -70,9 +71,9 @@ namespace kaldi {
 
 		arc_count_=e_count_+ne_count_;
 
-		cudaMemcpy(d_e_offsets_,&h_e_offsets_[0],(num_states_+1)*sizeof(*d_e_offsets_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_ne_offsets_,&h_ne_offsets_[0],(num_states_+1)*sizeof(*d_ne_offsets_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_final_,&h_final_[0],num_states_*sizeof(*d_final_),cudaMemcpyHostToDevice);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_e_offsets_,&h_e_offsets_[0],(num_states_+1)*sizeof(*d_e_offsets_),cudaMemcpyHostToDevice));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_ne_offsets_,&h_ne_offsets_[0],(num_states_+1)*sizeof(*d_ne_offsets_),cudaMemcpyHostToDevice));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_final_,&h_final_[0],num_states_*sizeof(*d_final_),cudaMemcpyHostToDevice));
 
 		h_arc_weights_.resize(arc_count_);
 		h_arc_nextstates_.resize(arc_count_);
@@ -82,11 +83,11 @@ namespace kaldi {
 		h_arc_id_ilabels_.resize(arc_count_);
 		h_arc_olabels_.resize(arc_count_);
 
-		cudaMalloc(&d_arc_weights_,arc_count_*sizeof(*d_arc_weights_));
-		cudaMalloc(&d_arc_nextstates_,arc_count_*sizeof(*d_arc_nextstates_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&d_arc_weights_,arc_count_*sizeof(*d_arc_weights_)));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&d_arc_nextstates_,arc_count_*sizeof(*d_arc_nextstates_)));
 
 		// Only the ilabels for the e_arc are needed on the device
-		cudaMalloc(&d_arc_pdf_ilabels_,e_count_*sizeof(*d_arc_pdf_ilabels_)); 
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&d_arc_pdf_ilabels_,e_count_*sizeof(*d_arc_pdf_ilabels_))); 
 		// We do not need the olabels on the device - GetBestPath is on CPU
 
 		//now populate arc data
@@ -112,9 +113,9 @@ namespace kaldi {
 			}
 		}
 
-		cudaMemcpy(d_arc_weights_,&h_arc_weights_[0],arc_count_*sizeof(*d_arc_weights_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_arc_nextstates_,&h_arc_nextstates_[0],arc_count_*sizeof(*d_arc_nextstates_),cudaMemcpyHostToDevice);
-		cudaMemcpy(d_arc_pdf_ilabels_,&h_arc_pdf_ilabels_[0],e_count_*sizeof(*d_arc_pdf_ilabels_),cudaMemcpyHostToDevice);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_arc_weights_,&h_arc_weights_[0],arc_count_*sizeof(*d_arc_weights_),cudaMemcpyHostToDevice));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_arc_nextstates_,&h_arc_nextstates_[0],arc_count_*sizeof(*d_arc_nextstates_),cudaMemcpyHostToDevice));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_arc_pdf_ilabels_,&h_arc_pdf_ilabels_[0],e_count_*sizeof(*d_arc_pdf_ilabels_),cudaMemcpyHostToDevice));
 		
 		// Making sure the graph is ready
 		cudaDeviceSynchronize();
@@ -124,12 +125,12 @@ namespace kaldi {
 
 	void CudaFst::Finalize() {
 		nvtxRangePushA("CudaFst destructor");
-		cudaFree(d_e_offsets_);
-		cudaFree(d_ne_offsets_);
-		cudaFree(d_final_);
-		cudaFree(d_arc_weights_);
-		cudaFree(d_arc_nextstates_);
-		cudaFree(d_arc_pdf_ilabels_);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_e_offsets_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_ne_offsets_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_final_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_arc_weights_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_arc_nextstates_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_arc_pdf_ilabels_));
 		nvtxRangePop();
 	}
 
@@ -142,7 +143,7 @@ namespace kaldi {
 	// we need to have an appropriate initial capacity (is set using a parameter in CudaDecoderConfig)
 	InfoTokenVector::InfoTokenVector(int32 capacity, cudaStream_t copy_st) : capacity_(capacity), copy_st_(copy_st) {
 		KALDI_LOG << "Allocating InfoTokenVector with capacity = " << capacity_ << " tokens";
-		cudaMallocHost(&h_data_, capacity_ * sizeof(*h_data_)); 
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_data_, capacity_ * sizeof(*h_data_))); 
 		Reset();
 	}
 
@@ -155,7 +156,7 @@ namespace kaldi {
 	void InfoTokenVector::CopyFromDevice(InfoToken *d_ptr, int32 count) { // TODO add the Append keyword 
 		Reserve(size_+count); // making sure we have the space
 
-		cudaMemcpyAsync(&h_data_[size_], d_ptr, count*sizeof(*h_data_), cudaMemcpyDeviceToHost, copy_st_);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(&h_data_[size_], d_ptr, count*sizeof(*h_data_), cudaMemcpyDeviceToHost, copy_st_));
 		size_ += count;
 	}
 
@@ -165,7 +166,7 @@ namespace kaldi {
 		if(size_ == 0)
 			return;
 		const InfoToken *h_data_other = other.GetRawPointer();
-		cudaMemcpyAsync(h_data_, h_data_other, size_ * sizeof(*h_data_), cudaMemcpyHostToHost, copy_st_);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_data_, h_data_other, size_ * sizeof(*h_data_), cudaMemcpyHostToHost, copy_st_));
 		cudaStreamSynchronize(copy_st_); // after host2host?
 	};
 
@@ -180,16 +181,16 @@ namespace kaldi {
 
 		cudaStreamSynchronize(copy_st_);
 		InfoToken *h_old_data = h_data_;
-		cudaMallocHost(&h_data_, capacity_ * sizeof(*h_data_)); 
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_data_, capacity_ * sizeof(*h_data_))); 
 
 		if(!h_data_)
 			KALDI_ERR << "Host ran out of memory to store tokens. Exiting.";
 
 		if(size_ > 0)
-			cudaMemcpyAsync(h_data_, h_old_data, size_ * sizeof(*h_data_), cudaMemcpyHostToHost, copy_st_);
+			KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_data_, h_old_data, size_ * sizeof(*h_data_), cudaMemcpyHostToHost, copy_st_));
 
 		cudaStreamSynchronize(copy_st_);
-		cudaFreeHost(h_old_data);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_old_data));
 	}
 
 	InfoToken * InfoTokenVector::GetRawPointer() const {
@@ -197,7 +198,7 @@ namespace kaldi {
 	}
 
 	InfoTokenVector::~InfoTokenVector() {
-		cudaFreeHost(h_data_);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_data_));
 	}
 
 } // end namespace kaldi

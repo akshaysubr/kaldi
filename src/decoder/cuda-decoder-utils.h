@@ -17,12 +17,20 @@
 #define KALDI_DECODER_CUDA_DECODER_UTILS_H_
 
 //Macro for checking cuda errors following a cuda launch or api call
-#define KALDI_DECODER_CUDA_CHECK_ERROR() do {                        \
+#define KALDI_DECODER_CUDA_CHECK_ERROR()  {                           \
     cudaError_t e=cudaGetLastError();                                 \
     if(e!=cudaSuccess) {                                              \
         KALDI_ERR << "Cuda failure " << __FILE__ << ":" << __LINE__ << ": '" << cudaGetErrorString(e); \
+        KALDI_ASSERT(false);                                          \
     }                                                                 \
-} while(0);
+}
+
+#define KALDI_DECODER_CUDA_API_CHECK_ERROR(e)  {                      \
+    if(e!=cudaSuccess) {                                              \
+        KALDI_ERR << "Cuda failure " << __FILE__ << ":" << __LINE__ << ": '" << cudaGetErrorString(e); \
+        KALDI_ASSERT(false);                                          \
+    }                                                                 \
+}
 
 #define KALDI_CUDA_DECODER_1D_KERNEL_LOOP(i, n)                      \
 	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \

@@ -71,10 +71,10 @@ namespace kaldi {
 		// Making sure we'll be able to send it to the kernels
 		//KALDI_STATIC_ASSERT(sizeof(KernelParams) < KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE); TODO find include
 
-		cudaMemsetAsync(d_channels_counters_.MutableData(), 0, nchannels_*sizeof(d_channels_counters_.MutableData()));
-		cudaMemsetAsync(d_lanes_counters_.MutableData(), 0, nlanes_*sizeof(d_lanes_counters_.MutableData()));
-		cudaMallocHost(&h_lanes_counters_, nlanes_ * sizeof(*h_lanes_counters_));
-		cudaMallocHost(&h_channels_counters_, nchannels_ * sizeof(*h_channels_counters_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_channels_counters_.MutableData(), 0, nchannels_*sizeof(d_channels_counters_.MutableData())));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_lanes_counters_.MutableData(), 0, nlanes_*sizeof(d_lanes_counters_.MutableData())));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_lanes_counters_, nlanes_ * sizeof(*h_lanes_counters_)));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_channels_counters_, nchannels_ * sizeof(*h_channels_counters_)));
 
 		h_device_params_ = new DeviceParams();
 		h_device_params_->d_channels_counters = d_channels_counters_.GetInterface();
@@ -113,6 +113,7 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_1D_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 	
 		ComputeInitialChannel();
 		--nchannels_; // removing the init_channel_params from general list
@@ -133,13 +134,13 @@ namespace kaldi {
 		cudaEventDestroy(can_read_final_h_main_q_end_);
 		cudaEventDestroy(before_finalize_nonemitting_kernel_);
 
-		cudaFreeHost(h_lanes_counters_);
-		cudaFreeHost(h_channels_counters_);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_lanes_counters_));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_channels_counters_));
 
 		// Will call the cudaFrees inside destructors 
 		delete h_kernel_params_;
 		delete h_device_params_;
-		cudaFree(d_device_params_);
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_device_params_));
 
 		KALDI_DECODER_CUDA_CHECK_ERROR();
 	}
@@ -157,23 +158,26 @@ namespace kaldi {
 			KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		// Initial ProcessNonEmitting
 		preprocess_and_contract_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, 1),
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 		finalize_process_non_emitting_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, 1),
 			KALDI_CUDA_DECODER_LARGEST_1D_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		int32 main_q_end;
-		cudaMemcpyAsync(&main_q_end, 
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(&main_q_end, 
 				&d_lanes_counters_.lane(ilane)->main_q_narcs_and_end.y, 
 				sizeof(int32), 
 				cudaMemcpyDeviceToHost, 
-				compute_st_);
+				compute_st_));
 		cudaStreamSynchronize(compute_st_);
 
 		KALDI_ASSERT(main_q_end > 0);
@@ -183,16 +187,19 @@ namespace kaldi {
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		exclusive_sum_batched_step2_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1),
 			KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		exclusive_sum_batched_step3_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1),
 			KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			// Saving initial queue to host
 		h_all_tokens_info_[init_channel_id_].CopyFromDevice(d_main_q_info_.lane(ilane), main_q_end);
@@ -204,13 +211,14 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 	
 		// Saving init params on host
-		cudaMemcpyAsync(h_lanes_counters_, 
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_, 
 				d_lanes_counters_.MutableData(), 
 				1*sizeof(*h_lanes_counters_), 
 				cudaMemcpyDeviceToHost,
-				compute_st_);
+				compute_st_));
 
 		// Waiting for compute to be done 
 		cudaStreamSynchronize(compute_st_);
@@ -240,6 +248,7 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_1D_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		cudaStreamSynchronize(compute_st_);
 		KALDI_DECODER_CUDA_CHECK_ERROR();
@@ -310,6 +319,7 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+    KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		LoadChannelsStateToLanesCPU();
 		nvtxRangePushA("Decoding");
@@ -361,6 +371,7 @@ namespace kaldi {
 				KALDI_CUDA_DECODER_1D_BLOCK,
 				0,
 				compute_st_>>>(*h_device_params_,*h_kernel_params_);
+      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			// Updating a few counters, like resetting aux_q_end to 0...
 			// true is for IS_EMITTING
@@ -368,6 +379,7 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			// After ProcessEmitting we won't need the token
 			// associated with the previous frame anymore
@@ -404,11 +416,11 @@ namespace kaldi {
 			while(true) {
 				// Moving the lanes_params to host,
 				// to have the aux_q_end values
-				cudaMemcpyAsync(h_lanes_counters_,     
+				KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 						d_lanes_counters_.MutableData(), 
 						nlanes_used*sizeof(LaneCounters), 
 						cudaMemcpyDeviceToHost,
-						compute_st_);
+						compute_st_));
 				cudaStreamSynchronize(compute_st_);
 				int32 max_aux_q_end = 0;
 				for(LaneId ilane=0;ilane < nlanes_used;++ilane) {
@@ -423,14 +435,15 @@ namespace kaldi {
 								KALDI_CUDA_DECODER_1D_BLOCK,
 								0,
 								compute_st_>>>(*h_device_params_,*h_kernel_params_);
+        KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				// Moving the lanes_params to host,
 				// to have the main_q_narcs values
-				cudaMemcpyAsync(h_lanes_counters_,     
+				KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 						d_lanes_counters_.MutableData(), 
 						nlanes_used*sizeof(LaneCounters), 
 						cudaMemcpyDeviceToHost,
-						compute_st_);
+						compute_st_));
 				// Waiting for the copy
 				cudaStreamSynchronize(compute_st_);
 
@@ -453,6 +466,7 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_1D_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+        KALDI_DECODER_CUDA_CHECK_ERROR();
 
 
 
@@ -461,7 +475,6 @@ namespace kaldi {
 							KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 							0,
 							compute_st_>>>(*h_device_params_,*h_kernel_params_);
-
 				KALDI_DECODER_CUDA_CHECK_ERROR();
 			}
 
@@ -472,15 +485,16 @@ namespace kaldi {
 							KALDI_CUDA_DECODER_LARGEST_1D_BLOCK,
 							0,
 							compute_st_>>>(*h_device_params_,*h_kernel_params_);
+		  KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			// Moving back to host the final (for this frame) values of :
 			// - main_q_end
 			// - main_q_narcs
-			cudaMemcpyAsync(h_lanes_counters_,     
+			KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 					d_lanes_counters_.MutableData(), 
 					nlanes_used*sizeof(LaneCounters), 
 					cudaMemcpyDeviceToHost,
-					compute_st_);
+					compute_st_));
 
 			// Waiting for the copy
 			cudaStreamSynchronize(compute_st_);
@@ -501,11 +515,13 @@ namespace kaldi {
 						KALDI_CUDA_DECODER_1D_BLOCK,
 						0,
 						compute_st_>>>(*h_device_params_,*h_kernel_params_);
+		  KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			exclusive_sum_batched_step2_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used),
 							KALDI_CUDA_DECODER_1D_BLOCK,
 							0,
 							compute_st_>>>(*h_device_params_,*h_kernel_params_);
+		  KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			exclusive_sum_batched_step3_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 							KALDI_CUDA_DECODER_1D_BLOCK,
@@ -529,11 +545,11 @@ namespace kaldi {
 			for(ChannelId ichannel : channels)
 				++num_frames_decoded_[ichannel];
 
-			cudaMemcpyAsync(h_lanes_counters_,     
+			KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 					d_lanes_counters_.MutableData(), 
 					nlanes_used*sizeof(LaneCounters), 
 					cudaMemcpyDeviceToHost,
-					compute_st_);
+					compute_st_));
 
 			// Waiting for the copy
 			cudaStreamSynchronize(compute_st_);
@@ -544,6 +560,7 @@ namespace kaldi {
 			KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+		KALDI_DECODER_CUDA_CHECK_ERROR();
 		SaveChannelsStateFromLanesCPU();
 
 		nvtxRangePop();
@@ -591,11 +608,12 @@ namespace kaldi {
 				KALDI_CUDA_DECODER_1D_BLOCK,
 				0,
 				compute_st_>>>(*h_device_params_,*h_kernel_params_, use_final_costs, StdWeight::Zero().Value());
-		cudaMemcpyAsync(h_lanes_counters_,     
+		KALDI_DECODER_CUDA_CHECK_ERROR();
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 				d_lanes_counters_.MutableData(), 
 				nlanes_used*sizeof(*h_lanes_counters_), 
 				cudaMemcpyDeviceToHost,
-				compute_st_);
+				compute_st_));
 
 		argmins->clear();
 		has_reached_final->clear();
