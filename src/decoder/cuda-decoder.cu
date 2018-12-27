@@ -71,8 +71,8 @@ namespace kaldi {
 		// Making sure we'll be able to send it to the kernels
 		//KALDI_STATIC_ASSERT(sizeof(KernelParams) < KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE); TODO find include
 
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_channels_counters_.MutableData(), 0, nchannels_*sizeof(d_channels_counters_.MutableData())));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_lanes_counters_.MutableData(), 0, nlanes_*sizeof(d_lanes_counters_.MutableData())));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_channels_counters_.MutableData(), 0, nchannels_*sizeof(*d_channels_counters_.MutableData())));
+		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_lanes_counters_.MutableData(), 0, nlanes_*sizeof(*d_lanes_counters_.MutableData())));
 		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_lanes_counters_, nlanes_ * sizeof(*h_lanes_counters_)));
 		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_channels_counters_, nchannels_ * sizeof(*h_channels_counters_)));
 
@@ -140,7 +140,6 @@ namespace kaldi {
 		// Will call the cudaFrees inside destructors 
 		delete h_kernel_params_;
 		delete h_device_params_;
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_device_params_));
 
 		KALDI_DECODER_CUDA_CHECK_ERROR();
 	}

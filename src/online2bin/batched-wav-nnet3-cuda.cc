@@ -70,30 +70,27 @@ class DecodableAmNnetLoopedOnlineCuda: public nnet3::DecodableNnetLoopedOnlineBa
 
 
 
-/*************************************************
- * BatchedCudaDecoderConfig
+ /* BatchedCudaDecoderConfig
  * This class is a common configuration class for the various components
  * of a batched cuda multi-threaded pipeline.  It defines a single place
  * to control all operations and ensures that the various componets
  * match configurations
- * **********************************************/
+ */
 //configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
-class BatchedCudaDecoderConfig {
-  public:
-    BatchedCudaDecoderConfig() : maxBatchSize_(20), flushFrequency_(1000) {};
+struct BatchedCudaDecoderConfig {
+    BatchedCudaDecoderConfig() : max_batch_size_(20) {};
     void Register(ParseOptions *po) {
       feature_opts_.Register(po);
       decodable_opts_.Register(po);
       decoder_opts_.Register(po);
-      po->Register("max-batch-size",&maxBatchSize_, "The maximum batch size to be used by the decoder.");
-      po->Register("num-threads",&numThreads_, "The number of workpool threads to use in the ThreadedBatchedCudaDecoder");
-      decoder_opts_.nlanes=maxBatchSize_;
-      decoder_opts_.nchannels=maxBatchSize_;
+      po->Register("max-batch-size",&max_batch_size_, "The maximum batch size to be used by the decoder.");
+      po->Register("num-threads",&num_threads_, "The number of workpool threads to use in the ThreadedBatchedCudaDecoder");
+      decoder_opts_.nlanes=max_batch_size_;
+      decoder_opts_.nchannels=max_batch_size_;
 
     }
-    int maxBatchSize_;
-    int numThreads_;
-    int flushFrequency_;
+    int max_batch_size_;
+    int num_threads_;
     
     OnlineNnet2FeaturePipelineConfig  feature_opts_;           //constant readonly
     nnet3::NnetSimpleLoopedComputationOptions decodable_opts_; //constant readonly
@@ -113,7 +110,7 @@ class BatchedCudaDecoderConfig {
  *   
  *  //some loop
  *    std::string utt_key = ...
- *    decoder.OpenDecodeHandle(utt_key,wave_data);
+ *    while(!decoder.OpenDecodeHandle(utt_key,wave_data));
  *
  *
  *  //some loop
@@ -127,12 +124,17 @@ class BatchedCudaDecoderConfig {
 class ThreadedBatchedCudaDecoder {
   public:
 
-    ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config), maxPendingTasks_(2000) {};
+    ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config), max_pending_tasks_(2000) {};
+    
+    void Register(ParseOptions &po) {
+      po.Register("max-outstanding-queue-length", &max_pending_tasks_, 
+      "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
+    }
 
     //TODO should this take an nnet instead of a string?
     //allocates reusable objects that are common across all decodings
     void Initialize(const fst::Fst<fst::StdArc> &decode_fst, std::string nnet3_rxfilename) {
-      KALDI_LOG << "ThreadedBatchedCudaDecoder Initialize with " << config_.numThreads_ << " threads\n";
+      KALDI_LOG << "ThreadedBatchedCudaDecoder Initialize with " << config_.num_threads_ << " threads\n";
    
      //read transition model and nnet
       bool binary;
@@ -148,10 +150,10 @@ class ThreadedBatchedCudaDecoder {
       decodable_info_=new nnet3::DecodableNnetSimpleLoopedInfo(config_.decodable_opts_,&am_nnet_);
 
       //initialize threads and save their contexts so we can join them later
-      thread_contexts_.resize(config_.numThreads_);
+      thread_contexts_.resize(config_.num_threads_);
 
       //create work queue
-      pending_task_queue_ = new TaskState*[maxPendingTasks_+1]; 
+      pending_task_queue_ = new TaskState*[max_pending_tasks_+1]; 
       tasks_front_ =0;
       tasks_back_ =0;
 
@@ -161,12 +163,12 @@ class ThreadedBatchedCudaDecoder {
       exit_=false;
       numStarted_=0;
       //start workers
-      for (int i=0;i<config_.numThreads_;i++) {
+      for (int i=0;i<config_.num_threads_;i++) {
         thread_contexts_[i]=std::thread(&ThreadedBatchedCudaDecoder::ExecuteWorker,this,i);
       }
 
       //wait for threads to start to ensure allocation time isn't in the timings
-      while (numStarted_<config_.numThreads_);
+      while (numStarted_<config_.num_threads_);
 
     }
     void Finalize() {
@@ -174,7 +176,7 @@ class ThreadedBatchedCudaDecoder {
       //Tell threads to exit and join them
       exit_=true;
 
-      for (int i=0;i<config_.numThreads_;i++) {
+      for (int i=0;i<config_.num_threads_;i++) {
         thread_contexts_[i].join();
       }
 
@@ -206,7 +208,11 @@ class ThreadedBatchedCudaDecoder {
 
 
     //Adds a decoding task to the decoder
-    void OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
+    bool OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
+
+      //If no room for another task return false
+      if(NumPendingTasks()==max_pending_tasks_)
+        return false;
 
       //ensure key is unique
       KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
@@ -215,14 +221,15 @@ class ThreadedBatchedCudaDecoder {
       TaskState* t=&tasks_lookup_[key];
       t->Init(wave_data); 
 
-      //Wait for pending task queue to have room
-      while (tasksPending()==maxPendingTasks_);
+      //Should not have changed so just doing a sanity check
+      KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
 
       //insert into pending task queue
       //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
       pending_task_queue_[tasks_back_]=t;
       //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
-      tasks_back_=(tasks_back_+1)%(maxPendingTasks_+1);
+      tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
+      return true;
     }
 
     void GetBestPath(const std::string &key, Lattice *lat) {
@@ -237,7 +244,10 @@ class ThreadedBatchedCudaDecoder {
       //Store off the lattice
       *lat=state->lat;
     }
-
+    
+    inline int NumPendingTasks() {
+      return (tasks_back_ - tasks_front_ + max_pending_tasks_+1) % (max_pending_tasks_+1); 
+    };
 
   private:
 
@@ -252,12 +262,14 @@ class ThreadedBatchedCudaDecoder {
     };
 
     void ExecuteWorker(int threadId) {
+      //Initialize this threads device
+      CuDevice::Instantiate();
 
       //reusable across decodes
       OnlineNnet2FeaturePipelineInfo feature_info(config_.feature_opts_);
       feature_info.ivector_extractor_info.use_most_recent_ivector = true;
       feature_info.ivector_extractor_info.greedy_ivector_extractor = true;
-      CudaDecoder cuda_decoders(cuda_fst_,config_.decoder_opts_,config_.maxBatchSize_,config_.maxBatchSize_);
+      CudaDecoder cuda_decoders(cuda_fst_,config_.decoder_opts_,config_.max_batch_size_,config_.max_batch_size_);
 
       //This threads task list
       std::vector<TaskState*> tasks;
@@ -274,19 +286,19 @@ class ThreadedBatchedCudaDecoder {
       std::vector<int> completed_channels;         
       std::vector<Lattice*> lattices;        
 
-      tasks.reserve(config_.maxBatchSize_);
-      channels.reserve(config_.maxBatchSize_);
-      free_channels.reserve(config_.maxBatchSize_);
-      init_channels.reserve(config_.maxBatchSize_);
-      samp_freqs.reserve(config_.maxBatchSize_);
-      data.reserve(config_.maxBatchSize_);
-      features.reserve(config_.maxBatchSize_);
-      decodables.reserve(config_.maxBatchSize_);
-      completed_channels.reserve(config_.maxBatchSize_);
-      lattices.reserve(config_.maxBatchSize_);
+      tasks.reserve(config_.max_batch_size_);
+      channels.reserve(config_.max_batch_size_);
+      free_channels.reserve(config_.max_batch_size_);
+      init_channels.reserve(config_.max_batch_size_);
+      samp_freqs.reserve(config_.max_batch_size_);
+      data.reserve(config_.max_batch_size_);
+      features.reserve(config_.max_batch_size_);
+      decodables.reserve(config_.max_batch_size_);
+      completed_channels.reserve(config_.max_batch_size_);
+      lattices.reserve(config_.max_batch_size_);
       
       //add all channels to free channel list
-      for (int i=0;i<config_.maxBatchSize_;i++) {
+      for (int i=0;i<config_.max_batch_size_;i++) {
         free_channels.push_back(i);
       }      
 
@@ -303,16 +315,16 @@ class ThreadedBatchedCudaDecoder {
             int start=tasks.size(); 
 
 #ifdef REPLICATE_IN_BATCH
-            KALDI_ASSERT(tasksRequested==config_.maxBatchSize_);
+            KALDI_ASSERT(tasksRequested==config_.max_batch_size_);
             KALDI_ASSERT(start==0);
             //wait for the full batch to be created
-            while(tasksPending()<config_.maxBatchSize_);
+            while(NumPendingTasks()<config_.max_batch_size_);
 #endif
 
             tasks_mutex_.lock(); //lock required because front might change from other workers
 
             //compute number of tasks to grab
-            int tasksAvailable = tasksPending();
+            int tasksAvailable = NumPendingTasks();
             int tasksAssigned = std::min(tasksAvailable, tasksRequested);
 
             if (tasksAssigned>0) {
@@ -320,14 +332,14 @@ class ThreadedBatchedCudaDecoder {
               for (int i=0;i<tasksAssigned;i++) {
                 //printf("%d, Assigned task[%d]: %p\n", i, (int)tasks_front_, pending_task_queue_[tasks_front_]);
                 tasks.push_back(pending_task_queue_[tasks_front_]);
-                tasks_front_=(tasks_front_+1)%(maxPendingTasks_+1);              
+                tasks_front_=(tasks_front_+1)%(max_pending_tasks_+1);              
               }
             }
 
             tasks_mutex_.unlock();
 
 #ifdef REPLICATE_IN_BATCH 
-            KALDI_ASSERT(free_channels.size()==config_.maxBatchSize_);
+            KALDI_ASSERT(free_channels.size()==config_.max_batch_size_);
 #endif
             //allocate new data structures.  New decodes are in the range of [start,tasks.size())
             for (int i=start;i<tasks.size();i++) {
@@ -360,8 +372,8 @@ class ThreadedBatchedCudaDecoder {
 
 #ifdef REPLICATE_IN_BATCH
           KALDI_ASSERT(free_channels.size()==0);
-          KALDI_ASSERT(init_channels.size()==config_.maxBatchSize_);
-          KALDI_ASSERT(channels.size()==config_.maxBatchSize_);
+          KALDI_ASSERT(init_channels.size()==config_.max_batch_size_);
+          KALDI_ASSERT(channels.size()==config_.max_batch_size_);
 #endif
 
           if (init_channels.size()>0) {  //Except for the first iteration the size of this is typically 1 and rarely 2.
@@ -413,7 +425,7 @@ class ThreadedBatchedCudaDecoder {
           } //end for loop
 
 #ifdef REPLICATE_IN_BATCH
-          KALDI_ASSERT(free_channels.size()==config_.maxBatchSize_);
+          KALDI_ASSERT(free_channels.size()==config_.max_batch_size_);
 #endif
 
           //Get best path for completed tasks
@@ -440,11 +452,7 @@ class ThreadedBatchedCudaDecoder {
 
     const BatchedCudaDecoderConfig &config_;
 
-    inline int tasksPending() {
-      return (tasks_back_ - tasks_front_ + maxPendingTasks_+1) % (maxPendingTasks_+1); 
-    };
-
-    int maxPendingTasks_; 
+    int max_pending_tasks_; 
 
     CudaFst cuda_fst_;
     TransitionModel trans_model_;
@@ -527,22 +535,19 @@ int main(int argc, char *argv[]) {
     bool write_lattice = true;
     int num_todo = -1;
     int iterations=1;
-    int max_queue_length=2000;
     ParseOptions po(usage);
+    int pipeline_length=2000; //length of pipeline of outstanding requests, this is independent of queue lengths in decoder
 
     po.Register("write-lattice",&write_lattice, "Output lattice to a file.  Setting to false is useful when benchmarking.");
     po.Register("word-symbol-table", &word_syms_rxfilename, "Symbol table for words [for debug output]");
     po.Register("file-limit", &num_todo, 
         "Limits the number of files that are processed by this driver.  After N files are processed the remaing files are ignored.  Useful for profiling.");
     po.Register("iterations", &iterations, "Number of times to decode the corpus.  Output will be written only once.");
-    po.Register("max-outstanding-queue-length", &max_queue_length, 
-        "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
     
     //Multi-threaded CPU and batched GPU decoder
     BatchedCudaDecoderConfig batchedDecoderConfig;
 
-    kaldi::g_allocator_options.Register(&po);
-
+    RegisterCuAllocatorOptions(&po);
     batchedDecoderConfig.Register(&po);
 
     po.Read(argc, argv);
@@ -551,7 +556,8 @@ int main(int argc, char *argv[]) {
       po.PrintUsage();
       return 1;
     }
-
+    
+    g_cuda_allocator.SetOptions(g_allocator_options);
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
     
@@ -597,21 +603,21 @@ int main(int argc, char *argv[]) {
           const WaveData &wave_data = wav_reader.Value();
           total_audio+=wave_data.Duration();
 
-          CudaDecoder.OpenDecodeHandle(utt,wave_data);
+          while(!CudaDecoder.OpenDecodeHandle(utt,wave_data));
           processed.push(utt);
           num_done++;
 
 #ifdef REPLICATE_IN_BATCH
           //HACK to replicate across batch, need to remove
-          for (int i=1;i<batchedDecoderConfig.maxBatchSize_;i++) {
+          for (int i=1;i<batchedDecoderConfig.max_batch_size_;i++) {
             total_audio+=wave_data.Duration();
             num_done++;
             std::string key=utt+std::to_string(i);
-            CudaDecoder.OpenDecodeHandle(key,wave_data);
+            while(!CudaDecoder.OpenDecodeHandle(key,wave_data));
           }
 #endif
 
-         while (processed.size()>max_queue_length) {
+         while (processed.size()>=pipeline_length) {
             std::string &utt = processed.front();
             Lattice lat;
             CompactLattice clat;
@@ -629,7 +635,7 @@ int main(int argc, char *argv[]) {
 
 #ifdef REPLICATE_IN_BATCH
             //HACK to replicate across batch, need to remove
-            for (int i=1;i<batchedDecoderConfig.maxBatchSize_;i++) { 
+            for (int i=1;i<batchedDecoderConfig.max_batch_size_;i++) { 
               std::string key=utt+std::to_string(i);
               CudaDecoder.CloseDecodeHandle(key);
             }
@@ -660,7 +666,7 @@ int main(int argc, char *argv[]) {
 
 #ifdef REPLICATE_IN_BATCH
         //HACK to replicate across batch, need to remove
-        for (int i=1;i<batchedDecoderConfig.maxBatchSize_;i++) { 
+        for (int i=1;i<batchedDecoderConfig.max_batch_size_;i++) { 
           std::string key=utt+std::to_string(i);
           CudaDecoder.CloseDecodeHandle(key);
         }
