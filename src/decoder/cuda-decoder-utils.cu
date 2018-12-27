@@ -34,11 +34,14 @@ namespace kaldi {
 		h_final_.resize(num_states_);
 		h_e_offsets_.resize(num_states_+1);
 		h_ne_offsets_.resize(num_states_+1);
-  	KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc((void **)&d_e_offsets_, (num_states_ + 1) * sizeof(*d_e_offsets_)));
-  	KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc((void **)&d_ne_offsets_,
-             (num_states_ + 1) * sizeof(*d_ne_offsets_)));
-  	KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc((void **)&d_final_, (num_states_) * sizeof(*d_final_)));
-
+    
+    d_e_offsets_=static_cast<unsigned int*>(CuDevice::Instantiate().Malloc((num_states_+1)*sizeof(*d_e_offsets_)));
+    d_ne_offsets_=static_cast<unsigned int*>(CuDevice::Instantiate().Malloc((num_states_+1)*sizeof(*d_ne_offsets_)));
+    d_final_=static_cast<float*>(CuDevice::Instantiate().Malloc((num_states_)*sizeof(*d_final_)));
+		KALDI_ASSERT(d_e_offsets_);
+		KALDI_ASSERT(d_ne_offsets_);
+		KALDI_ASSERT(d_final_);
+  	
 		//iterate through states and arcs and count number of arcs per state
 		e_count_=0;
 		ne_count_=0;
@@ -83,11 +86,16 @@ namespace kaldi {
 		h_arc_id_ilabels_.resize(arc_count_);
 		h_arc_olabels_.resize(arc_count_);
 
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&d_arc_weights_,arc_count_*sizeof(*d_arc_weights_)));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&d_arc_nextstates_,arc_count_*sizeof(*d_arc_nextstates_)));
+		d_arc_weights_=static_cast<float*>(CuDevice::Instantiate().Malloc(arc_count_*sizeof(*d_arc_weights_)));
+    d_arc_nextstates_=static_cast<StateId*>(CuDevice::Instantiate().Malloc(arc_count_*sizeof(*d_arc_nextstates_)));
 
-		// Only the ilabels for the e_arc are needed on the device
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&d_arc_pdf_ilabels_,e_count_*sizeof(*d_arc_pdf_ilabels_))); 
+    // Only the ilabels for the e_arc are needed on the device
+    d_arc_pdf_ilabels_=static_cast<int32*>(CuDevice::Instantiate().Malloc(e_count_*sizeof(*d_arc_pdf_ilabels_)));
+
+    KALDI_ASSERT(d_arc_weights_);
+    KALDI_ASSERT(d_arc_nextstates_);
+    KALDI_ASSERT(d_arc_pdf_ilabels_);
+
 		// We do not need the olabels on the device - GetBestPath is on CPU
 
 		//now populate arc data
@@ -125,13 +133,13 @@ namespace kaldi {
 
 	void CudaFst::Finalize() {
 		nvtxRangePushA("CudaFst destructor");
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_e_offsets_));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_ne_offsets_));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_final_));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_arc_weights_));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_arc_nextstates_));
-		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(d_arc_pdf_ilabels_));
-		nvtxRangePop();
+    CuDevice::Instantiate().Free(d_e_offsets_);
+    CuDevice::Instantiate().Free(d_ne_offsets_);
+    CuDevice::Instantiate().Free(d_final_);
+    CuDevice::Instantiate().Free(d_arc_weights_);
+    CuDevice::Instantiate().Free(d_arc_nextstates_);
+    CuDevice::Instantiate().Free(d_arc_pdf_ilabels_);
+    nvtxRangePop();
 	}
 
 

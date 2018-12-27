@@ -736,6 +736,7 @@ finalize_kernel:
 		lane_counters->int_cutoff = INT_MAX;
 		lane_counters->min_int_cost = INT_MAX;
 		lane_counters->int_beam = floatToOrderedInt(cst_dev_params.default_beam);
+    lane_counters->main_q_narcs_and_end = {0,0};
 
 		// Simulate a previously generated aux_q containing init state
 		const StateId init_state = cst_dev_params.init_state;

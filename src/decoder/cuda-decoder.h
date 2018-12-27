@@ -98,11 +98,12 @@ namespace kaldi {
 				KALDI_ASSERT(nrows_ > 0);
 				KALDI_ASSERT(ld_ > 0);
 				KALDI_ASSERT(!data_);
-				KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMalloc(&data_, nrows_*ld_*sizeof(*data_)));
+        
+        data_=static_cast<T*>(CuDevice::Instantiate().Malloc((size_t)nrows_*ld_*sizeof(*data_)));
 			}
 			void Free() {
 				KALDI_ASSERT(data_);
-				KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFree(data_));
+        CuDevice::Instantiate().Free(data_);
 			}
 			protected:
 			int32 ld_;	 // leading dimension
@@ -630,7 +631,7 @@ namespace kaldi {
 			std::vector<BaseFloat*> h_loglikehoods_ptrs_;
 			DeviceLaneMatrix<IntegerCostType> d_state_best_int_cost_; 
 
-			DeviceParams *h_device_params_, *d_device_params_;
+			DeviceParams *h_device_params_;
 			KernelParams *h_kernel_params_;
 
 			// When starting a new utterance,
