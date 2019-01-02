@@ -14,7 +14,7 @@
 // limitations under the License.
 
 
-#include "decoder/cuda-decoder-utils.h"
+#include "cudadecoder/cuda-decoder-utils.h"
 #include <nvToolsExt.h>
 
 namespace kaldi {
