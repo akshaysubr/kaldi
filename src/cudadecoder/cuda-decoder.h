@@ -1,4 +1,4 @@
-// decoder/cuda-decoder.h
+// cudadecoder/cuda-decoder.h
 // TODO nvidia apache2
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 #include <vector>
 #include <tuple>
 
-#include "decoder/cuda-decoder-utils.h"
+#include "cudadecoder/cuda-decoder-utils.h"
 			
 //
 // To understand the following lines it is important to 

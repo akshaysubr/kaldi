@@ -13,8 +13,8 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include "decoder/cuda-decoder.h"
-#include "decoder/cuda-decoder-kernels.cu"
+#include "cudadecoder/cuda-decoder.h"
+#include "cudadecoder/cuda-decoder-kernels.cu"
 #include <algorithm>
 #include <nvToolsExt.h>
 #include <cuda_runtime_api.h>
