@@ -26,7 +26,6 @@
 #include "nnet3/decodable-online-looped.h"
 #include <atomic>
 #include <thread>
-#include <nvToolsExt.h>
 
 namespace kaldi {
 
@@ -134,7 +133,7 @@ namespace kaldi {
 
       //Adds a decoding task to the decoder
       bool OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
-      bool OpenDecodeHandle(onst std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
+      bool OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
 
       //Copies the best path for decoded handle "key" into lat
       void GetBestPath(const std::string &key, Lattice *lat);
@@ -147,7 +146,7 @@ namespace kaldi {
 
       //State needed for each decode task.  
       struct TaskState {
-        Vector<BaseFloat> raw_data // Wave input data when wave_reader passed
+        Vector<BaseFloat> raw_data; // Wave input data when wave_reader passed
         SubVector<BaseFloat> *wave_samples; // Used as a pointer to either the raw data or the samples passed
         float sample_frequency;
 

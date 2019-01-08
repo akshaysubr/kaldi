@@ -15,6 +15,7 @@
 
 #if HAVE_CUDA == 1
 #include "cudadecoder/cuda-decodable.h"
+#include <nvToolsExt.h>
 
 namespace kaldi {
 
@@ -118,7 +119,7 @@ namespace kaldi {
   }
 
   // Add a decoding task to the decoder with a passed array of samples
-  bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> wave_data, float sample_rate)
+  bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate)
   {
     //If no room for another task return false
     if(NumPendingTasks()==max_pending_tasks_)
@@ -251,7 +252,7 @@ namespace kaldi {
 
               decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
               // Justin:  Seems like the existing subvector should be good, but then don't delete it later
-              data.push_back(new SubVector(new SubVector<BaseFloat>(*state.wave_samples, 0, state.wave_samples->Dim())));
+              data.push_back(new SubVector<BaseFloat>(*state.wave_samples, 0, state.wave_samples->Dim()));
               samp_freqs.push_back(state.sample_frequency);
 
               //Accept waveforms

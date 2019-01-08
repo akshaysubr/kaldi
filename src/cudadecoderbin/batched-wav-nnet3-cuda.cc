@@ -24,6 +24,7 @@
 #include "lat/lattice-functions.h"
 #include "util/kaldi-thread.h"
 #include "nnet3/nnet-utils.h"
+#include <nvToolsExt.h>
 #include <cuda_profiler_api.h>
 #include <cuda.h>
 #include <chrono>
