@@ -17,6 +17,8 @@
 #ifndef KALDI_CUDA_DECODEABLE_H_
 #define KALDI_CUDA_DECODEABLE_H_
 
+#if HAVE_CUDA == 1
+
 #include "feat/wave-reader.h"
 #include "online2/online-nnet2-feature-pipeline.h"
 #include "cudadecoder/cuda-decoder.h"
@@ -132,6 +134,7 @@ namespace kaldi {
 
       //Adds a decoding task to the decoder
       bool OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
+      bool OpenDecodeHandle(onst std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
 
       //Copies the best path for decoded handle "key" into lat
       void GetBestPath(const std::string &key, Lattice *lat);
@@ -144,12 +147,27 @@ namespace kaldi {
 
       //State needed for each decode task.  
       struct TaskState {
-        WaveData wave_data;   //Wave data input
+        Vector<BaseFloat> raw_data // Wave input data when wave_reader passed
+        SubVector<BaseFloat> *wave_samples; // Used as a pointer to either the raw data or the samples passed
+        float sample_frequency;
+
         Lattice lat;          //Lattice output
         std::atomic<bool> finished;  //Tells master thread if task has finished execution
 
-        TaskState() : finished(false) {};
-        void Init(const WaveData &wave_data_in) { wave_data=wave_data_in; finished=false; };
+        TaskState() : wave_samples(NULL),sample_frequency(0), finished(false) {}
+        ~TaskState() { delete wave_samples;}
+        void Init(const WaveData &wave_data_in) {
+          raw_data.Resize(wave_data_in.Data().NumRows()*wave_data_in.Data().NumCols(), kUndefined);
+          memcpy(raw_data.Data(), wave_data_in.Data().Data(), raw_data.Dim()*sizeof(BaseFloat));
+          wave_samples=new SubVector<BaseFloat>(raw_data, 0, raw_data.Dim());
+          sample_frequency=wave_data_in.SampFreq();
+          finished=false;
+        };
+        void Init(const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
+          wave_samples=new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
+          sample_frequency =sample_rate;
+          finished=false;
+        }
       };
 
       //Thread execution function.  This is a single worker thread which processes input.
@@ -179,5 +197,7 @@ namespace kaldi {
 
 } // end namespace kaldi.
 
+
+#endif
 
 #endif

@@ -13,6 +13,7 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#if HAVE_CUDA == 1
 #include "cudadecoder/cuda-decodable.h"
 
 namespace kaldi {
@@ -105,6 +106,30 @@ namespace kaldi {
     TaskState* t=&tasks_lookup_[key];
     t->Init(wave_data); 
 
+    //Should not have changed so just doing a sanity check
+    KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
+
+    //insert into pending task queue
+    //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
+    pending_task_queue_[tasks_back_]=t;
+    //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
+    tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
+    return true;
+  }
+
+  // Add a decoding task to the decoder with a passed array of samples
+  bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> wave_data, float sample_rate)
+  {
+    //If no room for another task return false
+    if(NumPendingTasks()==max_pending_tasks_)
+      return false;
+
+    //ensure key is unique
+    KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
+
+    //Create a new task in lookup map
+    TaskState* t=&tasks_lookup_[key];
+    t->Init(wave_data, sample_rate);
     //Should not have changed so just doing a sanity check
     KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
 
@@ -225,8 +250,9 @@ namespace kaldi {
               features.push_back(feature);
 
               decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
-              data.push_back(new SubVector<BaseFloat>(state.wave_data.Data(), 0));
-              samp_freqs.push_back(state.wave_data.SampFreq());
+              // Justin:  Seems like the existing subvector should be good, but then don't delete it later
+              data.push_back(new SubVector(new SubVector<BaseFloat>(*state.wave_samples, 0, state.wave_samples->Dim())));
+              samp_freqs.push_back(state.sample_frequency);
 
               //Accept waveforms
               feature->AcceptWaveform(samp_freqs[i],*data[i]);
@@ -315,3 +341,4 @@ namespace kaldi {
 
 } // end namespace kaldi.
 
+#endif
