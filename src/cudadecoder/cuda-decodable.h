@@ -38,7 +38,7 @@ namespace kaldi {
 	//configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
 	struct BatchedCudaDecoderConfig {
 		BatchedCudaDecoderConfig() : max_batch_size_(20) {};
-		void Register(ParseOptions *po) {
+		void Register(OptionsItf *po) {
 			feature_opts_.Register(po);
 			decodable_opts_.Register(po);
 			decoder_opts_.Register(po);
