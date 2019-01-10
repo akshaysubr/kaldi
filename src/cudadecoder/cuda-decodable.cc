@@ -31,6 +31,10 @@ namespace kaldi {
 
     cuda_fst_.Initialize(decode_fst, trans_model_); 
 
+    feature_info_=new  OnlineNnet2FeaturePipelineInfo(config_.feature_opts_);
+    feature_info_->ivector_extractor_info.use_most_recent_ivector = true;
+    feature_info_->ivector_extractor_info.greedy_ivector_extractor = true;
+
     decodable_info_=new nnet3::DecodableNnetSimpleLoopedInfo(config_.decodable_opts_,&am_nnet_);
 
     //initialize threads and save their contexts so we can join them later
@@ -135,9 +139,6 @@ namespace kaldi {
     CuDevice::Instantiate();
 
     //Data structures that are reusable across decodes but unique to each thread
-    OnlineNnet2FeaturePipelineInfo feature_info(config_.feature_opts_);
-    feature_info.ivector_extractor_info.use_most_recent_ivector = true;
-    feature_info.ivector_extractor_info.greedy_ivector_extractor = true;
     CudaDecoder cuda_decoders(cuda_fst_,config_.decoder_opts_,config_.max_batch_size_,config_.max_batch_size_);
     //This threads task list
     std::vector<TaskState*> tasks;
@@ -219,7 +220,7 @@ namespace kaldi {
               init_channels.push_back(channel); //add new channel to initialization list
 
               //create decoding state
-              OnlineNnet2FeaturePipeline *feature = new OnlineNnet2FeaturePipeline(feature_info);
+              OnlineNnet2FeaturePipeline *feature = new OnlineNnet2FeaturePipeline(*feature_info_);
               features.push_back(feature);
 
               decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
