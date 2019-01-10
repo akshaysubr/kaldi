@@ -146,7 +146,6 @@ namespace kaldi {
     std::vector<ChannelId> free_channels;   //channels that are inactive
     std::vector<ChannelId> init_channels;   //channels that have yet to be initialized
     //channel state vectors
-    std::vector<BaseFloat> samp_freqs;
     std::vector<SubVector<BaseFloat>* > data;
     std::vector<OnlineNnet2FeaturePipeline*> features;
     std::vector<CudaDecodableInterface*> decodables;
@@ -159,7 +158,6 @@ namespace kaldi {
       channels.reserve(config_.max_batch_size_);
       free_channels.reserve(config_.max_batch_size_);
       init_channels.reserve(config_.max_batch_size_);
-      samp_freqs.reserve(config_.max_batch_size_);
       data.reserve(config_.max_batch_size_);
       features.reserve(config_.max_batch_size_);
       decodables.reserve(config_.max_batch_size_);
@@ -226,10 +224,9 @@ namespace kaldi {
 
               decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
               data.push_back(new SubVector<BaseFloat>(state.wave_data.Data(), 0));
-              samp_freqs.push_back(state.wave_data.SampFreq());
 
               //Accept waveforms
-              feature->AcceptWaveform(samp_freqs[i],*data[i]);
+              feature->AcceptWaveform(state.wave_data.SampFreq(),*data[i]);
               feature->InputFinished();
             }
           } //end if(tasks_front_!=tasks_back_)
@@ -279,7 +276,6 @@ namespace kaldi {
               std::swap(channels[cur],channels[back]);
               std::swap(decodables[cur],decodables[back]);
               std::swap(features[cur],features[back]);
-              std::swap(samp_freqs[cur],samp_freqs[back]);
               std::swap(data[cur],data[back]); 
 
               //back full now so decrement it
@@ -305,7 +301,6 @@ namespace kaldi {
           channels.resize(cur);
           decodables.resize(cur);
           features.resize(cur);
-          samp_freqs.resize(cur);
           data.resize(cur);
         } //end 4) cleanup
       } while (tasks.size()>0);  //more work to process don't check exit condition
