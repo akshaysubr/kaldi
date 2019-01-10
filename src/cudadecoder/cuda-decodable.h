@@ -182,6 +182,7 @@ namespace kaldi {
       nnet3::DecodableNnetSimpleLoopedInfo *decodable_info_;
 
       std::mutex tasks_mutex_;                      //protects tasks_front_ and pending_task_queue_ for workers
+      std::mutex tasks_add_mutex_;                   //protect OpenDecodeHandle if multiple threads access 
       std::atomic<int> tasks_front_, tasks_back_;
       TaskState** pending_task_queue_;
 
