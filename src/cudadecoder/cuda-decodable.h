@@ -114,8 +114,8 @@ namespace kaldi {
 
       ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config), max_pending_tasks_(2000) {};
 
-      void Register(ParseOptions &po) {
-        po.Register("max-outstanding-queue-length", &max_pending_tasks_, 
+      void Register(OptionsItf *po) {
+        po->Register("max-outstanding-queue-length", &max_pending_tasks_, 
             "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
       }
 
