@@ -74,14 +74,18 @@ namespace kaldi {
 
   //query a specific key to see if compute on it is complete
   bool ThreadedBatchedCudaDecoder::isFinished(const std::string &key) {
+    tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
+    tasks_lookup_mutex_.unlock();
     KALDI_ASSERT(it!=tasks_lookup_.end());
     return it->second.finished;
   }
 
   //remove an audio file from the decoding and clean up resources
   void ThreadedBatchedCudaDecoder::CloseDecodeHandle(const std::string &key) {
+    tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
+    tasks_lookup_mutex_.unlock();
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
     TaskState &state = it->second;
@@ -89,7 +93,9 @@ namespace kaldi {
     //wait for task to finish processing
     while (state.finished!=true);
 
+    tasks_lookup_mutex_.lock();
     tasks_lookup_.erase(it);
+    tasks_lookup_mutex_.unlock();
   }
 
 
@@ -100,10 +106,12 @@ namespace kaldi {
       return false;
 
     //ensure key is unique
+    tasks_lookup_mutex_.lock();
     KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
 
     //Create a new task in lookup map
     TaskState* t=&tasks_lookup_[key];
+    tasks_lookup_mutex_.unlock();
     t->Init(wave_data); 
 
     tasks_add_mutex_.lock();
@@ -132,10 +140,12 @@ namespace kaldi {
       return false;
 
     //ensure key is unique
+    tasks_lookup_mutex_.lock();
     KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
 
     //Create a new task in lookup map
     TaskState* t=&tasks_lookup_[key];
+    tasks_lookup_mutex_.unlock();
     t->Init(wave_data, sample_rate);
     //Should not have changed so just doing a sanity check
     KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
