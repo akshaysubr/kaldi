@@ -785,6 +785,8 @@ finalize_kernel:
 			lane_counters->int_beam = floatToOrderedInt(channel_counters->prev_beam); // TODO rename prev_beam is actually the new frame beam
 			lane_counters->main_q_global_offset = channel_counters->prev_main_q_global_offset; // we'll update it after emitting
 			lane_counters->min_int_cost_and_arg_with_final.x = INT_MAX; // used by GetBestCost
+			lane_counters->int_cutoff = INT_MAX;
+			lane_counters->min_int_cost = INT_MAX;
 		}
 	}
 
