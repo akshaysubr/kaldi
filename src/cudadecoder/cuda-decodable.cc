@@ -101,10 +101,10 @@ namespace kaldi {
 
   //Adds a decoding task to the decoder
   bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
-    //If no room for another task return false
-    if(NumPendingTasks()==max_pending_tasks_) {
-      return false;
 
+    //If no room for another task return false
+    if(NumPendingTasks()==max_pending_tasks_) 
+      return false;
     //ensure key is unique
     tasks_lookup_mutex_.lock();
     KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
@@ -116,7 +116,7 @@ namespace kaldi {
 
     tasks_add_mutex_.lock();
     std::unique_lock<std::mutex> lock(tasks_add_mutex_);
-    while (numPendingTasks()<max_pending_tasks_) {
+    while (NumPendingTasks()<max_pending_tasks_) {
 #ifndef _WIN32
         // I don't see other sleeps in the code base and I also don't yet have a windows solution here
         usleep(10);
@@ -134,6 +134,7 @@ namespace kaldi {
   // Add a decoding task to the decoder with a passed array of samples
   bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate)
   {
+
     std::unique_lock<std::mutex> lock(tasks_add_mutex_);
     //If no room for another task return false
     if(NumPendingTasks()==max_pending_tasks_)
