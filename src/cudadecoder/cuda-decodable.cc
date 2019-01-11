@@ -95,9 +95,8 @@ namespace kaldi {
 
   //Adds a decoding task to the decoder
   bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
-    std::unique_lock<std::mutex> lock(tasks_add_mutex_);
     //If no room for another task return false
-    if(NumPendingTasks()==max_pending_tasks_)
+    if(NumPendingTasks()==max_pending_tasks_) {
       return false;
 
     //ensure key is unique
@@ -107,8 +106,14 @@ namespace kaldi {
     TaskState* t=&tasks_lookup_[key];
     t->Init(wave_data); 
 
-    //Should not have changed so just doing a sanity check
-    KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
+    tasks_add_mutex_.lock();
+    std::unique_lock<std::mutex> lock(tasks_add_mutex_);
+    while (numPendingTasks()<max_pending_tasks_) {
+#ifndef _WIN32
+        // I don't see other sleeps in the code base and I also don't yet have a windows solution here
+        usleep(10);
+#endif 
+    }
 
     //insert into pending task queue
     //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  

@@ -133,6 +133,7 @@ namespace kaldi {
 
       //Adds a decoding task to the decoder
       bool OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
+      // When passing in a vector of data, the caller must ensure the data exists until the CloseDecodeHandle is called
       bool OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
 
       //Copies the best path for decoded handle "key" into lat

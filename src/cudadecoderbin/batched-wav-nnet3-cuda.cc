@@ -162,6 +162,7 @@ int main(int argc, char *argv[]) {
           const WaveData &wave_data = wav_reader.Value();
           total_audio+=wave_data.Duration();
 
+          // with this loop, it might make more sense to have the OpenDecodeHandle just block until space exists rather than loop here
           while(!CudaDecoder.OpenDecodeHandle(utt,wave_data));
           processed.push(utt);
           num_done++;
