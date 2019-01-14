@@ -103,7 +103,7 @@ namespace kaldi {
 	 *  //some loop
 	 *    Lattice lat;
 	 *    std::string utt_key = ...
-	 *    decoder.GetBestPath(utt_key,&lat);
+	 *    decoder.GetRawLattice(utt_key,&lat);
 	 *    decoder.CloseDecodeHandle(utt_key);
 	 *
 	 *  decoder.Finalize();
@@ -133,8 +133,8 @@ namespace kaldi {
       //Adds a decoding task to the decoder
       bool OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
 
-      //Copies the best path for decoded handle "key" into lat
-      void GetBestPath(const std::string &key, Lattice *lat);
+      //Copies the raw lattice for decoded handle "key" into lat
+      void GetRawLattice(const std::string &key, Lattice *lat);
 
       inline int NumPendingTasks() {
         return (tasks_back_ - tasks_front_ + max_pending_tasks_+1) % (max_pending_tasks_+1); 

@@ -120,7 +120,7 @@ namespace kaldi {
     return true;
   }
 
-  void ThreadedBatchedCudaDecoder::GetBestPath(const std::string &key, Lattice *lat) {
+  void ThreadedBatchedCudaDecoder::GetRawLattice(const std::string &key, Lattice *lat) {
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
@@ -288,7 +288,7 @@ namespace kaldi {
           } //end for loop
 
           //Get best path for completed tasks
-          cuda_decoders.GetBestPath(completed_channels,lattices,true);
+          cuda_decoders.GetRawLattice(completed_channels,lattices,true);
 
           //clean up datastructures
           for (int i=cur;i<tasks.size();i++) {

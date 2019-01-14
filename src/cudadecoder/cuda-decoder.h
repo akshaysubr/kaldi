@@ -98,8 +98,8 @@ namespace kaldi {
 				KALDI_ASSERT(nrows_ > 0);
 				KALDI_ASSERT(ld_ > 0);
 				KALDI_ASSERT(!data_);
-        
         data_=static_cast<T*>(CuDevice::Instantiate().Malloc((size_t)nrows_*ld_*sizeof(*data_)));
+				KALDI_ASSERT(data_);
 			}
 			void Free() {
 				KALDI_ASSERT(data_);
@@ -162,6 +162,7 @@ namespace kaldi {
 
 	class DeviceParams;
 	class KernelParams;
+	class HashmapValueT;
 
 	struct LaneCounters {
 		// Contains both main_q_end and narcs
@@ -183,6 +184,7 @@ namespace kaldi {
 		// If that's the cast, it does what it has to do, and sets n_CTA_done back to 0
 		int32 aux_q_end;
 		int32 post_expand_aux_q_end; // used for double buffering
+		int32 main_q_n_extra_prev_tokens;
 
 		// Depending on the value of the parameter "max_tokens_per_frame"
 		// we can end up with an overflow when generating the tokens for a frame
@@ -198,6 +200,7 @@ namespace kaldi {
 		// It only reads from the index range [main_q_local_offset, end[
 		int32 main_q_local_offset;
 		int32 main_q_global_offset;            
+		int32 main_q_extra_prev_tokens_global_offset;            
 
 		IntegerCostType min_int_cost;
 		IntegerCostType int_beam;
@@ -206,7 +209,9 @@ namespace kaldi {
 		// Only valid after calling GetBestCost
 		// different than min_int_cost : we include the "final" cost
 		int2 min_int_cost_and_arg_with_final;
-		int32 reached_final;
+		// Number of final tokens in current main_q
+		// Only valid after calling GetBestCost
+		int32 nfinals;
 	};
 
 	// 
@@ -223,6 +228,8 @@ namespace kaldi {
 
 		// main_q_end and main_q_narcs at the end of the previous frame
 		int2 prev_main_q_narcs_and_end;
+		int32 prev_main_q_n_extra_prev_tokens;
+
 
 		// The token at index i in the main queue has in reality 
 		// a global index of (i + main_q_global_offset)
@@ -231,6 +238,7 @@ namespace kaldi {
 		// for each token in order to have valid token.prev_token data members
 		// and be able to backtrack at the end
 		int32 prev_main_q_global_offset;            
+		int32 prev_main_q_extra_prev_tokens_global_offset;            
 	};
 
 
@@ -239,12 +247,17 @@ namespace kaldi {
 
 	struct CudaDecoderConfig {
 		BaseFloat default_beam;
+		BaseFloat lattice_beam;
+		// Explicit opt in for lattices
+		bool generate_lattices;
 		int32 max_tokens;
 		int32 max_tokens_per_frame;
 		int32 nlanes;
 		int32 nchannels;
-
+		
 		CudaDecoderConfig(): default_beam(15.0),
+		lattice_beam(2.0),
+		generate_lattices(true),
 		max_tokens(2000000),
 		max_tokens_per_frame(1000000) {}
 
@@ -254,20 +267,13 @@ namespace kaldi {
 					"what the queue can hold (max_tokens_per_frame)");
 			opts->Register("max-tokens-pre-allocated", &max_tokens, "Total number of tokens pre-allocated (equivalent to reserve in a std vector).  If actual usaged exceeds this performance will be degraded");
 			opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Number of tokens allocated per frame. If actual usaged exceeds this the results are undefined.");
-		}
+			opts->Register("generate-lattices", &generate_lattices, "1=Generate lattices using the lattice-beam, 0=only generate the 1-best path");
+			opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam");
+			}
 		void Check() const {
-			KALDI_ASSERT(default_beam > 0.0 && max_tokens > 0 && max_tokens_per_frame > 0);
+			KALDI_ASSERT(default_beam > 0.0 && max_tokens > 0 && max_tokens_per_frame > 0 && lattice_beam >= 0);
 		}
 	};
-
-
-	//
-	// CudaDecoder
-	// path-based (one-best) decoder 
-	// Implementation of the CudaDecoder methods are in two files :
-	// - cuda-decoder-kernels.cu for the CUDA kernels and their wrapper
-	// - cuda-decoder.cu for everything else
-	//
 
 	class CudaDecoder {
 		public:
@@ -275,7 +281,6 @@ namespace kaldi {
 			// and the d_cutoff
 			// We use a 1:1 conversion between CostType <--> IntegerCostType
 			// IntegerCostType is used because it triggers native atomic operations
-
 			CudaDecoder(const CudaFst &fst, 
 					const CudaDecoderConfig &config,
 					int32 nlanes=1,
@@ -316,11 +321,16 @@ namespace kaldi {
 			// using the return value is deprecated.
 			bool GetBestPath(const std::vector<ChannelId> &channels, std::vector<Lattice*> &fst_out_vec, bool use_final_probs=true);
 			bool GetBestPath(Lattice* fst_out, bool use_final_probs=true); // batch size = 1
+			bool GetRawLattice(const std::vector<ChannelId> &channels, std::vector<Lattice*> &fst_out_vec, bool use_final_probs);
 
 			// GetBestCost sets in *min the token's best cost in the main_q
 			// it also sets in *arg the index of that token (argmin)
 			// is isfinal is true, we take into account the final costs
-			void GetBestCost(const std::vector<ChannelId> &channels, bool isfinal, std::vector<std::pair<int32,CostType>> *argmins, std::vector<bool> *has_reached_final);
+			void GetBestCost(const std::vector<ChannelId> &channels, 
+					bool isfinal, 
+					std::vector<std::pair<int32,CostType>> *argmins, 
+					std::vector<std::vector<std::pair<int,float>>> *list_finals_token_idx, 
+					std::vector<bool> *has_reached_final);
 
 			/// FinalRelativeCost() serves the same function as ReachedFinal(), but gives
 			/// more information.  It returns the difference between the best (final-cost plus
@@ -531,7 +541,25 @@ namespace kaldi {
 			// If a kernel sets the flag h_q_overflow, we send a warning to stderr 
 			void CheckOverflow();
 
-			//
+			// Evaluates func for each lane, returning the max of all return values
+			int32 GetMaxForAllLanes(std::function<int32(const LaneCounters &)> func);
+
+			// Copy the lane counters back to host, async, using stream st
+			void CopyLaneCountersToHostAsync(cudaStream_t st);
+
+			template<typename T>
+				void PerformConcatenatedCopy(std::function<int32(const LaneCounters &)> func,
+						LaneMatrixInterface<T> src,
+						T *d_concat,
+						T *h_concat,
+						cudaStream_t st,
+						std::vector<int32> *lanes_offsets_ptr);
+			template<typename T>
+				void MoveConcatenatedCopyToVector(const std::vector<int32> &lanes_offsets,
+						T *h_concat,
+						std::vector<std::vector<T>> *vecvec);
+
+					//
 			// Debug functions
 			// Called only if necessary
 			// depends on the value of KALDI_CUDA_DECODER_DEBUG_LEVEL
@@ -595,6 +623,8 @@ namespace kaldi {
 
 			// main_q_* TODO comments
 			DeviceChannelMatrix<int2> d_main_q_state_and_cost_; 
+			DeviceLaneMatrix<float2> d_main_q_extra_cost_; 
+			DeviceLaneMatrix<CostType> d_main_q_acoustic_cost_;
 
 			// d_main_q_info_ is only needed as a buffer when creating the 
 			// tokens. It is not needed by the next frame computation
@@ -605,6 +635,7 @@ namespace kaldi {
 
 			// Same thing for the aux q
 			DeviceLaneMatrix<int2> d_aux_q_state_and_cost_; // TODO int_cost
+			DeviceLaneMatrix<CostType> d_aux_q_acoustic_cost_;
 			DeviceLaneMatrix<InfoToken> d_aux_q_info_; 
 
 			// The load balancing of the Expand kernel relies on the prefix sum of the degrees 
@@ -612,6 +643,10 @@ namespace kaldi {
 			// That array contains that prefix sum. It is set by the "Preprocess*" kernels
 			// and used by the Expand kernel
 			DeviceChannelMatrix<int32> d_main_q_degrees_prefix_sum_; 
+			DeviceLaneMatrix<int32> d_main_q_extra_prev_tokens_prefix_sum_;
+			DeviceLaneMatrix<int32> d_main_q_representative_id_; 
+			DeviceLaneMatrix<int32> d_main_q_n_extra_prev_tokens_local_idx_;
+			DeviceLaneMatrix<InfoToken> d_main_q_extra_prev_tokens_;
 
 			// When generating d_main_q_degrees_prefix_sum we may need to do it in three steps
 			// (1) First generate the prefix sum inside each CUDA blocks
@@ -621,7 +656,7 @@ namespace kaldi {
 			// Data from step 2 is stored in d_main_q_degrees_block_sums_prefix_sum
 			// Note : this is only used by PreprocessInPlace
 			// PreprocessAndContract uses a trick to compute the global prefix sum in one pass	    
-			DeviceLaneMatrix<int32> d_main_q_degrees_block_sums_prefix_sum_; 
+			DeviceLaneMatrix<int2> d_main_q_block_sums_prefix_sum_; 
 
 			// d_main_q_arc_offsets[i] = fst_.arc_offsets[d_main_q_state[i]]
 			// we pay the price for the random memory accesses of fst_.arc_offsets in the preprocess kernel
@@ -629,7 +664,7 @@ namespace kaldi {
 			DeviceChannelMatrix<int32> d_main_q_arc_offsets_; 
 
 			std::vector<BaseFloat*> h_loglikehoods_ptrs_;
-			DeviceLaneMatrix<IntegerCostType> d_state_best_int_cost_; 
+			DeviceLaneMatrix<HashmapValueT> d_hashmap_values_; 
 
 			DeviceParams *h_device_params_;
 			KernelParams *h_kernel_params_;
@@ -669,20 +704,40 @@ namespace kaldi {
 			// triggered at the end of a frame computation
 			cudaEvent_t can_read_final_h_main_q_end_;
 
+			cudaEvent_t can_use_acoustic_cost_;
+			cudaEvent_t can_use_infotoken_;
+			cudaEvent_t can_use_extra_cost_;
+
 			// When we generate a new tokens list we only keep candidates 
 			// that have a cost < best_cost_in_the_queue + beam
 			// At first beam = default_beam_
 			// We may decrease that beam if we are generating too many tokens
 			// (adaptive beam)
 			CostType default_beam_;
+			CostType lattice_beam_;
+			bool generate_lattices_;
 
 			int32 max_tokens_;
 			int32 max_tokens_per_frame_;
-
+			int32 hashmap_capacity_;
+			
 			// Keep track of the number of frames decoded in the current file.
 			std::vector<int32> num_frames_decoded_;
+			std::vector<std::vector<int32>> frame_offsets_;
 
-			std::vector<InfoTokenVector> h_all_tokens_info_;
+			// Used when generate_lattices
+			std::vector<std::vector<InfoToken>> h_all_tokens_info_;
+			std::vector<std::vector<CostType>> h_all_tokens_acoustic_cost_;
+			std::vector<std::vector<InfoToken>> h_all_tokens_extra_prev_tokens_;
+			std::vector<std::vector<float2>> h_all_tokens_extra_prev_tokens_extra_cost_;
+
+			float2 *h_extra_cost_concat_, *d_extra_cost_concat_;
+			InfoToken *h_infotoken_concat_, *d_infotoken_concat_;
+			CostType *h_acoustic_cost_concat_, *d_acoustic_cost_concat_;
+			InfoToken *h_extra_prev_tokens_concat_;
+
+			std::vector<int32> h_main_q_end_lane_offsets_, h_emitting_main_q_end_lane_offsets_;
+			std::vector<int32> h_n_extra_prev_tokens_lane_offsets_; 
 			// Used for debugging purposes
 			// only malloc'ed if necessary
 			int32 *h_debug_buf1_, *h_debug_buf2_;

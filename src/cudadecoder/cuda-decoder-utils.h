@@ -116,7 +116,7 @@ namespace kaldi {
 
             std::vector<float> h_arc_weights_;
             float *d_arc_weights_; // TODO define CostType here
-            std::vector<StateId> h_arc_nextstates_;
+            std::vector<StateId> h_arc_nextstates_; // TODO remove "s"
 	    StateId *d_arc_nextstates_;
 	    std::vector<int32> h_arc_id_ilabels_;
             int32 *d_arc_pdf_ilabels_;
@@ -131,7 +131,7 @@ namespace kaldi {
     // InfoToken contains data that needs to be saved for the backtrack
     // in GetBestPath
     // It will be moved back to CPU memory using a InfoTokenVector
-    struct InfoToken {
+    struct __align__(8) InfoToken {
         int32 prev_token;
         int32 arc_idx;
     };
@@ -160,6 +160,9 @@ namespace kaldi {
         virtual ~InfoTokenVector();
     };
 
+//
+// Hashmap
+//
 
 } // end namespace kaldi
 
