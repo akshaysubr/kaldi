@@ -101,7 +101,6 @@ namespace kaldi {
 		//now populate arc data
 		int e_idx=0;
 		int ne_idx=e_count_; //starts where e_offsets_ ends
-
 		for(int i=0;i<num_states_;i++) {
 			for (fst::ArcIterator<fst::Fst<StdArc> > aiter(fst, i); !aiter.Done(); aiter.Next()) {
 				StdArc arc = aiter.Value();
@@ -111,8 +110,8 @@ namespace kaldi {
 				} else {
 					idx=ne_idx++;
 				}
-				h_arc_weights_[idx]=arc.weight.Value();
-				h_arc_nextstates_[idx]=arc.nextstate;
+				h_arc_weights_[idx] = arc.weight.Value();
+				h_arc_nextstates_[idx] = arc.nextstate;
   				// Converting ilabel here, to avoid reindexing when reading nnet3 output
 				h_arc_id_ilabels_[idx]=arc.ilabel;
 				int32 ilabel_pdf = trans_model.TransitionIdToPdf(arc.ilabel);

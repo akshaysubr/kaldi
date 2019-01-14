@@ -1,8 +1,11 @@
 #ifndef KALDI_DECODER_CUDA_DECODER_KERNELS_H_
 #define KALDI_DECODER_CUDA_DECODER_KERNELS_H_
+
+#define KALDI_CUDA_DECODER_HASHMAP_NO_KEY -1
+
 #include "cuda-decoder.h"
+
 namespace kaldi {
-	__global__ void init_state_best_cost_lookup_kernel(DeviceParams cst_dev_params,KernelParams params);
 	__global__ void get_best_cost_kernel(DeviceParams cst_dev_params,KernelParams params, bool isfinal, CostType fst_zero);
 	__global__ void finalize_process_non_emitting_kernel(DeviceParams cst_dev_params,KernelParams params);
 	__global__ void exclusive_sum_batched_step3_kernel(DeviceParams cst_dev_params,KernelParams params);
@@ -17,7 +20,19 @@ namespace kaldi {
 		__global__ void post_expand_kernel(DeviceParams cst_dev_params,KernelParams params);
 	__global__ void preprocess_in_place_kernel(DeviceParams cst_dev_params,KernelParams params);
 	__global__ void preprocess_and_contract_kernel(DeviceParams cst_dev_params,KernelParams params);
+	template<typename T>
+	__global__ void concatenate_lanes_data(DeviceParams cst_dev_params, KernelParams params, LaneMatrixInterface<T> src, T *concat);
 
+	struct __align__(16) HashmapValueT { 
+		// Map key : fst state
+		int key;
+		// Number of tokens associated to that state
+		int count;
+		// minimum cost for that state + argmin
+		int2 min_and_argmin_int_cost;
+	};
+
+	__global__ void init_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params);
 
 	template<typename T> 
 		struct LaneMatrixInterface  {
@@ -42,15 +57,25 @@ namespace kaldi {
 		LaneMatrixInterface<LaneCounters> d_lanes_counters; 
 
 		ChannelMatrixInterface<int2> d_main_q_state_and_cost; 
+		LaneMatrixInterface<CostType> d_main_q_acoustic_cost; 
 		LaneMatrixInterface<InfoToken> d_main_q_info; 
 
 		LaneMatrixInterface<int2> d_aux_q_state_and_cost; // TODO int_cost
+		LaneMatrixInterface<CostType> d_aux_q_acoustic_cost; 
 		LaneMatrixInterface<InfoToken> d_aux_q_info; 
-		ChannelMatrixInterface<int32> d_main_q_degrees_prefix_sum; 
-		LaneMatrixInterface<int32> d_main_q_degrees_block_sums_prefix_sum; 
 		ChannelMatrixInterface<int32> d_main_q_arc_offsets; 
-		LaneMatrixInterface<IntegerCostType> d_state_best_int_cost; 
+		LaneMatrixInterface<HashmapValueT> d_hashmap_values; 
 
+		LaneMatrixInterface<int2> d_list_final_tokens_in_main_q; 
+
+		LaneMatrixInterface<float2> d_main_q_extra_cost; 
+
+		ChannelMatrixInterface<int32> d_main_q_degrees_prefix_sum; 
+		LaneMatrixInterface<int2> d_main_q_block_sums_prefix_sum; 
+		LaneMatrixInterface<int32> d_main_q_representative_id; 
+		LaneMatrixInterface<int32> d_main_q_extra_prev_tokens_prefix_sum;
+		LaneMatrixInterface<int32> d_main_q_n_extra_prev_tokens_local_idx;
+		LaneMatrixInterface<InfoToken> d_main_q_extra_prev_tokens;
 		int32 max_nlanes;
 		// TODO use the CudaFst struct
 		int32 q_capacity;
@@ -62,9 +87,12 @@ namespace kaldi {
 		CostType *d_fst_final_costs;
 		int32 nstates;
 		CostType default_beam;
+		bool generate_lattices;
+		CostType lattice_beam;
 		int32 init_channel_id;
 		StateId init_state; 
 		CostType init_cost;
+		int hashmap_capacity;
 	};
 
 	// TODO add STATIC_ASSERT for this struct size < 4KB
@@ -73,9 +101,22 @@ namespace kaldi {
 		// the lane lane_id will compute the channel
 		// with channel_id = channel_to_compute[lane_id]
 		ChannelId channel_to_compute[KALDI_CUDA_DECODER_MAX_N_LANES];
+		int32 main_q_end_lane_offsets[KALDI_CUDA_DECODER_MAX_N_LANES];
 		BaseFloat *loglikelihoods_ptrs[KALDI_CUDA_DECODER_MAX_N_LANES];
 		int32 nlanes_used;
 	};
 
+	int32 floatToOrderedIntHost(float floatVal) {
+		int32 intVal = reinterpret_cast<int&>( floatVal );
+		return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
+	}
+
+
+	float orderedIntToFloatHost(int32 intVal) {
+		intVal =  (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
+		return reinterpret_cast<float&>(intVal);
+	} 
+
+	
 } // namespace kaldi
 #endif

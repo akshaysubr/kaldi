@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
             Lattice lat;
             CompactLattice clat;
         
-            CudaDecoder.GetBestPath(utt,&lat);
+            CudaDecoder.GetRawLattice(utt,&lat);
             ConvertLattice(lat, &clat);
 
             GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
@@ -194,7 +194,7 @@ int main(int argc, char *argv[]) {
         Lattice lat;
         CompactLattice clat;
 
-        CudaDecoder.GetBestPath(utt,&lat);
+        CudaDecoder.GetRawLattice(utt,&lat);
         ConvertLattice(lat, &clat);
 
         GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
