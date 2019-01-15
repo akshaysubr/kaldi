@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #if HAVE_CUDA == 1
+#include "base/kaldi-utils.h"
 #include "cudadecoder/cuda-decodable.h"
 #include <nvToolsExt.h>
 
@@ -117,10 +118,8 @@ namespace kaldi {
     tasks_add_mutex_.lock();
     std::unique_lock<std::mutex> lock(tasks_add_mutex_);
     while (NumPendingTasks()<max_pending_tasks_) {
-#ifndef _WIN32
-        // I don't see other sleeps in the code base and I also don't yet have a windows solution here
-        usleep(10);
-#endif 
+        // qualfied to ensure the right call occurs on windows
+        kaldi::Sleep(.01);
     }
 
     //insert into pending task queue
