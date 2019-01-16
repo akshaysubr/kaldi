@@ -51,7 +51,7 @@ distclean:
 	rm -f openfst
 	rm -rf libsndfile-1.0.25{,.tar.gz} BeamformIt-3.51{,.tgz}
 	rm -f cub-$(CUB_VERSION).zip
-	rm -rf cub-$(CUB_VERSION) 
+	rm -rf cub-$(CUB_VERSION)
 	rm -f cub
 
 
@@ -156,8 +156,8 @@ openblas_compiled:
 
 
 .PHONY: cub
-cub: 
+cub:
 	wget -T 10 -t 3 -O cub-$(CUB_VERSION).zip https://github.com/NVlabs/cub/archive/$(CUB_VERSION).zip
-	unzip -o cub-$(CUB_VERSION).zip
-	rm -f cub 
-	ln -s cub-$(CUB_VERSION) cub	
+	unzip -oq cub-$(CUB_VERSION).zip
+	rm -f cub
+	ln -s cub-$(CUB_VERSION) cub
