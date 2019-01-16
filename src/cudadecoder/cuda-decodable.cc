@@ -132,7 +132,20 @@ namespace kaldi {
     //Store off the lattice
     *lat=state->lat;
   }
+  
+  void ThreadedBatchedCudaDecoder::GetLattice(const std::string &key, CompactLattice *clat) {
+    auto it=tasks_lookup_.find(key);
+    KALDI_ASSERT(it!=tasks_lookup_.end());
 
+    TaskState *state = &it->second;
+
+    //wait for task to finish.  This should happens automatically without intervention from the master thread.
+    while (state->finished==false);
+
+    //Determinize lattice
+    DeterminizeLatticePhonePrunedWrapper(
+      trans_model_, &state->lat, config_.decoder_opts_.lattice_beam, clat, config_.det_opts_);
+  }
 
   void ThreadedBatchedCudaDecoder::ExecuteWorker(int threadId) {
     //Initialize this threads device
