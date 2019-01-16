@@ -17,14 +17,16 @@
 #ifndef KALDI_CUDA_DECODEABLE_H_
 #define KALDI_CUDA_DECODEABLE_H_
 
+#include <atomic>
+#include <thread>
+#include <nvToolsExt.h>
+
 #include "feat/wave-reader.h"
 #include "online2/online-nnet2-feature-pipeline.h"
 #include "cudadecoder/cuda-decoder.h"
 #include "nnet3/decodable-simple-looped.h"
 #include "nnet3/decodable-online-looped.h"
-#include <atomic>
-#include <thread>
-#include <nvToolsExt.h>
+#include "lat/determinize-lattice-pruned.h"
 
 namespace kaldi {
 
@@ -45,6 +47,7 @@ namespace kaldi {
 			po->Register("num-threads",&num_threads_, "The number of workpool threads to use in the ThreadedBatchedCudaDecoder");
 			decoder_opts_.nlanes=max_batch_size_;
 			decoder_opts_.nchannels=max_batch_size_;
+      det_opts_.Register(po);
 
 		}
 		int max_batch_size_;
@@ -53,6 +56,7 @@ namespace kaldi {
 		OnlineNnet2FeaturePipelineConfig  feature_opts_;           //constant readonly
 		nnet3::NnetSimpleLoopedComputationOptions decodable_opts_; //constant readonly
 		CudaDecoderConfig decoder_opts_;                           //constant readonly
+    fst::DeterminizeLatticePhonePrunedOptions det_opts_;                 //constant readonly
 	};
 
 	class DecodableAmNnetLoopedOnlineCuda: public nnet3::DecodableNnetLoopedOnlineBase, public CudaDecodableInterface  {
@@ -135,6 +139,8 @@ namespace kaldi {
 
       //Copies the raw lattice for decoded handle "key" into lat
       void GetRawLattice(const std::string &key, Lattice *lat);
+      //Determinizes raw lattice and returns a compact lattice
+      void GetLattice(const std::string &key, CompactLattice *lat);
 
       inline int NumPendingTasks() {
         return (tasks_back_ - tasks_front_ + max_pending_tasks_+1) % (max_pending_tasks_+1); 
