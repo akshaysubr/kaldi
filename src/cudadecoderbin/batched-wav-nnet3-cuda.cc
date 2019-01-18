@@ -116,7 +116,7 @@ int main(int argc, char *argv[]) {
       po.PrintUsage();
       return 1;
     }
-    
+   
     g_cuda_allocator.SetOptions(g_allocator_options);
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
@@ -198,11 +198,15 @@ int main(int argc, char *argv[]) {
       nvtxRangePushA("Lattice Write");
       while (processed.size()>0) {
         std::string &utt = processed.front();
-        Lattice lat;
         CompactLattice clat;
-
-        CudaDecoder.GetRawLattice(utt,&lat);
-        ConvertLattice(lat, &clat);
+            
+        if(determinize_lattice) {
+          CudaDecoder.GetLattice(utt,&clat);
+        } else {
+          Lattice lat;
+          CudaDecoder.GetRawLattice(utt,&lat);
+          ConvertLattice(lat, &clat);
+        }
 
         GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
 
