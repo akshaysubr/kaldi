@@ -46,7 +46,9 @@ int main(int argc, char *argv[]) {
     bool random = false;
     int32 srand_seed = 0;
     int32 n = 1;
+    bool summary_output=false;
 
+    po.Register("summary-output", &summary_output, "Output concise summary of transcriptions to standard out");
     po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
     po.Register("lm-scale", &lm_scale, "Scaling factor for language model scores.");
     po.Register("n", &n, "Number of distinct paths");
@@ -113,9 +115,23 @@ int main(int argc, char *argv[]) {
           std::string nbest_key = s.str();
           fst::ScaleLattice(fst::LatticeScale(1.0/lm_scale, 1.0/acoustic_scale),
                             &(nbest_lats[k]));
-          CompactLattice nbest_clat;
-          ConvertLattice(nbest_lats[k], &nbest_clat); // write in compact form.
-          compact_nbest_writer.Write(nbest_key, nbest_clat);
+          
+          if(summary_output) {
+            std::vector<int32> alignment;
+            std::vector<int32> words;
+            LatticeWeight weight;
+            GetLinearSymbolSequence(nbest_lats[k], &alignment, &words, &weight);
+            for(int i=0;i<words.size();i++) {
+              s << " " << words[i];
+            }
+            s << "\n";
+            std::cout << s.str();
+          }
+          else {
+            CompactLattice nbest_clat;
+            ConvertLattice(nbest_lats[k], &nbest_clat); // write in compact form.
+            compact_nbest_writer.Write(nbest_key, nbest_clat);
+          }
         }
         n_done++;
         n_paths_out += nbest_lats.size();
