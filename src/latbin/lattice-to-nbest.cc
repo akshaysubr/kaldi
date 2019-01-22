@@ -117,10 +117,12 @@ int main(int argc, char *argv[]) {
                             &(nbest_lats[k]));
           
           if(summary_output) {
+            std::ostringstream s;
             std::vector<int32> alignment;
             std::vector<int32> words;
             LatticeWeight weight;
             GetLinearSymbolSequence(nbest_lats[k], &alignment, &words, &weight);
+            s << key << " " << weight.Value1() << " " << weight.Value2();
             for(int i=0;i<words.size();i++) {
               s << " " << words[i];
             }
