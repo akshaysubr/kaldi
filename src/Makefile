@@ -30,7 +30,7 @@ EXT_SUBDIRS_LIB = $(filter-out %bin, $(EXT_SUBDIRS))
 
 include kaldi.mk
 
-if CUDATKDIR
+ifeq ($(CUDA), true)
 CUDA_SUBDIRS = cudadecoder cudadecoderbin
 endif
 
