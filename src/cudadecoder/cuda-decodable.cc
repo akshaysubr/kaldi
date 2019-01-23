@@ -13,7 +13,10 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#if HAVE_CUDA == 1
+#include "base/kaldi-utils.h"
 #include "cudadecoder/cuda-decodable.h"
+#include <nvToolsExt.h>
 
 namespace kaldi {
 
@@ -76,14 +79,18 @@ namespace kaldi {
 
   //query a specific key to see if compute on it is complete
   bool ThreadedBatchedCudaDecoder::isFinished(const std::string &key) {
+    tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
+    tasks_lookup_mutex_.unlock();
     KALDI_ASSERT(it!=tasks_lookup_.end());
     return it->second.finished;
   }
 
   //remove an audio file from the decoding and clean up resources
   void ThreadedBatchedCudaDecoder::CloseDecodeHandle(const std::string &key) {
+    tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
+    tasks_lookup_mutex_.unlock();
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
     TaskState &state = it->second;
@@ -91,33 +98,70 @@ namespace kaldi {
     //wait for task to finish processing
     while (state.finished!=true);
 
+    tasks_lookup_mutex_.lock();
     tasks_lookup_.erase(it);
+    tasks_lookup_mutex_.unlock();
   }
 
 
   //Adds a decoding task to the decoder
-  bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
-
-    //If no room for another task return false
-    if(NumPendingTasks()==max_pending_tasks_)
-      return false;
+  void ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
 
     //ensure key is unique
+    tasks_lookup_mutex_.lock();
     KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
 
     //Create a new task in lookup map
     TaskState* t=&tasks_lookup_[key];
+    tasks_lookup_mutex_.unlock();
+
     t->Init(wave_data); 
 
-    //Should not have changed so just doing a sanity check
-    KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
+    tasks_add_mutex_.lock();
+    
+    //wait for room in pending task queue
+    while (NumPendingTasks()==max_pending_tasks_) {
+        // qualfied to ensure the right call occurs on windows
+        kaldi::Sleep(.01);
+    }
 
     //insert into pending task queue
     //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
     pending_task_queue_[tasks_back_]=t;
     //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
     tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
-    return true;
+    
+    tasks_add_mutex_.unlock();
+  }
+
+  // Add a decoding task to the decoder with a passed array of samples
+  void ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate)
+  {
+    //ensure key is unique
+    tasks_lookup_mutex_.lock();
+    KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
+
+    //Create a new task in lookup map
+    TaskState* t=&tasks_lookup_[key];
+    tasks_lookup_mutex_.unlock();
+
+    t->Init(wave_data, sample_rate);
+
+    tasks_add_mutex_.lock();
+    
+    //wait for room in pending task queue
+    while (NumPendingTasks()==max_pending_tasks_) {
+        // qualfied to ensure the right call occurs on windows
+        kaldi::Sleep(.01);
+    }
+
+    //insert into pending task queue
+    //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
+    pending_task_queue_[tasks_back_]=t;
+    //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
+    tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
+
+    tasks_add_mutex_.unlock();
   }
 
   void ThreadedBatchedCudaDecoder::GetRawLattice(const std::string &key, Lattice *lat) {
@@ -237,10 +281,11 @@ namespace kaldi {
               features.push_back(feature);
 
               decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
-              data.push_back(new SubVector<BaseFloat>(state.wave_data.Data(), 0));
+              
+              data.push_back(new SubVector<BaseFloat>(*state.wave_samples, 0, state.wave_samples->Dim()));
 
               //Accept waveforms
-              feature->AcceptWaveform(state.wave_data.SampFreq(),*data[i]);
+              feature->AcceptWaveform(state.sample_frequency,*data[i]);
               feature->InputFinished();
             }
           } //end if(tasks_front_!=tasks_back_)
@@ -324,3 +369,4 @@ namespace kaldi {
 
 } // end namespace kaldi.
 
+#endif

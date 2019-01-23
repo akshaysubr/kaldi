@@ -24,6 +24,7 @@
 #include "lat/lattice-functions.h"
 #include "util/kaldi-thread.h"
 #include "nnet3/nnet-utils.h"
+#include <nvToolsExt.h>
 #include <cuda_profiler_api.h>
 #include <cuda.h>
 #include <chrono>
@@ -116,11 +117,11 @@ int main(int argc, char *argv[]) {
       po.PrintUsage();
       return 1;
     }
-   
+    
     g_cuda_allocator.SetOptions(g_allocator_options);
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
-    
+
     ThreadedBatchedCudaDecoder CudaDecoder(batchedDecoderConfig);
 
     std::string nnet3_rxfilename = po.GetArg(1),
@@ -129,7 +130,7 @@ int main(int argc, char *argv[]) {
       clat_wspecifier = po.GetArg(4);
 
     CompactLatticeWriter clat_writer(clat_wspecifier);
-    
+
     fst::Fst<fst::StdArc> *decode_fst= fst::ReadFstKaldiGeneric(fst_rxfilename);
 
     CudaDecoder.Initialize(*decode_fst, nnet3_rxfilename);
@@ -146,7 +147,7 @@ int main(int argc, char *argv[]) {
     double tot_like = 0.0;
     int64 num_frames = 0;
     double total_audio=0;
-    
+
     nvtxRangePush("Global Timer");
     auto start = std::chrono::high_resolution_clock::now(); //starting timer here so we can measure throughput without allocation overheads
 
@@ -154,46 +155,46 @@ int main(int argc, char *argv[]) {
     for (int iter=0;iter<iterations;iter++) {
       SequentialTableReader<WaveHolder> wav_reader(wav_rspecifier);
 
-        for (; !wav_reader.Done(); wav_reader.Next()) {
-          nvtxRangePushA("Utterance Iteration");
+      for (; !wav_reader.Done(); wav_reader.Next()) {
+        nvtxRangePushA("Utterance Iteration");
 
-          std::string utt = wav_reader.Key();
-          printf("Utterance: %s\n", utt.c_str());
+        std::string utt = wav_reader.Key();
+        printf("Utterance: %s\n", utt.c_str());
 
-          const WaveData &wave_data = wav_reader.Value();
-          total_audio+=wave_data.Duration();
+        const WaveData &wave_data = wav_reader.Value();
+        total_audio+=wave_data.Duration();
 
-          while(!CudaDecoder.OpenDecodeHandle(utt,wave_data));
-          processed.push(utt);
-          num_done++;
+        CudaDecoder.OpenDecodeHandle(utt,wave_data);
+        processed.push(utt);
+        num_done++;
 
-         while (processed.size()>=pipeline_length) {
-            std::string &utt = processed.front();
+        while (processed.size()>=pipeline_length) {
+          std::string &utt = processed.front();
 
-            CompactLattice clat;
+          CompactLattice clat;
 
-            if(determinize_lattice) {
-              CudaDecoder.GetLattice(utt,&clat);
-            } else {
-              Lattice lat;
-              CudaDecoder.GetRawLattice(utt,&lat);
-              ConvertLattice(lat, &clat);
-            }
-
-            GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
-
-            if (write_lattice && iter==0 ) {
-              clat_writer.Write(utt, clat);
-            }
-        
-            CudaDecoder.CloseDecodeHandle(utt);
-
-            processed.pop();
+          if(determinize_lattice) {
+            CudaDecoder.GetLattice(utt,&clat);
+          } else {
+            Lattice lat;
+            CudaDecoder.GetRawLattice(utt,&lat);
+            ConvertLattice(lat, &clat);
           }
 
-          nvtxRangePop();
-          if (num_todo!=-1 && num_done>=num_todo) break;
-        } //end utterance loop
+          GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
+
+          if (write_lattice && iter==0 ) {
+            clat_writer.Write(utt, clat);
+          }
+
+          CudaDecoder.CloseDecodeHandle(utt);
+
+          processed.pop();
+        }
+
+        nvtxRangePop();
+        if (num_todo!=-1 && num_done>=num_todo) break;
+      } //end utterance loop
 
       nvtxRangePushA("Lattice Write");
       while (processed.size()>0) {

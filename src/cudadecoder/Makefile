@@ -11,7 +11,11 @@ endif
 
 TESTFILES =
 
-OBJFILES += cuda-decoder.o cuda-decoder-kernels.o cuda-decoder-utils.o cuda-decodable.o
+OBJFILES += cuda-decodable.o
+ifeq ($(CUDA), true)
+  OBJFILES += cuda-decoder.o cuda-decoder-kernels.o cuda-decoder-utils.o
+endif
+
 LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
 

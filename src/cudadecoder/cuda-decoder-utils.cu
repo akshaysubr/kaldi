@@ -149,7 +149,7 @@ namespace kaldi {
 	// even if the vector can grow if necessary, it damages performance
 	// we need to have an appropriate initial capacity (is set using a parameter in CudaDecoderConfig)
 	InfoTokenVector::InfoTokenVector(int32 capacity, cudaStream_t copy_st) : capacity_(capacity), copy_st_(copy_st) {
-		KALDI_LOG << "Allocating InfoTokenVector with capacity = " << capacity_ << " tokens";
+		KALDI_VLOG(2) << "Allocating InfoTokenVector with capacity = " << capacity_ << " tokens";
 		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_data_, capacity_ * sizeof(*h_data_))); 
 		Reset();
 	}
@@ -184,7 +184,7 @@ namespace kaldi {
 		while(capacity_ < min_capacity)
 			capacity_ *= 2;
 
-		KALDI_LOG << "Reallocating InfoTokenVector on host (new capacity = " << capacity_ << " tokens).";
+		KALDI_VLOG(2) << "Reallocating InfoTokenVector on host (new capacity = " << capacity_ << " tokens).";
 
 		cudaStreamSynchronize(copy_st_);
 		InfoToken *h_old_data = h_data_;

@@ -17,9 +17,7 @@
 #ifndef KALDI_CUDA_DECODEABLE_H_
 #define KALDI_CUDA_DECODEABLE_H_
 
-#include <atomic>
-#include <thread>
-#include <nvToolsExt.h>
+#if HAVE_CUDA == 1
 
 #include "feat/wave-reader.h"
 #include "online2/online-nnet2-feature-pipeline.h"
@@ -27,6 +25,8 @@
 #include "nnet3/decodable-simple-looped.h"
 #include "nnet3/decodable-online-looped.h"
 #include "lat/determinize-lattice-pruned.h"
+#include <atomic>
+#include <thread>
 
 namespace kaldi {
 
@@ -39,7 +39,7 @@ namespace kaldi {
 	//configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
 	struct BatchedCudaDecoderConfig {
 		BatchedCudaDecoderConfig() : max_batch_size_(20) {};
-		void Register(ParseOptions *po) {
+		void Register(OptionsItf *po) {
 			feature_opts_.Register(po);
 			decodable_opts_.Register(po);
 			decoder_opts_.Register(po);
@@ -117,8 +117,8 @@ namespace kaldi {
 
       ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config), max_pending_tasks_(2000) {};
 
-      void Register(ParseOptions &po) {
-        po.Register("max-outstanding-queue-length", &max_pending_tasks_, 
+      void Register(OptionsItf *po) {
+        po->Register("max-outstanding-queue-length", &max_pending_tasks_, 
             "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
       }
 
@@ -135,7 +135,9 @@ namespace kaldi {
       void CloseDecodeHandle(const std::string &key);
 
       //Adds a decoding task to the decoder
-      bool OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
+      void OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
+      // When passing in a vector of data, the caller must ensure the data exists until the CloseDecodeHandle is called
+      void OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
 
       //Copies the raw lattice for decoded handle "key" into lat
       void GetRawLattice(const std::string &key, Lattice *lat);
@@ -150,12 +152,27 @@ namespace kaldi {
 
       //State needed for each decode task.  
       struct TaskState {
-        WaveData wave_data;   //Wave data input
+        Vector<BaseFloat> raw_data; // Wave input data when wave_reader passed
+        SubVector<BaseFloat> *wave_samples; // Used as a pointer to either the raw data or the samples passed
+        float sample_frequency;
+
         Lattice lat;          //Lattice output
         std::atomic<bool> finished;  //Tells master thread if task has finished execution
 
-        TaskState() : finished(false) {};
-        void Init(const WaveData &wave_data_in) { wave_data=wave_data_in; finished=false; };
+        TaskState() : wave_samples(NULL),sample_frequency(0), finished(false) {}
+        ~TaskState() { delete wave_samples;}
+        void Init(const WaveData &wave_data_in) {
+          raw_data.Resize(wave_data_in.Data().NumRows()*wave_data_in.Data().NumCols(), kUndefined);
+          memcpy(raw_data.Data(), wave_data_in.Data().Data(), raw_data.Dim()*sizeof(BaseFloat));
+          wave_samples=new SubVector<BaseFloat>(raw_data, 0, raw_data.Dim());
+          sample_frequency=wave_data_in.SampFreq();
+          finished=false;
+        };
+        void Init(const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
+          wave_samples=new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
+          sample_frequency =sample_rate;
+          finished=false;
+        }
       };
 
       //Thread execution function.  This is a single worker thread which processes input.
@@ -172,6 +189,8 @@ namespace kaldi {
       OnlineNnet2FeaturePipelineInfo *feature_info_;
 
       std::mutex tasks_mutex_;                      //protects tasks_front_ and pending_task_queue_ for workers
+      std::mutex tasks_add_mutex_;                  //protect OpenDecodeHandle if multiple threads access 
+      std::mutex tasks_lookup_mutex_;               //protext tasks_lookup map 
       std::atomic<int> tasks_front_, tasks_back_;
       TaskState** pending_task_queue_;
 
@@ -186,5 +205,7 @@ namespace kaldi {
 
 } // end namespace kaldi.
 
+
+#endif
 
 #endif
