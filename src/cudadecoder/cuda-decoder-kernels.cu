@@ -170,7 +170,7 @@ namespace kaldi {
 			return;
 
 		// Updating values
-		*local_idx = atomicAdd(&d_val->count, 1); // TODO save that in token_int_cost ?
+		*local_idx = atomicAdd(&d_val->count, 1); 
 		atomicMinI2(&d_val->min_and_argmin_int_cost, {int_cost, arg});
 	}
 
@@ -253,21 +253,12 @@ namespace kaldi {
 						// If generating lattices, keeping the token as long as its not too bad compared to best path 
 						// to that state
 						// If not generating lattices (one-best), keeping the token if its the best for that state
-						// TODO it is not the final extra cost, but it is a lower bound
-						// FIXME rename extra_cost into min_extra_cost
 						// Contract is always called for non-emitting
 						// using non-emitting offsets
 						arc_start = cst_dev_params.d_arc_ne_offsets[token_state];
 						const int32 arc_end = cst_dev_params.d_arc_ne_offsets[token_state+1];
 						degree = arc_end - arc_start;
 					}
-					// the d_state_best_int_cost lookup table is reset to +INF for all states between frame
-					// for perf. reason we only reset states that are in d_main_q_state
-					// however if state_best_cost >= cutoff, all tokens associated with token_state 
-					// will be pruned, and that state will not be in d_main_q_state
-					// we need to reset the lookup table now
-					// TODO we could test for state_best_int_cost == token_int_cost
-					// TODO remove that once we've removed the map!
 				}
 
 				int32 is_pruned = (arc_start == -1);
@@ -616,7 +607,6 @@ namespace kaldi {
 						// Building the total cost incrementally 
 						// we'll add the acoustic cost and the old token's cost
 						const CostType arc_fixed_cost = cst_dev_params.d_arc_weights[arc_idx];
-						// TODO move q_arc_offset to .x
 						const CostType prev_token_cost  = orderedIntToFloat(cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[main_q_idx].y);
 						CostType total_cost = prev_token_cost + arc_fixed_cost;
 						const int32 prev_state = cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[main_q_idx].x;
@@ -1155,7 +1145,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 							cst_dev_params.d_main_q_acoustic_cost.lane(ilane)[main_q_idx] = cst_dev_params.d_aux_q_acoustic_cost.lane(ilane)[aux_q_idx]; // TODO remove
 						}
 						main_q_end += total_ntokens; 
-						__syncthreads(); // reusing sh_temp_storage_scan TODO double buffering
+						__syncthreads(); 
 					}
 					aux_q_end = 0; // aux_q is now considered empty
 				}

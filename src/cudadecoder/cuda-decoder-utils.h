@@ -132,8 +132,25 @@ namespace kaldi {
     // in GetBestPath
     // It will be moved back to CPU memory using a InfoTokenVector
     struct __align__(8) InfoToken {
-        int32 prev_token;
-        int32 arc_idx;
+	    int32 prev_token;
+	    int32 arc_idx;
+	    __host__ bool IsUniqueTokenForStateAndFrame() {
+		    // This is a trick used to save space and PCI-E bandwidth (cf preprocess_in_place kernel)
+		    // This token is associated with a (next) state s, created during the processing of frame f.
+		    // If we have multiple tokens associated with the state s in the frame f, arc_idx < 0 and -arc_idx is the 
+		    // count of such tokens. We will then have to look at another list to read the actually arc_idx and prev_token values
+		    // If the current token is the only one, prev_token and arc_idx are valid and can be used directly
+		    return (arc_idx >= 0);
+	    }
+
+	    // Called if this token is linked to others tokens in the same frame (cf comments for IsUniqueTokenForStateAndFrame)
+	    // return the {offset,size} pair necessary to list those tokens in the extra_prev_tokens list
+	    // They are stored at offset "offset", and we have "size" of those 
+	    __host__ std::pair<int32,int32> GetNextStateTokensList() {
+		    KALDI_ASSERT(!IsUniqueTokenForStateAndFrame());
+
+		    return {prev_token, -arc_idx};
+	    }
     };
 
     //
