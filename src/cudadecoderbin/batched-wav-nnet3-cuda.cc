@@ -102,7 +102,7 @@ int main(int argc, char *argv[]) {
     po.Register("file-limit", &num_todo, 
         "Limits the number of files that are processed by this driver.  After N files are processed the remaing files are ignored.  Useful for profiling.");
     po.Register("iterations", &iterations, "Number of times to decode the corpus.  Output will be written only once.");
-    
+
     //Multi-threaded CPU and batched GPU decoder
     BatchedCudaDecoderConfig batchedDecoderConfig;
 
@@ -115,11 +115,11 @@ int main(int argc, char *argv[]) {
       po.PrintUsage();
       return 1;
     }
-    
+
     g_cuda_allocator.SetOptions(g_allocator_options);
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
-    
+
     ThreadedBatchedCudaDecoder CudaDecoder(batchedDecoderConfig);
 
     std::string nnet3_rxfilename = po.GetArg(1),
@@ -128,7 +128,7 @@ int main(int argc, char *argv[]) {
       clat_wspecifier = po.GetArg(4);
 
     CompactLatticeWriter clat_writer(clat_wspecifier);
-    
+
     fst::Fst<fst::StdArc> *decode_fst= fst::ReadFstKaldiGeneric(fst_rxfilename);
 
     CudaDecoder.Initialize(*decode_fst, nnet3_rxfilename);
@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
     double tot_like = 0.0;
     int64 num_frames = 0;
     double total_audio=0;
-    
+
     nvtxRangePush("Global Timer");
     auto start = std::chrono::high_resolution_clock::now(); //starting timer here so we can measure throughput without allocation overheads
 
@@ -153,42 +153,41 @@ int main(int argc, char *argv[]) {
     for (int iter=0;iter<iterations;iter++) {
       SequentialTableReader<WaveHolder> wav_reader(wav_rspecifier);
 
-        for (; !wav_reader.Done(); wav_reader.Next()) {
-          nvtxRangePushA("Utterance Iteration");
+      for (; !wav_reader.Done(); wav_reader.Next()) {
+        nvtxRangePushA("Utterance Iteration");
 
-          std::string utt = wav_reader.Key();
-          printf("Utterance: %s\n", utt.c_str());
+        std::string utt = wav_reader.Key();
+        printf("Utterance: %s\n", utt.c_str());
 
-          const WaveData &wave_data = wav_reader.Value();
-          total_audio+=wave_data.Duration();
+        const WaveData &wave_data = wav_reader.Value();
+        total_audio+=wave_data.Duration();
 
-          // with this loop, it might make more sense to have the OpenDecodeHandle just block until space exists rather than loop here
-          while(!CudaDecoder.OpenDecodeHandle(utt,wave_data));
-          processed.push(utt);
-          num_done++;
+        CudaDecoder.OpenDecodeHandle(utt,wave_data);
+        processed.push(utt);
+        num_done++;
 
-         while (processed.size()>=pipeline_length) {
-            std::string &utt = processed.front();
-            Lattice lat;
-            CompactLattice clat;
-        
-            CudaDecoder.GetBestPath(utt,&lat);
-            ConvertLattice(lat, &clat);
+        while (processed.size()>=pipeline_length) {
+          std::string &utt = processed.front();
+          Lattice lat;
+          CompactLattice clat;
 
-            GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
+          CudaDecoder.GetBestPath(utt,&lat);
+          ConvertLattice(lat, &clat);
 
-            if (write_lattice && iter==0 ) {
-              clat_writer.Write(utt, clat);
-            }
-        
-            CudaDecoder.CloseDecodeHandle(utt);
+          GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
 
-            processed.pop();
+          if (write_lattice && iter==0 ) {
+            clat_writer.Write(utt, clat);
           }
 
-          nvtxRangePop();
-          if (num_todo!=-1 && num_done>=num_todo) break;
-        } //end utterance loop
+          CudaDecoder.CloseDecodeHandle(utt);
+
+          processed.pop();
+        }
+
+        nvtxRangePop();
+        if (num_todo!=-1 && num_done>=num_todo) break;
+      } //end utterance loop
 
       nvtxRangePushA("Lattice Write");
       while (processed.size()>0) {

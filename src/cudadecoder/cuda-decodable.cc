@@ -101,11 +101,8 @@ namespace kaldi {
 
 
   //Adds a decoding task to the decoder
-  bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
+  void ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const WaveData &wave_data) {
 
-    //If no room for another task return false
-    if(NumPendingTasks()==max_pending_tasks_) 
-      return false;
     //ensure key is unique
     tasks_lookup_mutex_.lock();
     KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
@@ -113,10 +110,12 @@ namespace kaldi {
     //Create a new task in lookup map
     TaskState* t=&tasks_lookup_[key];
     tasks_lookup_mutex_.unlock();
+
     t->Init(wave_data); 
 
     tasks_add_mutex_.lock();
-    std::unique_lock<std::mutex> lock(tasks_add_mutex_);
+    
+    //wait for room in pending task queue
     while (NumPendingTasks()<max_pending_tasks_) {
         // qualfied to ensure the right call occurs on windows
         kaldi::Sleep(.01);
@@ -127,18 +126,13 @@ namespace kaldi {
     pending_task_queue_[tasks_back_]=t;
     //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
     tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
-    return true;
+    
+    tasks_add_mutex_.unlock();
   }
 
   // Add a decoding task to the decoder with a passed array of samples
-  bool ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate)
+  void ThreadedBatchedCudaDecoder::OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate)
   {
-
-    std::unique_lock<std::mutex> lock(tasks_add_mutex_);
-    //If no room for another task return false
-    if(NumPendingTasks()==max_pending_tasks_)
-      return false;
-
     //ensure key is unique
     tasks_lookup_mutex_.lock();
     KALDI_ASSERT(tasks_lookup_.end()==tasks_lookup_.find(key));
@@ -146,16 +140,24 @@ namespace kaldi {
     //Create a new task in lookup map
     TaskState* t=&tasks_lookup_[key];
     tasks_lookup_mutex_.unlock();
+
     t->Init(wave_data, sample_rate);
-    //Should not have changed so just doing a sanity check
-    KALDI_ASSERT(NumPendingTasks()<max_pending_tasks_);
+
+    tasks_add_mutex_.lock();
+    
+    //wait for room in pending task queue
+    while (NumPendingTasks()<max_pending_tasks_) {
+        // qualfied to ensure the right call occurs on windows
+        kaldi::Sleep(.01);
+    }
 
     //insert into pending task queue
     //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
     pending_task_queue_[tasks_back_]=t;
     //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
     tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
-    return true;
+
+    tasks_add_mutex_.unlock();
   }
 
   void ThreadedBatchedCudaDecoder::GetBestPath(const std::string &key, Lattice *lat) {
