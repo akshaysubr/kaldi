@@ -652,7 +652,7 @@ namespace kaldi {
 							IntegerCostType local_min_int_cost = int_cost_and_index.x;
 							// if we found a lower min_cost, update the global value
 							if(local_min_int_cost < global_min_int_cost) {
-								atomicMin(&lane_counters->min_int_cost, global_min_int_cost);
+								atomicMin(&lane_counters->min_int_cost, local_min_int_cost);
 								const CostType beam = orderedIntToFloat(lane_counters->int_beam);
 								IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(local_min_int_cost) + beam);
 								atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
@@ -1226,12 +1226,109 @@ finalize_kernel:
 		}	
 	}
 
-template __global__ void expand_arcs_kernel<true>(DeviceParams cst_dev_params,KernelParams params);
-template __global__ void expand_arcs_kernel<false>(DeviceParams cst_dev_params,KernelParams params);
-template __global__ void post_expand_kernel<true>(DeviceParams cst_dev_params,KernelParams params);
-template __global__ void post_expand_kernel<false>(DeviceParams cst_dev_params,KernelParams params);
-template __global__ void concatenate_lanes_data<InfoToken>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<InfoToken> src,InfoToken *concat);
-template __global__ void concatenate_lanes_data<CostType>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<CostType> src,CostType *concat);
-template __global__ void concatenate_lanes_data<float2>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<float2> src,float2 *concat);
-template __global__ void concatenate_lanes_data<int32>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<int32> src,int32 *concat);
+	__global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,KernelParams params) {
+		const int nlanes = params.nlanes_used;
+		typedef cub::BlockHistogram<BinId,KALDI_CUDA_DECODER_1D_BLOCK,1,KALDI_CUDA_DECODER_NBINS+1> BlockHistogram;
+		__shared__ typename BlockHistogram::TempStorage temp_storage;
+		__shared__ unsigned int smem_histogram[KALDI_CUDA_DECODER_NBINS+1];
+
+		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
+			const LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
+			const int32 q_end = lane_counters->post_expand_aux_q_end;
+			if(q_end <= cst_dev_params.max_active)
+				continue; // nothing to do
+
+			// Reset local histogram for this lane
+			BlockHistogram(temp_storage).InitHistogram(smem_histogram);
+			CostType beam = orderedIntToFloat(lane_counters->int_beam);
+			CostType min_cost = orderedIntToFloat(lane_counters->min_int_cost);
+			CostType bin_width = beam / KALDI_CUDA_DECODER_NBINS;
+
+			// We have a sync inside the loop, keeping all threads alive
+			KALDI_CUDA_DECODER_1D_BLOCK_OFFSET_KERNEL_LOOP(block_offset, thread_idx, q_end) {
+				const int32 q_idx = block_offset + thread_idx;
+				// The last bin is for everything we don't want to count:
+				// cost already above the beam, or non-valid tokens
+				BinId bin_id[1];
+				bin_id[0] = KALDI_CUDA_DECODER_NBINS;
+				if(q_idx < q_end) {
+					IntegerCostType int_cost = cst_dev_params.d_aux_q_state_and_cost.lane(ilane)[q_idx].y;
+					CostType cost = orderedIntToFloat(int_cost);
+					CostType extra = cost - min_cost;
+					// We only count valid tokens
+					if(extra < beam) {
+						bin_id[0] = (BinId)__fdiv_rd(extra, bin_width);
+					}
+				}
+				BlockHistogram(temp_storage).Composite(bin_id, smem_histogram); // sync
+			}
+		
+			// Not using the macros 1D_LOOP because that loop is only within a CTA	
+			for(int32 bin_id_w=threadIdx.x; 
+				bin_id_w < KALDI_CUDA_DECODER_NBINS;
+				bin_id_w += KALDI_CUDA_DECODER_1D_BLOCK) {
+				// Writing the local histo to global
+				// We don't care about the last bin (cf above)
+				int32 s_count = (int32)smem_histogram[bin_id_w];
+				atomicAdd(&cst_dev_params.d_histograms.lane(ilane)[bin_id_w], s_count);
+			}
+			// Making sure we're done reading from smem
+			__syncthreads(); 
+		}
+	}
+
+	// use only one CTA per lane
+	__global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,KernelParams params) {
+		typedef cub::BlockScan<int, KALDI_CUDA_DECODER_1D_BLOCK> BlockScan;
+		__shared__ typename BlockScan::TempStorage temp_storage;
+
+		const int nlanes = params.nlanes_used;
+		const int max_active = cst_dev_params.max_active;
+		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
+			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
+			const int32 q_end = lane_counters->post_expand_aux_q_end;
+			if(q_end <= max_active)
+				continue; // nothing to do
+			CostType beam = orderedIntToFloat(lane_counters->int_beam);
+			CostType min_cost = orderedIntToFloat(lane_counters->min_int_cost);
+			int32 it_sum = 0;
+			// Not using the macros 1D_LOOP because that loop is only within a CTA	
+			for(int32 offset=0;
+				offset < KALDI_CUDA_DECODER_NBINS;
+				offset += KALDI_CUDA_DECODER_1D_BLOCK) {
+				int bin_id = offset + threadIdx.x;
+				int val = 0;
+				if(bin_id < KALDI_CUDA_DECODER_NBINS) {
+					val = cst_dev_params.d_histograms.lane(ilane)[bin_id];
+					cst_dev_params.d_histograms.lane(ilane)[bin_id] = 0; // reset for next time
+				}
+				int prefix_sum;
+				BlockScan(temp_storage).ExclusiveSum(val, prefix_sum);
+				prefix_sum += it_sum; // adding sum from previous for iterations
+				//printf("histo[%i,%i] = %i \n", ilane, bin_id, prefix_sum);
+				if(threadIdx.x == (KALDI_CUDA_DECODER_1D_BLOCK-1))
+					it_sum += (prefix_sum+val);
+
+				if(val != 0 && prefix_sum < max_active && (prefix_sum+val) >= max_active) {
+					// We found our new beam	
+					CostType new_beam = (beam/KALDI_CUDA_DECODER_NBINS)*(bin_id+1);
+					printf("achieved=%i, max_active=%i, new_beam=%f < %f \n",(prefix_sum+val), max_active, new_beam, beam);
+					lane_counters->int_beam = floatToOrderedInt(new_beam);
+					lane_counters->int_cutoff = floatToOrderedInt(min_cost + new_beam);
+					// keep looping, we need to reset to 0 the histogram
+				}
+			}
+
+			// Saving our new beam for this lane
+		}	
+	}
+
+	template __global__ void expand_arcs_kernel<true>(DeviceParams cst_dev_params,KernelParams params);
+	template __global__ void expand_arcs_kernel<false>(DeviceParams cst_dev_params,KernelParams params);
+	template __global__ void post_expand_kernel<true>(DeviceParams cst_dev_params,KernelParams params);
+	template __global__ void post_expand_kernel<false>(DeviceParams cst_dev_params,KernelParams params);
+	template __global__ void concatenate_lanes_data<InfoToken>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<InfoToken> src,InfoToken *concat);
+	template __global__ void concatenate_lanes_data<CostType>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<CostType> src,CostType *concat);
+	template __global__ void concatenate_lanes_data<float2>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<float2> src,float2 *concat);
+	template __global__ void concatenate_lanes_data<int32>(DeviceParams cst_dev_params,KernelParams params,LaneMatrixInterface<int32> src,int32 *concat);
 } // end namespace kaldi

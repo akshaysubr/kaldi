@@ -38,6 +38,7 @@ namespace kaldi {
 	generate_lattices_(config.generate_lattices),
 	max_tokens_(config.max_tokens), 
 	max_tokens_per_frame_(config.max_tokens_per_frame),
+	max_active_(config.max_active), 
 	nlanes_(nlanes),
 	nchannels_(nchannels) {
 		KALDI_ASSERT(nlanes_ < KALDI_CUDA_DECODER_MAX_N_LANES);
@@ -70,6 +71,8 @@ namespace kaldi {
 		d_aux_q_state_and_cost_.Resize(nlanes, max_tokens_per_frame_);
 		d_aux_q_info_.Resize(nlanes, max_tokens_per_frame_);
 		d_main_q_degrees_prefix_sum_.Resize(nchannels_, max_tokens_per_frame_);
+		d_histograms_.Resize(nlanes_, KALDI_CUDA_DECODER_NBINS);
+		//cudaMemsetAsync(d_histograms_.lane(0), 0, *d_histograms_.lane(0)*KALDI_CUDA_DECODER_NBINS*nlanes_, compute_st_);
 
 		// TODO use aux_q_state_and_cost for following 2		
 		// TODO maybe aux_q_info because that one can be used temporarly 
@@ -161,6 +164,7 @@ namespace kaldi {
 		h_device_params_->d_main_q_extra_prev_tokens = d_main_q_extra_prev_tokens_.GetInterface();
 		h_device_params_->d_main_q_arc_offsets = d_main_q_arc_offsets_.GetInterface();
 		h_device_params_->d_hashmap_values = d_hashmap_values_.GetInterface();
+		h_device_params_->d_histograms = d_histograms_.GetInterface();
 		h_device_params_->d_arc_e_offsets = fst_.d_e_offsets_;
 		h_device_params_->d_arc_ne_offsets = fst_.d_ne_offsets_;
 		h_device_params_->d_arc_pdf_ilabels = fst_.d_arc_pdf_ilabels_;
@@ -178,6 +182,7 @@ namespace kaldi {
 		KALDI_ASSERT(h_device_params_->init_state != fst::kNoStateId);
 		h_device_params_->init_cost = StdWeight::One().Value();
 		h_device_params_->hashmap_capacity = hashmap_capacity_;
+		h_device_params_->max_active = max_active_;
 
 		// Reusing aux_q memory to list final states in GetLattice
 		// Those cannot be used at the same time
@@ -503,6 +508,28 @@ namespace kaldi {
 			}
 		}	
 
+	void CudaDecoder::ApplyMaxActiveAndReduceBeam() {
+		auto func_q_end = [] (const LaneCounters &c) { return c.post_expand_aux_q_end; };
+		int32 max_q_end = GetMaxForAllLanes(func_q_end);
+		const int32 nlanes_used = h_kernel_params_->nlanes_used;
+		
+		if(max_q_end <= max_active_) {
+			// The queues are already smaller than max_active_
+			// nothing to do
+			return;
+		}
+		
+		compute_costs_histogram_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_q_end, nlanes_used),
+			KALDI_CUDA_DECODER_1D_BLOCK,
+			0,
+			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+
+		update_beam_using_histogram_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used),
+			KALDI_CUDA_DECODER_1D_BLOCK,
+			0,
+			compute_st_>>>(*h_device_params_,*h_kernel_params_); 
+	}
+
 	void CudaDecoder::AdvanceDecoding(const std::vector<ChannelId> &channels,
 			std::vector<CudaDecodableInterface*> &decodables,
 			int32 max_num_frames) {
@@ -641,8 +668,13 @@ namespace kaldi {
 				CopyLaneCountersToHostAsync(compute_st_);
 				cudaStreamSynchronize(compute_st_);
 				{
+					// If one of the aux_q contains more than max_active_ tokens,
+					// we'll reduce the beam to only keep max_active_ tokens
+					ApplyMaxActiveAndReduceBeam();
+
 					auto func_aux_q_end = [] (const LaneCounters &c) { return c.post_expand_aux_q_end; };
 					int32 max_aux_q_end = GetMaxForAllLanes(func_aux_q_end);
+
 					// aux_q_end == 0, not likely, but possible
 					if(max_aux_q_end == 0) 
 						break; 

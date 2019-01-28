@@ -70,6 +70,8 @@ namespace kaldi {
 
 		LaneMatrixInterface<float2> d_main_q_extra_cost; 
 
+		LaneMatrixInterface<int32> d_histograms; 
+
 		ChannelMatrixInterface<int32> d_main_q_degrees_prefix_sum; 
 		LaneMatrixInterface<int2> d_main_q_block_sums_prefix_sum; 
 		LaneMatrixInterface<int32> d_main_q_representative_id; 
@@ -92,7 +94,8 @@ namespace kaldi {
 		int32 init_channel_id;
 		StateId init_state; 
 		CostType init_cost;
-		int hashmap_capacity;
+		int32 hashmap_capacity;
+		int32 max_active;	
 	};
 
 	// TODO add STATIC_ASSERT for this struct size < 4KB
@@ -117,6 +120,6 @@ namespace kaldi {
 		return reinterpret_cast<float&>(intVal);
 	} 
 
-	
+	typedef unsigned char BinId;	
 } // namespace kaldi
 #endif
