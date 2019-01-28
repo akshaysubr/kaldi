@@ -263,7 +263,7 @@ namespace kaldi {
 		generate_lattices(true),
 		max_tokens(2000000),
 		max_tokens_per_frame(1000000),
-		max_active(100) {}
+		max_active(INT_MAX) {}
 
 		void Register(OptionsItf *opts) {
 			opts->Register("beam", &default_beam, "Decoding beam.  Larger->slower, more accurate. The beam may be"
@@ -273,7 +273,7 @@ namespace kaldi {
 			opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Number of tokens allocated per frame. If actual usaged exceeds this the results are undefined.");
 			opts->Register("generate-lattices", &generate_lattices, "1=Generate lattices using the lattice-beam, 0=only generate the 1-best path");
 			opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam");
-			opts->Register("max-active", &lattice_beam, "Max number of tokens active for each frame");
+			opts->Register("max-active", &max_active, "Max number of tokens active for each frame");
 			}
 		void Check() const {
 			KALDI_ASSERT(default_beam > 0.0 
@@ -523,7 +523,7 @@ namespace kaldi {
 
 			// If we have more than max_active_ tokens in the queue, we will compute a new beam,
 			// that will only keep max_active_ tokens  
-			void ApplyMaxActiveAndReduceBeam();
+			void ApplyMaxActiveAndReduceBeam(bool use_aux_q);
 			//
 			// This kernel contains both ResetStateCostLookup and FinalizePreprocess in place.
 			//

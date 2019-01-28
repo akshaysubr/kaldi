@@ -33,6 +33,12 @@ namespace kaldi {
 	};
 
 	__global__ void init_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params);
+	__global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,KernelParams params);
+	__global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params, KernelParams params);
+	__global__ void clear_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params);
+	__global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params, KernelParams params, bool use_aux_q);
+	__global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,KernelParams params, bool use_aux_q);
+
 
 	template<typename T> 
 		struct LaneMatrixInterface  {
@@ -109,16 +115,8 @@ namespace kaldi {
 		int32 nlanes_used;
 	};
 
-	int32 floatToOrderedIntHost(float floatVal) {
-		int32 intVal = reinterpret_cast<int&>( floatVal );
-		return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
-	}
-
-
-	float orderedIntToFloatHost(int32 intVal) {
-		intVal =  (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
-		return reinterpret_cast<float&>(intVal);
-	} 
+	int32 floatToOrderedIntHost(float floatVal);
+	float orderedIntToFloatHost(int32 intVal);
 
 	typedef unsigned char BinId;	
 } // namespace kaldi

@@ -48,6 +48,17 @@ namespace kaldi {
 		return __int_as_float( (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF );
 	} 
 
+	int32 floatToOrderedIntHost(float floatVal) {
+		int32 intVal = reinterpret_cast<int&>( floatVal );
+		return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
+	}
+
+
+	float orderedIntToFloatHost(int32 intVal) {
+		intVal =  (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
+		return reinterpret_cast<float&>(intVal);
+	} 
+
 	struct MinPlus {
 		__device__ int2 operator()(const int2 &a, const int2 &b) const {
 			int2 c;
@@ -1226,15 +1237,16 @@ finalize_kernel:
 		}	
 	}
 
-	__global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,KernelParams params) {
+	__global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params, KernelParams params, bool use_aux_q) {
 		const int nlanes = params.nlanes_used;
 		typedef cub::BlockHistogram<BinId,KALDI_CUDA_DECODER_1D_BLOCK,1,KALDI_CUDA_DECODER_NBINS+1> BlockHistogram;
 		__shared__ typename BlockHistogram::TempStorage temp_storage;
 		__shared__ unsigned int smem_histogram[KALDI_CUDA_DECODER_NBINS+1];
 
 		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
+			const int32 ichannel = params.channel_to_compute[ilane];
 			const LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
-			const int32 q_end = lane_counters->post_expand_aux_q_end;
+			const int32 q_end = use_aux_q ? lane_counters->post_expand_aux_q_end : lane_counters->main_q_narcs_and_end.y;
 			if(q_end <= cst_dev_params.max_active)
 				continue; // nothing to do
 
@@ -1252,7 +1264,9 @@ finalize_kernel:
 				BinId bin_id[1];
 				bin_id[0] = KALDI_CUDA_DECODER_NBINS;
 				if(q_idx < q_end) {
-					IntegerCostType int_cost = cst_dev_params.d_aux_q_state_and_cost.lane(ilane)[q_idx].y;
+					IntegerCostType int_cost = use_aux_q
+							? cst_dev_params.d_aux_q_state_and_cost.lane(ilane)[q_idx].y
+							: cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[q_idx].y;
 					CostType cost = orderedIntToFloat(int_cost);
 					CostType extra = cost - min_cost;
 					// We only count valid tokens
@@ -1278,7 +1292,7 @@ finalize_kernel:
 	}
 
 	// use only one CTA per lane
-	__global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,KernelParams params) {
+	__global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,KernelParams params, bool use_aux_q) {
 		typedef cub::BlockScan<int, KALDI_CUDA_DECODER_1D_BLOCK> BlockScan;
 		__shared__ typename BlockScan::TempStorage temp_storage;
 
@@ -1286,7 +1300,7 @@ finalize_kernel:
 		const int max_active = cst_dev_params.max_active;
 		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
 			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
-			const int32 q_end = lane_counters->post_expand_aux_q_end;
+			const int32 q_end = use_aux_q ? lane_counters->post_expand_aux_q_end : lane_counters->main_q_narcs_and_end.y;
 			if(q_end <= max_active)
 				continue; // nothing to do
 			CostType beam = orderedIntToFloat(lane_counters->int_beam);
@@ -1305,14 +1319,15 @@ finalize_kernel:
 				int prefix_sum;
 				BlockScan(temp_storage).ExclusiveSum(val, prefix_sum);
 				prefix_sum += it_sum; // adding sum from previous for iterations
-				//printf("histo[%i,%i] = %i \n", ilane, bin_id, prefix_sum);
+				//printf("main_histo[%i,%i] = %i (q_end=%i) \n", ilane, bin_id, prefix_sum, q_end);
 				if(threadIdx.x == (KALDI_CUDA_DECODER_1D_BLOCK-1))
 					it_sum += (prefix_sum+val);
 
 				if(val != 0 && prefix_sum < max_active && (prefix_sum+val) >= max_active) {
 					// We found our new beam	
 					CostType new_beam = (beam/KALDI_CUDA_DECODER_NBINS)*(bin_id+1);
-					printf("achieved=%i, max_active=%i, new_beam=%f < %f \n",(prefix_sum+val), max_active, new_beam, beam);
+					//if(use_aux_q) printf("aux:\t");
+					//printf("ilane=%i, achieved=%i, max_active=%i, new_beam=%f < %f \n",ilane,(prefix_sum+val), max_active, new_beam, beam);
 					lane_counters->int_beam = floatToOrderedInt(new_beam);
 					lane_counters->int_cutoff = floatToOrderedInt(min_cost + new_beam);
 					// keep looping, we need to reset to 0 the histogram

@@ -14,7 +14,6 @@
 // limitations under the License.
 
 #include "cudadecoder/cuda-decoder.h"
-#include "cudadecoder/cuda-decoder-kernels.cu"
 #include <algorithm>
 #include <nvToolsExt.h>
 #include <cuda_runtime_api.h>
@@ -72,7 +71,7 @@ namespace kaldi {
 		d_aux_q_info_.Resize(nlanes, max_tokens_per_frame_);
 		d_main_q_degrees_prefix_sum_.Resize(nchannels_, max_tokens_per_frame_);
 		d_histograms_.Resize(nlanes_, KALDI_CUDA_DECODER_NBINS);
-		//cudaMemsetAsync(d_histograms_.lane(0), 0, *d_histograms_.lane(0)*KALDI_CUDA_DECODER_NBINS*nlanes_, compute_st_);
+		cudaMemsetAsync(d_histograms_.lane(0), 0, sizeof(int32)*KALDI_CUDA_DECODER_NBINS*nlanes_, compute_st_);
 
 		// TODO use aux_q_state_and_cost for following 2		
 		// TODO maybe aux_q_info because that one can be used temporarly 
@@ -508,12 +507,21 @@ namespace kaldi {
 			}
 		}	
 
-	void CudaDecoder::ApplyMaxActiveAndReduceBeam() {
-		auto func_q_end = [] (const LaneCounters &c) { return c.post_expand_aux_q_end; };
-		int32 max_q_end = GetMaxForAllLanes(func_q_end);
+	void CudaDecoder::ApplyMaxActiveAndReduceBeam(bool use_aux_q) {
+		auto func_aux_q_end = [] (const LaneCounters &c) { return c.post_expand_aux_q_end; };
+		auto func_main_q_end = [] (const LaneCounters &c) { return c.main_q_narcs_and_end.y; };
+		int32 max_q_end = use_aux_q
+				? GetMaxForAllLanes(func_aux_q_end)
+				: GetMaxForAllLanes(func_main_q_end);
 		const int32 nlanes_used = h_kernel_params_->nlanes_used;
 		
-		if(max_q_end <= max_active_) {
+		// Adding a tolerance on max_active_
+		// This is because we will usually not be able to limit the number of tokens
+		// to exactly max_active
+		// We will set it as close as possible to max_active, and we don't want to
+		// keep calling the histograms kernels for a few tokens above the limit
+		int32 thresh = (int32)(1.2*max_active_); // TODO constant
+		if(max_q_end <= thresh) { 
 			// The queues are already smaller than max_active_
 			// nothing to do
 			return;
@@ -522,12 +530,12 @@ namespace kaldi {
 		compute_costs_histogram_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_q_end, nlanes_used),
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
-			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+			compute_st_>>>(*h_device_params_,*h_kernel_params_, use_aux_q);
 
 		update_beam_using_histogram_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used),
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
-			compute_st_>>>(*h_device_params_,*h_kernel_params_); 
+			compute_st_>>>(*h_device_params_,*h_kernel_params_, use_aux_q); 
 	}
 
 	void CudaDecoder::AdvanceDecoding(const std::vector<ChannelId> &channels,
@@ -670,7 +678,7 @@ namespace kaldi {
 				{
 					// If one of the aux_q contains more than max_active_ tokens,
 					// we'll reduce the beam to only keep max_active_ tokens
-					ApplyMaxActiveAndReduceBeam();
+					ApplyMaxActiveAndReduceBeam(true);
 
 					auto func_aux_q_end = [] (const LaneCounters &c) { return c.post_expand_aux_q_end; };
 					int32 max_aux_q_end = GetMaxForAllLanes(func_aux_q_end);
@@ -763,6 +771,8 @@ namespace kaldi {
 				auto func_main_q_end = [] (const LaneCounters &c) { return c.main_q_narcs_and_end.y; };
 				int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
 
+				ApplyMaxActiveAndReduceBeam(false);
+				
 				fill_best_int_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
