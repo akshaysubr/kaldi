@@ -72,6 +72,8 @@
 // 4kb for compute capability >= 2.0
 #define KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE (4096)
 
+#define KALDI_CUDA_DECODER_NBINS 255
+
 namespace kaldi {
 			typedef float CostType;
 			typedef int32 IntegerCostType;
@@ -254,12 +256,14 @@ namespace kaldi {
 		int32 max_tokens_per_frame;
 		int32 nlanes;
 		int32 nchannels;
+		int32 max_active;
 		
 		CudaDecoderConfig(): default_beam(15.0),
 		lattice_beam(10.0),
 		generate_lattices(true),
 		max_tokens(2000000),
-		max_tokens_per_frame(1000000) {}
+		max_tokens_per_frame(1000000),
+		max_active(INT_MAX) {}
 
 		void Register(OptionsItf *opts) {
 			opts->Register("beam", &default_beam, "Decoding beam.  Larger->slower, more accurate. The beam may be"
@@ -269,9 +273,14 @@ namespace kaldi {
 			opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Number of tokens allocated per frame. If actual usaged exceeds this the results are undefined.");
 			opts->Register("generate-lattices", &generate_lattices, "1=Generate lattices using the lattice-beam, 0=only generate the 1-best path");
 			opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam");
+			opts->Register("max-active", &max_active, "Max number of tokens active for each frame");
 			}
 		void Check() const {
-			KALDI_ASSERT(default_beam > 0.0 && max_tokens > 0 && max_tokens_per_frame > 0 && lattice_beam >= 0);
+			KALDI_ASSERT(default_beam > 0.0 
+				&& max_tokens > 0 
+				&& max_tokens_per_frame > 0 
+				&& lattice_beam >= 0
+				&& max_active > 1);
 		}
 	};
 
@@ -512,6 +521,9 @@ namespace kaldi {
 			// InitStateCost initializes all costs to +INF in d_state_best_cost at the beginning of the computation
 			void InitStateBestCostLookup();
 
+			// If we have more than max_active_ tokens in the queue, we will compute a new beam,
+			// that will only keep max_active_ tokens  
+			void ApplyMaxActiveAndReduceBeam(bool use_aux_q);
 			//
 			// This kernel contains both ResetStateCostLookup and FinalizePreprocess in place.
 			//
@@ -638,6 +650,8 @@ namespace kaldi {
 			DeviceLaneMatrix<CostType> d_aux_q_acoustic_cost_;
 			DeviceLaneMatrix<InfoToken> d_aux_q_info_; 
 
+			DeviceLaneMatrix<int32> d_histograms_; 
+
 			// The load balancing of the Expand kernel relies on the prefix sum of the degrees 
 			// of the state in the queue (more info in the ExpandKernel implementation) 
 			// That array contains that prefix sum. It is set by the "Preprocess*" kernels
@@ -718,6 +732,7 @@ namespace kaldi {
 			bool generate_lattices_;
 
 			int32 max_tokens_;
+			int32 max_active_;
 			int32 max_tokens_per_frame_;
 			int32 hashmap_capacity_;
 			

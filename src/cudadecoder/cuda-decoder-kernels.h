@@ -33,6 +33,12 @@ namespace kaldi {
 	};
 
 	__global__ void init_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params);
+	__global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,KernelParams params);
+	__global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params, KernelParams params);
+	__global__ void clear_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params);
+	__global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params, KernelParams params, bool use_aux_q);
+	__global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,KernelParams params, bool use_aux_q);
+
 
 	template<typename T> 
 		struct LaneMatrixInterface  {
@@ -70,6 +76,8 @@ namespace kaldi {
 
 		LaneMatrixInterface<float2> d_main_q_extra_cost; 
 
+		LaneMatrixInterface<int32> d_histograms; 
+
 		ChannelMatrixInterface<int32> d_main_q_degrees_prefix_sum; 
 		LaneMatrixInterface<int2> d_main_q_block_sums_prefix_sum; 
 		LaneMatrixInterface<int32> d_main_q_representative_id; 
@@ -92,7 +100,8 @@ namespace kaldi {
 		int32 init_channel_id;
 		StateId init_state; 
 		CostType init_cost;
-		int hashmap_capacity;
+		int32 hashmap_capacity;
+		int32 max_active;	
 	};
 
 	// TODO add STATIC_ASSERT for this struct size < 4KB
@@ -106,17 +115,9 @@ namespace kaldi {
 		int32 nlanes_used;
 	};
 
-	int32 floatToOrderedIntHost(float floatVal) {
-		int32 intVal = reinterpret_cast<int&>( floatVal );
-		return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
-	}
+	int32 floatToOrderedIntHost(float floatVal);
+	float orderedIntToFloatHost(int32 intVal);
 
-
-	float orderedIntToFloatHost(int32 intVal) {
-		intVal =  (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
-		return reinterpret_cast<float&>(intVal);
-	} 
-
-	
+	typedef unsigned char BinId;	
 } // namespace kaldi
 #endif
