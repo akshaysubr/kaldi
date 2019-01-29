@@ -1224,8 +1224,9 @@ finalize_kernel:
 			const int32 global_offset = channel_counters->prev_main_q_global_offset;
 			const int2 min_int_cost_and_arg_with_final = channel_counters->min_int_cost_and_arg_with_final;
 			const int2 min_int_cost_and_arg_without_final = channel_counters->min_int_cost_and_arg_without_final;
+			bool has_reached_final = (min_int_cost_and_arg_with_final.x != INT_MAX);
 			// Use final if we want to use final and if we found a final state in the token list
-			bool compute_final = use_final_probs && (min_int_cost_and_arg_with_final.x != INT_MAX);
+			bool compute_final = use_final_probs && has_reached_final;
 			IntegerCostType min_cost_to_use = compute_final 
 							? min_int_cost_and_arg_with_final.x
 							: min_int_cost_and_arg_without_final.x;
@@ -1241,6 +1242,7 @@ finalize_kernel:
 					/* printf("best[%i] = %f (final=%i) \n", lane_counters->min_int_cost_and_arg.y,
 									orderedIntToFloat(lane_counters->min_int_cost_and_arg.x),
 									compute_final); */
+					lane_counters->has_reached_final = has_reached_final;
 				}				 
 				const int2 both = cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[idx];
 				const int32 token_state = both.x;

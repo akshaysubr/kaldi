@@ -211,6 +211,7 @@ namespace kaldi {
 		// Only valid after calling GetBestCost
 		int2 min_int_cost_and_arg;
 		int32 nfinals;
+		int32 has_reached_final;
 	};
 
 	// 

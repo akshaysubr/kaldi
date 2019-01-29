@@ -960,7 +960,7 @@ namespace kaldi {
 			int32 arg = minarg.y;
 			argmins->push_back({arg,min_cost});
 			int nfinals = h_lanes_counters_[ilane].nfinals;
-			has_reached_final->push_back(nfinals > 0);
+			has_reached_final->push_back(h_lanes_counters_[ilane].has_reached_final);
 			(*list_finals_token_idx_and_cost)[ilane].resize(nfinals);	
 			int2_buffer.resize(nfinals);	
 			cudaMemcpyAsync(&int2_buffer[0], 
@@ -1210,15 +1210,22 @@ namespace kaldi {
 						InfoToken prev_token = h_all_tokens_extra_prev_tokens_[ichannel][offset];
 						arc_idx = prev_token.arc_idx;
 					}
-					// We now have a valid arc_idx. We can read the FST state
-					StateId fst_next_state = fst_.h_arc_nextstates_[arc_idx];
 					// Creating the state associated with (iframe, fst_state) in the lattice
 					StateId fst_lattice_final_state = fst_out->AddState();
 					map_it->second.fst_lattice_state = fst_lattice_final_state; 
-					
-					fst_out->SetFinal(fst_lattice_final_state,
-							LatticeWeight(fst_.h_final_[fst_next_state], 0.0));
 					q_curr_frame_todo.push_back({final_token_idx,final_token});
+		
+					if(has_reached_final[i]) {
+						// If we have reached final states, adding the final cost
+						// We now have a valid arc_idx. We can read the FST state
+						StateId fst_next_state = fst_.h_arc_nextstates_[arc_idx];
+
+						fst_out->SetFinal(fst_lattice_final_state,
+								LatticeWeight(fst_.h_final_[fst_next_state], 0.0));
+					} else {
+						fst_out->SetFinal(fst_lattice_final_state,
+								LatticeWeight::One());
+					}
 				}
 
 				map_it->second.token_extra_cost = std::min(map_it->second.token_extra_cost, extra_cost);
