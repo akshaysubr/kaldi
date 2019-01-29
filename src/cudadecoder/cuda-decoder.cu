@@ -923,7 +923,6 @@ namespace kaldi {
 			return;
 
 		list_finals_token_idx_and_cost->resize(nlanes_used);
-
 		// Getting *h_kernel_params ready to use
 		SetChannelsInKernelParams(channels);
 		KALDI_ASSERT(nlanes_used == h_kernel_params_->nlanes_used);
@@ -931,15 +930,19 @@ namespace kaldi {
 		for(ChannelId ichannel : channels)
 			max_main_q_end = std::max(max_main_q_end, h_channels_counters_[ichannel].prev_main_q_narcs_and_end.y); 
 
-		// TODO reset counters->reached_final to 0
-
 		// We already know what's the best cost, because we needed it for the cutoff
 		// it was saved in channel_counters.prev_min_cost
 		// we just need to find its index	
-		get_best_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
+		get_best_cost_kernel_step1<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 				KALDI_CUDA_DECODER_1D_BLOCK,
 				0,
 				compute_st_>>>(*h_device_params_,*h_kernel_params_, use_final_costs, StdWeight::Zero().Value());
+
+		get_best_cost_kernel_step2<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
+				KALDI_CUDA_DECODER_1D_BLOCK,
+				0,
+				compute_st_>>>(*h_device_params_,*h_kernel_params_, use_final_costs, StdWeight::Zero().Value());
+	
 		KALDI_DECODER_CUDA_CHECK_ERROR();
 		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 				d_lanes_counters_.MutableData(), 
@@ -952,7 +955,7 @@ namespace kaldi {
 		cudaStreamSynchronize(compute_st_);
 		std::vector<int2> int2_buffer;
 		for(int32 ilane=0; ilane<nlanes_used; ++ilane) {
-			int2 minarg = h_lanes_counters_[ilane].min_int_cost_and_arg_with_final;
+			int2 minarg = h_lanes_counters_[ilane].min_int_cost_and_arg;
 			CostType min_cost = orderedIntToFloatHost(minarg.x);
 			int32 arg = minarg.y;
 			argmins->push_back({arg,min_cost});
