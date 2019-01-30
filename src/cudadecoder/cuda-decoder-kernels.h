@@ -39,6 +39,8 @@ namespace kaldi {
 	__global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params, KernelParams params, bool use_aux_q);
 	__global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,KernelParams params, bool use_aux_q);
 
+	__global__ void get_best_cost_kernel_step1(DeviceParams cst_dev_params,KernelParams params, bool use_final_probs, CostType fst_zero);
+	__global__ void get_best_cost_kernel_step2(DeviceParams cst_dev_params,KernelParams params, bool use_final_probs, CostType fst_zero);
 
 	template<typename T> 
 		struct LaneMatrixInterface  {

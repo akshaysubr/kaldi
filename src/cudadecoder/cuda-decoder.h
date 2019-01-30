@@ -209,11 +209,9 @@ namespace kaldi {
 		IntegerCostType int_cutoff; // min_cost + beam (if min_cost < INF, otherwise INF)
 
 		// Only valid after calling GetBestCost
-		// different than min_int_cost : we include the "final" cost
-		int2 min_int_cost_and_arg_with_final;
-		// Number of final tokens in current main_q
-		// Only valid after calling GetBestCost
+		int2 min_int_cost_and_arg;
 		int32 nfinals;
+		int32 has_reached_final;
 	};
 
 	// 
@@ -241,6 +239,11 @@ namespace kaldi {
 		// and be able to backtrack at the end
 		int32 prev_main_q_global_offset;            
 		int32 prev_main_q_extra_prev_tokens_global_offset;            
+		
+		// Only valid after calling GetBestCost
+		// different than min_int_cost : we include the "final" cost
+		int2 min_int_cost_and_arg_with_final;
+		int2 min_int_cost_and_arg_without_final;
 	};
 
 
