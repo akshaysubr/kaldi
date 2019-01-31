@@ -820,6 +820,7 @@ namespace kaldi {
  			lane_counters->main_q_extra_prev_tokens_global_offset = channel_counters->prev_main_q_extra_prev_tokens_global_offset;
 			lane_counters->int_cutoff = INT_MAX;
 			lane_counters->min_int_cost = INT_MAX;
+			lane_counters->q_overflow = 0;	  
 		}
 	}
 
@@ -852,8 +853,6 @@ namespace kaldi {
 				// in another place
 				lane_counters->post_expand_aux_q_end = aux_q_end;
 				lane_counters->aux_q_end = 0;	
-				// When this kernel is called, the host has already read that value 
-				lane_counters->q_overflow = 0;	
 				// We are done processing those arcs
 				lane_counters->main_q_narcs_and_end.x = 0;
 				if(IS_EMITTING) {
@@ -1043,7 +1042,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 				int2 both = lane_counters->main_q_narcs_and_end;
 				int32 main_q_narcs = both.x;
 				int32 main_q_end = both.y; 
-				int32 main_q_local_offset = lane_counters->main_q_local_offset;
+        int32 main_q_local_offset = lane_counters->main_q_local_offset;
 				const int32 main_q_global_offset = lane_counters->main_q_global_offset;
 				// aux_q is empty when this kernel is called
 				int32 aux_q_end = 0;
@@ -1165,6 +1164,7 @@ finalize_kernel:
 					int32 min_int_cost = lane_counters->min_int_cost;
 					lane_counters->main_q_narcs_and_end = {0,main_q_end}; 
 					lane_counters->main_q_local_offset = 0;
+
 					// Resetting values used by GetBestCost
 					// This is just a reset : If we need to read it, we need to call GetBestCost
 					channel_counters->min_int_cost_and_arg_with_final.x = INT_MAX; // it will be set with atomicMins

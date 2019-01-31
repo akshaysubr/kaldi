@@ -15,20 +15,41 @@
 
 #ifndef KALDI_DECODER_CUDA_DECODER_UTILS_H_
 #define KALDI_DECODER_CUDA_DECODER_UTILS_H_
+#include <string>
 
+class CudaDecoderException: public std::exception {
+  public:
+    CudaDecoderException(const char* str_, const char* file_, int line_, const bool recoverable_): 
+      str(str_), file(file_), line(line_), 
+      buffer(std::string(file)+ ":" + std::to_string(line) + " :" + std::string(str)), 
+      recoverable(recoverable_) {}
+    const char* what() const throw() {
+      return buffer.c_str();
+    }
+
+    const char* str;
+    const char* file;
+    const int line;
+    const std::string buffer;
+    const bool recoverable;
+};
+
+#define CUDA_DECODER_ASSERT(val,recoverable) { \
+  if((val)!=true) { \
+    throw CudaDecoderException("CUDA_DECODER_ASSERT",__FILE__,__LINE__,recoverable) \
+  } \
+}
 //Macro for checking cuda errors following a cuda launch or api call
 #define KALDI_DECODER_CUDA_CHECK_ERROR()  {                           \
     cudaError_t e=cudaGetLastError();                                 \
     if(e!=cudaSuccess) {                                              \
-        KALDI_ERR << "Cuda failure " << __FILE__ << ":" << __LINE__ << ": '" << cudaGetErrorString(e); \
-        KALDI_ASSERT(false);                                          \
+      throw CudaDecoderException(cudaGetErrorName(e),__FILE__,__LINE__,false);   \
     }                                                                 \
 }
 
 #define KALDI_DECODER_CUDA_API_CHECK_ERROR(e)  {                      \
     if(e!=cudaSuccess) {                                              \
-        KALDI_ERR << "Cuda failure " << __FILE__ << ":" << __LINE__ << ": '" << cudaGetErrorString(e); \
-        KALDI_ASSERT(false);                                          \
+      throw CudaDecoderException(cudaGetErrorName(e),__FILE__,__LINE__,false);   \
     }                                                                 \
 }
 
