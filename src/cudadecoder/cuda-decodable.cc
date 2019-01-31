@@ -115,7 +115,7 @@ namespace kaldi {
     TaskState* t=&tasks_lookup_[key];
     tasks_lookup_mutex_.unlock();
 
-    t->Init(wave_data); 
+    t->Init(key, wave_data); 
 
     tasks_add_mutex_.lock();
     
@@ -145,7 +145,7 @@ namespace kaldi {
     TaskState* t=&tasks_lookup_[key];
     tasks_lookup_mutex_.unlock();
 
-    t->Init(wave_data, sample_rate);
+    t->Init(key, wave_data, sample_rate);
 
     tasks_add_mutex_.lock();
     
@@ -164,7 +164,7 @@ namespace kaldi {
     tasks_add_mutex_.unlock();
   }
 
-  void ThreadedBatchedCudaDecoder::GetRawLattice(const std::string &key, Lattice *lat) {
+  bool ThreadedBatchedCudaDecoder::GetRawLattice(const std::string &key, Lattice *lat) {
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
@@ -173,11 +173,14 @@ namespace kaldi {
     //wait for task to finish.  This should happens automatically without intervention from the master thread.
     while (state->finished==false);
 
+    if(state->error)
+      return false;
     //Store off the lattice
     *lat=state->lat;
+    return true;
   }
   
-  void ThreadedBatchedCudaDecoder::GetLattice(const std::string &key, CompactLattice *clat) {
+  bool ThreadedBatchedCudaDecoder::GetLattice(const std::string &key, CompactLattice *clat) {
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
@@ -185,10 +188,15 @@ namespace kaldi {
 
     //wait for task to finish.  This should happens automatically without intervention from the master thread.
     while (state->finished==false);
+    
+    if(state->error)
+      return false;
 
     //Determinize lattice
     DeterminizeLatticePhonePrunedWrapper(
       trans_model_, &state->lat, config_.decoder_opts_.lattice_beam, clat, config_.det_opts_);
+
+    return true;
   }
 
   void ThreadedBatchedCudaDecoder::ExecuteWorker(int threadId) {
@@ -240,7 +248,7 @@ namespace kaldi {
       //2) Initialize any new work
       //3) Process work in a batch
       //4) Postprocess any completed work
-      do {  
+      do {
         //1) attempt to fill the batch
         {
           if (tasks_front_!=tasks_back_)  { //if work is available grab more work
@@ -265,6 +273,7 @@ namespace kaldi {
 
             tasks_mutex_.unlock();
 
+
             //allocate new data structures.  New decodes are in the range of [start,tasks.size())
             for (int i=start;i<tasks.size();i++) {
               TaskState &state = *tasks[i];
@@ -281,7 +290,7 @@ namespace kaldi {
               features.push_back(feature);
 
               decodables.push_back(new DecodableAmNnetLoopedOnlineCuda(*decodable_info_, feature->InputFeature(), feature->IvectorFeature()));
-              
+
               data.push_back(new SubVector<BaseFloat>(*state.wave_samples, 0, state.wave_samples->Dim()));
 
               //Accept waveforms
@@ -295,73 +304,103 @@ namespace kaldi {
           break;  //no active work on this thread.  This can happen if another thread was assigned the work.
         } 
 
-        //2) Initialize any new work by calling InitDecoding on init_channels.  
-        //Must check if init_channels is non-zero because there may not always be new work.
-        if (init_channels.size()>0) {  //Except for the first iteration the size of this is typically 1 and rarely 2.
-          //init decoding on new channels_
-          cuda_decoders.InitDecoding(init_channels);   
-          init_channels.clear();
-        }
+        try {
+          //2) Initialize any new work by calling InitDecoding on init_channels.  
+          //Must check if init_channels is non-zero because there may not always be new work.
+          if (init_channels.size()>0) {  //Except for the first iteration the size of this is typically 1 and rarely 2.
+            //init decoding on new channels_
+            cuda_decoders.InitDecoding(init_channels);   
+            init_channels.clear();
+          }
 
-        //3) Process outstanding work in a batch
-        nvtxRangePushA("AdvanceDecoding");
-        //Advance decoding on all open channels
-        cuda_decoders.AdvanceDecoding(channels,decodables);
-        nvtxRangePop();
+          //3) Process outstanding work in a batch
+          nvtxRangePushA("AdvanceDecoding");
+          //Advance decoding on all open channels
+          cuda_decoders.AdvanceDecoding(channels,decodables);
+          nvtxRangePop();
 
-        //4) Post process work.  This reorders completed work to the end,
-        //copies results outs, and cleans up data structures
-        {
-          //reorder arrays to put finished at the end      
-          int cur=0;     //points to the last unfinished decode
-          int back=tasks.size()-1;  //points to the last unchecked decode
 
-          completed_channels.clear();
-          lattices.clear();
+          //4) Post process work.  This reorders completed work to the end,
+          //copies results outs, and cleans up data structures
+          {
+            //reorder arrays to put finished at the end      
+            int cur=0;     //points to the last unfinished decode
+            int back=tasks.size()-1;  //points to the last unchecked decode
 
-          for (int i=0;i<tasks.size();i++) {
-            ChannelId channel=channels[cur];
-            TaskState &state=*tasks[cur];
-            int numDecoded=cuda_decoders.NumFramesDecoded(channel);
-            int toDecode=decodables[cur]->NumFramesReady();
+            completed_channels.clear();
+            lattices.clear();
 
-            if (toDecode==numDecoded) {  //if current task is completed  
-              lattices.push_back(&state.lat);
-              completed_channels.push_back(channel);
+            for (int i=0;i<tasks.size();i++) {
+              ChannelId channel=channels[cur];
+              TaskState &state=*tasks[cur];
+              int numDecoded=cuda_decoders.NumFramesDecoded(channel);
+              int toDecode=decodables[cur]->NumFramesReady();
+
+              if (toDecode==numDecoded) {  //if current task is completed  
+                lattices.push_back(&state.lat);
+                completed_channels.push_back(channel);
+                free_channels.push_back(channel);
+
+                //move last element to this location
+                std::swap(tasks[cur],tasks[back]);
+                std::swap(channels[cur],channels[back]);
+                std::swap(decodables[cur],decodables[back]);
+                std::swap(features[cur],features[back]);
+                std::swap(data[cur],data[back]); 
+
+                //back full now so decrement it
+                back--;
+              } else { 
+                //not completed move to next task
+                cur++;
+              }  //end if completed[cur]
+            } //end for loop
+
+            //Get best path for completed tasks
+            cuda_decoders.GetRawLattice(completed_channels,lattices,true);
+
+            // clean up datastructures
+            for (int i=cur;i<tasks.size();i++) {
+              delete decodables[i];
+              delete features[i];
+              delete data[i];
+              tasks[i]->finished=true;
+            }      
+
+            tasks.resize(cur);
+            channels.resize(cur);
+            decodables.resize(cur);
+            features.resize(cur);
+            data.resize(cur);
+          } //end 4) cleanup
+        } catch (CudaDecoderException e) {
+          if(!e.recoverable) {
+            bool UNRECOVERABLE_EXCEPTION=false;
+            KALDI_LOG << "Error unrecoverable cuda decoder error '" << e.what() << "'\n";
+            KALDI_ASSERT(UNRECOVERABLE_EXCEPTION);
+          } else {
+            KALDI_LOG << "Error recoverable cuda decoder error '" << e.what() << "'\n";
+            KALDI_LOG << "    Aborting batch for recovery.  Canceling the following decodes:\n";
+            for(int i=0;i<tasks.size();i++) {
+              ChannelId channel=channels[i];
               free_channels.push_back(channel);
 
-              //move last element to this location
-              std::swap(tasks[cur],tasks[back]);
-              std::swap(channels[cur],channels[back]);
-              std::swap(decodables[cur],decodables[back]);
-              std::swap(features[cur],features[back]);
-              std::swap(data[cur],data[back]); 
-
-              //back full now so decrement it
-              back--;
-            } else { 
-              //not completed move to next task
-              cur++;
-            }  //end if completed[cur]
-          } //end for loop
-
-          //Get best path for completed tasks
-          cuda_decoders.GetRawLattice(completed_channels,lattices,true);
-
-          //clean up datastructures
-          for (int i=cur;i<tasks.size();i++) {
-            delete decodables[i];
-            delete features[i];
-            delete data[i];
-            tasks[i]->finished=true;
-          }      
-
-          tasks.resize(cur);
-          channels.resize(cur);
-          decodables.resize(cur);
-          features.resize(cur);
-          data.resize(cur);
-        } //end 4) cleanup
+              TaskState &state=*tasks[i];
+              KALDI_LOG << "      Canceled: " << state.key << "\n";
+              state.error=true;
+              state.error_string=e.what();
+              delete decodables[i];
+              delete features[i];
+              delete data[i];
+              tasks[i]->finished=true;
+            }
+            tasks.resize(0);
+            channels.resize(0);
+            decodables.resize(0);
+            features.resize(0);
+            data.resize(0);
+          }
+        }
       } while (tasks.size()>0);  //more work to process don't check exit condition
     } //end while(!exit_)
   }  //end ExecuteWorker

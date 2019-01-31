@@ -140,9 +140,9 @@ namespace kaldi {
       void OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
 
       //Copies the raw lattice for decoded handle "key" into lat
-      void GetRawLattice(const std::string &key, Lattice *lat);
+      bool GetRawLattice(const std::string &key, Lattice *lat);
       //Determinizes raw lattice and returns a compact lattice
-      void GetLattice(const std::string &key, CompactLattice *lat);
+      bool GetLattice(const std::string &key, CompactLattice *lat);
 
       inline int NumPendingTasks() {
         return (tasks_back_ - tasks_front_ + max_pending_tasks_+1) % (max_pending_tasks_+1); 
@@ -154,24 +154,29 @@ namespace kaldi {
       struct TaskState {
         Vector<BaseFloat> raw_data; // Wave input data when wave_reader passed
         SubVector<BaseFloat> *wave_samples; // Used as a pointer to either the raw data or the samples passed
+        std::string key;
         float sample_frequency;
+        bool error;
+        std::string error_string;
 
         Lattice lat;          //Lattice output
         std::atomic<bool> finished;  //Tells master thread if task has finished execution
 
-        TaskState() : wave_samples(NULL),sample_frequency(0), finished(false) {}
+        TaskState() : wave_samples(NULL),sample_frequency(0), error(false), finished(false) {}
         ~TaskState() { delete wave_samples;}
-        void Init(const WaveData &wave_data_in) {
+        void Init(const std::string &key_in, const WaveData &wave_data_in) {
           raw_data.Resize(wave_data_in.Data().NumRows()*wave_data_in.Data().NumCols(), kUndefined);
           memcpy(raw_data.Data(), wave_data_in.Data().Data(), raw_data.Dim()*sizeof(BaseFloat));
           wave_samples=new SubVector<BaseFloat>(raw_data, 0, raw_data.Dim());
           sample_frequency=wave_data_in.SampFreq();
           finished=false;
+          key=key_in;
         };
-        void Init(const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
+        void Init(const std::string &key_in, const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
           wave_samples=new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
           sample_frequency =sample_rate;
           finished=false;
+          key=key_in;
         }
       };
 
