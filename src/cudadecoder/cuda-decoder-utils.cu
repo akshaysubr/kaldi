@@ -49,7 +49,6 @@ namespace kaldi {
 		// Init first offsets
 		h_ne_offsets_[0] = 0; 
 		h_e_offsets_[0] = 0; 
-
 		for(int i=0;i<num_states_;i++) {
 			h_final_[i]=fst.Final(i).Value();
 			//count emiting and non_emitting arcs

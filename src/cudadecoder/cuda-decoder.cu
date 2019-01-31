@@ -200,6 +200,7 @@ namespace kaldi {
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_);
+	  KALDI_DECODER_CUDA_CHECK_ERROR();
 
 
 		ComputeInitialChannel();
@@ -491,12 +492,13 @@ namespace kaldi {
 			  		*h_kernel_params_, 
 					src,	
 					d_concat);
+	  KALDI_DECODER_CUDA_CHECK_ERROR();
 
-			cudaMemcpyAsync(h_concat,
+	  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_concat,
 					d_concat,
 					sum_val* sizeof(T),
 					cudaMemcpyDeviceToHost,
-					st);
+					st));
 
 		}
 
@@ -539,11 +541,13 @@ namespace kaldi {
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_, use_aux_q);
+	  KALDI_DECODER_CUDA_CHECK_ERROR();
 
 		update_beam_using_histogram_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used),
 			KALDI_CUDA_DECODER_1D_BLOCK,
 			0,
 			compute_st_>>>(*h_device_params_,*h_kernel_params_, use_aux_q); 
+	  KALDI_DECODER_CUDA_CHECK_ERROR();
 	}
 
 	void CudaDecoder::AdvanceDecoding(const std::vector<ChannelId> &channels,
@@ -683,6 +687,7 @@ namespace kaldi {
 				// to have the aux_q_end values
 				CopyLaneCountersToHostAsync(compute_st_);
 				cudaStreamSynchronize(compute_st_);
+        CheckOverflow();
 				{
 					// If one of the aux_q contains more than max_active_ tokens,
 					// we'll reduce the beam to only keep max_active_ tokens
@@ -704,8 +709,9 @@ namespace kaldi {
 				// We need main_q_narcs and main_q_end after contract
 				CopyLaneCountersToHostAsync(compute_st_);
 				cudaStreamSynchronize(compute_st_);
-
-				// We'll need max_main_q_narcs for the next expand
+        CheckOverflow();
+				
+        // We'll need max_main_q_narcs for the next expand
 				// We also need to copy the acoustic costs back to host.
 				// We'll concatenate the costs from the different lanes into in a single
 				// continuous array.
@@ -766,6 +772,8 @@ namespace kaldi {
 			// Waiting for the copy
 			cudaStreamSynchronize(compute_st_);
 
+      CheckOverflow();
+
 			MoveConcatenatedCopyToVector(h_emitting_main_q_end_lane_offsets_,
 					h_acoustic_cost_concat_,
 					&h_all_tokens_acoustic_cost_);
@@ -780,36 +788,42 @@ namespace kaldi {
 				int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
 
 				ApplyMaxActiveAndReduceBeam(false);
-				
+			
 				fill_best_int_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_, *h_kernel_params_);
+	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				preprocess_in_place_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
+	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				exclusive_sum_batched_step2_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
+	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				exclusive_sum_batched_step3_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
+	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				fill_extra_prev_tokens_list_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
+	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				clear_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
+	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
 				// We need the main_q_narcs from preprocess_in_place
 				CopyLaneCountersToHostAsync(compute_st_);
@@ -830,6 +844,7 @@ namespace kaldi {
 			// - h_infotoken_concat_ copy done
 			// - using lane_counters.main_q_n_extra_prev_tokens
 			cudaStreamSynchronize(compute_st_);
+      CheckOverflow();
 		
 			// Starting the extra_prev_tokens copies
 			{
@@ -903,6 +918,8 @@ namespace kaldi {
 		for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
 			bool q_overflow = h_lanes_counters_[ilane].q_overflow;
 			if(q_overflow) {
+        //TODO temporary until overflow handling is fixed
+        throw CudaDecoderException("Overflow increase --max-tokens-per-frame", __FILE__, __LINE__, true);
 				// An overflow was prevented in a kernel
 				// The algorithm can still go on but quality of the result can be reduced
 				// (less tokens were generated)
@@ -931,7 +948,6 @@ namespace kaldi {
 			return;
 
 		list_finals_token_idx_and_cost->resize(nlanes_used);
-
 		// Getting *h_kernel_params ready to use
 		SetChannelsInKernelParams(channels);
 		KALDI_ASSERT(nlanes_used == h_kernel_params_->nlanes_used);
@@ -939,15 +955,20 @@ namespace kaldi {
 		for(ChannelId ichannel : channels)
 			max_main_q_end = std::max(max_main_q_end, h_channels_counters_[ichannel].prev_main_q_narcs_and_end.y); 
 
-		// TODO reset counters->reached_final to 0
-
 		// We already know what's the best cost, because we needed it for the cutoff
 		// it was saved in channel_counters.prev_min_cost
 		// we just need to find its index	
-		get_best_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
+		get_best_cost_kernel_step1<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 				KALDI_CUDA_DECODER_1D_BLOCK,
 				0,
 				compute_st_>>>(*h_device_params_,*h_kernel_params_, use_final_costs, StdWeight::Zero().Value());
+	  KALDI_DECODER_CUDA_CHECK_ERROR();
+
+		get_best_cost_kernel_step2<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
+				KALDI_CUDA_DECODER_1D_BLOCK,
+				0,
+				compute_st_>>>(*h_device_params_,*h_kernel_params_, use_final_costs, StdWeight::Zero().Value());
+	
 		KALDI_DECODER_CUDA_CHECK_ERROR();
 		KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(h_lanes_counters_,     
 				d_lanes_counters_.MutableData(), 
@@ -960,12 +981,12 @@ namespace kaldi {
 		cudaStreamSynchronize(compute_st_);
 		std::vector<int2> int2_buffer;
 		for(int32 ilane=0; ilane<nlanes_used; ++ilane) {
-			int2 minarg = h_lanes_counters_[ilane].min_int_cost_and_arg_with_final;
+			int2 minarg = h_lanes_counters_[ilane].min_int_cost_and_arg;
 			CostType min_cost = orderedIntToFloatHost(minarg.x);
 			int32 arg = minarg.y;
 			argmins->push_back({arg,min_cost});
 			int nfinals = h_lanes_counters_[ilane].nfinals;
-			has_reached_final->push_back(nfinals > 0);
+			has_reached_final->push_back(h_lanes_counters_[ilane].has_reached_final);
 			(*list_finals_token_idx_and_cost)[ilane].resize(nfinals);	
 			int2_buffer.resize(nfinals);	
 			cudaMemcpyAsync(&int2_buffer[0], 
@@ -1215,15 +1236,22 @@ namespace kaldi {
 						InfoToken prev_token = h_all_tokens_extra_prev_tokens_[ichannel][offset];
 						arc_idx = prev_token.arc_idx;
 					}
-					// We now have a valid arc_idx. We can read the FST state
-					StateId fst_next_state = fst_.h_arc_nextstates_[arc_idx];
 					// Creating the state associated with (iframe, fst_state) in the lattice
 					StateId fst_lattice_final_state = fst_out->AddState();
 					map_it->second.fst_lattice_state = fst_lattice_final_state; 
-					
-					fst_out->SetFinal(fst_lattice_final_state,
-							LatticeWeight(fst_.h_final_[fst_next_state], 0.0));
 					q_curr_frame_todo.push_back({final_token_idx,final_token});
+		
+					if(has_reached_final[i]) {
+						// If we have reached final states, adding the final cost
+						// We now have a valid arc_idx. We can read the FST state
+						StateId fst_next_state = fst_.h_arc_nextstates_[arc_idx];
+
+						fst_out->SetFinal(fst_lattice_final_state,
+								LatticeWeight(fst_.h_final_[fst_next_state], 0.0));
+					} else {
+						fst_out->SetFinal(fst_lattice_final_state,
+								LatticeWeight::One());
+					}
 				}
 
 				map_it->second.token_extra_cost = std::min(map_it->second.token_extra_cost, extra_cost);

@@ -836,10 +836,9 @@ namespace kaldi {
 			lane_counters->adaptive_int_beam_with_validity_index.y = cst_dev_params.adaptive_beam_static_segment;
 			lane_counters->main_q_global_offset = channel_counters->prev_main_q_global_offset; // we'll update it after emitting
  			lane_counters->main_q_extra_prev_tokens_global_offset = channel_counters->prev_main_q_extra_prev_tokens_global_offset;
-			lane_counters->min_int_cost_and_arg_with_final.x = INT_MAX; // used by GetBestCost
 			lane_counters->int_cutoff = INT_MAX;
 			lane_counters->min_int_cost = INT_MAX;
-			lane_counters->q_overflow = 0;	
+			lane_counters->q_overflow = 0;	  
 		}
 	}
 
@@ -933,7 +932,6 @@ namespace kaldi {
 					// Last time those were used was in previous kernel
 					lane_counters->min_int_cost = INT_MAX;
 					lane_counters->int_cutoff = INT_MAX;
-					lane_counters->min_int_cost_and_arg_with_final.x = INT_MAX; // used by GetBestCost
 					const CostType current_beam = orderedIntToFloat(lane_counters->int_beam);
 					const CostType new_beam = fmin(cst_dev_params.default_beam, 
 							current_beam*KALDI_CUDA_DECODER_ADAPTIVE_BEAM_RECOVER_RATE);
@@ -1061,11 +1059,12 @@ we do not need inter-block communication (we launch only one CUDA block)
 			KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
 				LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
 				const int32 ichannel = params.channel_to_compute[ilane];
+				ChannelCounters *channel_counters = cst_dev_params.d_channels_counters.channel(ichannel);
 
 				int2 both = lane_counters->main_q_narcs_and_end;
 				int32 main_q_narcs = both.x;
 				int32 main_q_end = both.y; 
-				int32 main_q_local_offset = lane_counters->main_q_local_offset;
+        int32 main_q_local_offset = lane_counters->main_q_local_offset;
 				const int32 main_q_global_offset = lane_counters->main_q_global_offset;
 				// aux_q is empty when this kernel is called
 				int32 aux_q_end = 0;
@@ -1184,16 +1183,60 @@ we do not need inter-block communication (we launch only one CUDA block)
 finalize_kernel:
 				if(threadIdx.x == 0) {
 					// This main_q is now final for that frame
+					int32 min_int_cost = lane_counters->min_int_cost;
 					lane_counters->main_q_narcs_and_end = {0,main_q_end}; 
 					lane_counters->main_q_local_offset = 0;
-					// Resetting the number of final tokens in main_q
+
+					// Resetting values used by GetBestCost
 					// This is just a reset : If we need to read it, we need to call GetBestCost
-					lane_counters->nfinals = 0;
+					channel_counters->min_int_cost_and_arg_with_final.x = INT_MAX; // it will be set with atomicMins
+					channel_counters->min_int_cost_and_arg_without_final.x = min_int_cost; // we already know what the min cost is
 				}	
 			}
 		}
 
-	__global__ void get_best_cost_kernel(DeviceParams cst_dev_params,KernelParams params, bool isfinal, CostType fst_zero) {
+	// GetBestCost :
+	// - for non final, we add == int_min_cost and set the arg
+	// - for final, we do what we used to do ? atomicMinI2 
+	// second kernel that uses the right cutoff, and list what needs to be listed  
+	__global__ void get_best_cost_kernel_step1(DeviceParams cst_dev_params,KernelParams params, bool use_final_probs, CostType fst_zero) {
+		const int nlanes = params.nlanes_used;
+		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
+			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
+			const int32 ichannel = params.channel_to_compute[ilane];
+			ChannelCounters *channel_counters = cst_dev_params.d_channels_counters.channel(ichannel);
+			const int32 main_q_end = channel_counters->prev_main_q_narcs_and_end.y;
+			const int32 global_offset = channel_counters->prev_main_q_global_offset;
+			const int32 min_int_cost = channel_counters->min_int_cost_and_arg_without_final.x;
+			KALDI_CUDA_DECODER_1D_KERNEL_LOOP(idx, main_q_end) {
+				if(idx == 0)
+					lane_counters->nfinals = 0; // will be used in the next kernel
+				const int2 both = cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[idx];
+				const int token_state = both.x;
+				const int token_int_cost = both.y;
+				CostType cost = orderedIntToFloat(token_int_cost);	
+				IntegerCostType int_cost = floatToOrderedInt(cost);
+				int32 global_idx = global_offset+idx;
+				// We know what is the min cost (without final costs)
+				// we just need to have the index of one token with that min cost
+				if(int_cost == min_int_cost)
+					channel_counters->min_int_cost_and_arg_without_final.y = global_idx; 
+
+				if(use_final_probs) {
+					const CostType final_cost = cst_dev_params.d_fst_final_costs[token_state];
+					IntegerCostType int_cost_with_final = floatToOrderedInt(cost+final_cost);
+					if(final_cost != fst_zero) {
+						int2 min_and_arg = {int_cost_with_final, global_idx}; // sort by cost, put it first
+						atomicMinI2(&channel_counters->min_int_cost_and_arg_with_final, min_and_arg);
+					}
+				}
+			}
+		}
+	}
+
+	
+	
+	__global__ void get_best_cost_kernel_step2(DeviceParams cst_dev_params,KernelParams params, bool use_final_probs, CostType fst_zero) {
 		const int nlanes = params.nlanes_used;
 		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
 			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
@@ -1201,24 +1244,45 @@ finalize_kernel:
 			const ChannelCounters *channel_counters = cst_dev_params.d_channels_counters.channel(ichannel);
 			const int32 main_q_end = channel_counters->prev_main_q_narcs_and_end.y;
 			const int32 global_offset = channel_counters->prev_main_q_global_offset;
+			const int2 min_int_cost_and_arg_with_final = channel_counters->min_int_cost_and_arg_with_final;
+			const int2 min_int_cost_and_arg_without_final = channel_counters->min_int_cost_and_arg_without_final;
+			bool has_reached_final = (min_int_cost_and_arg_with_final.x != INT_MAX);
+			// Use final if we want to use final and if we found a final state in the token list
+			bool compute_final = use_final_probs && has_reached_final;
+			IntegerCostType min_cost_to_use = compute_final 
+							? min_int_cost_and_arg_with_final.x
+							: min_int_cost_and_arg_without_final.x;
+
+			CostType lattice_cutoff = orderedIntToFloat(min_cost_to_use) + cst_dev_params.lattice_beam;
+			IntegerCostType lattice_int_cutoff = floatToOrderedInt(lattice_cutoff);
 			KALDI_CUDA_DECODER_1D_KERNEL_LOOP(idx, main_q_end) {
+				if(idx == 0) {
+					// The lane counters will be copied to host
+					lane_counters->min_int_cost_and_arg = compute_final 
+										? min_int_cost_and_arg_with_final
+										: min_int_cost_and_arg_without_final;
+					/* printf("best[%i] = %f (final=%i) \n", lane_counters->min_int_cost_and_arg.y,
+									orderedIntToFloat(lane_counters->min_int_cost_and_arg.x),
+									compute_final); */
+					lane_counters->has_reached_final = has_reached_final;
+				}				 
 				const int2 both = cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[idx];
-				const int token_state = both.x;
-				const int token_int_cost = both.y;
-				CostType cost = orderedIntToFloat(token_int_cost);	
-				IntegerCostType int_cost = floatToOrderedInt(cost);
-				if(isfinal) {
+				const int32 token_state = both.x;
+				int32 token_int_cost = both.y;
+				if(compute_final) {
 					const CostType final_cost = cst_dev_params.d_fst_final_costs[token_state];
-					int_cost = floatToOrderedInt(cost+final_cost);
-					if(final_cost != fst_zero) {
-						int list_idx = atomicAdd(&lane_counters->nfinals, 1);
-						cst_dev_params.d_list_final_tokens_in_main_q.lane(ilane)[list_idx] = {global_offset+idx, int_cost};
-					}
+					const CostType token_cost = orderedIntToFloat(token_int_cost);	
+					token_int_cost = (final_cost != fst_zero) 
+							? floatToOrderedInt(token_cost+final_cost)
+							: INT_MAX;
 				}
-				const IntegerCostType cost_as_int = floatToOrderedInt(cost); 
-				const int32 global_idx = global_offset+idx;
-				const int2 min_and_arg = {int_cost, global_idx}; // sort by cost, put it first
-				atomicMinI2(&lane_counters->min_int_cost_and_arg_with_final, min_and_arg); // TODO maybe reduce locally
+				if(token_int_cost < lattice_int_cutoff) {
+					// That token will be included in the lattice (last frame)
+					// save it
+					int list_idx = atomicAdd(&lane_counters->nfinals, 1);
+					cst_dev_params.d_list_final_tokens_in_main_q.lane(ilane)[list_idx] = {global_offset+idx, token_int_cost};
+					//printf("list[%i] = {%i,%f} \n", list_idx, global_offset+idx, orderedIntToFloat(token_int_cost));
+				}
 			}
 		}
 	}

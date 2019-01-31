@@ -159,7 +159,6 @@ int main(int argc, char *argv[]) {
         nvtxRangePushA("Utterance Iteration");
 
         std::string utt = wav_reader.Key();
-        printf("Utterance: %s\n", utt.c_str());
 
         const WaveData &wave_data = wav_reader.Value();
         total_audio+=wave_data.Duration();
@@ -173,22 +172,24 @@ int main(int argc, char *argv[]) {
 
           CompactLattice clat;
 
+          bool valid;
+
           if(determinize_lattice) {
-            CudaDecoder.GetLattice(utt,&clat);
+            valid=CudaDecoder.GetLattice(utt,&clat);
           } else {
             Lattice lat;
-            CudaDecoder.GetRawLattice(utt,&lat);
-            ConvertLattice(lat, &clat);
+            valid=CudaDecoder.GetRawLattice(utt,&lat);
+            if(valid) ConvertLattice(lat, &clat);
           }
 
-          GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
+          if(valid) {
+            GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
 
-          if (write_lattice && iter==0 ) {
-            clat_writer.Write(utt, clat);
+            if (write_lattice && iter==0 ) {
+              clat_writer.Write(utt, clat);
+            }
           }
-
           CudaDecoder.CloseDecodeHandle(utt);
-
           processed.pop();
         }
 
@@ -200,23 +201,25 @@ int main(int argc, char *argv[]) {
       while (processed.size()>0) {
         std::string &utt = processed.front();
         CompactLattice clat;
-            
+          
+        bool valid;
         if(determinize_lattice) {
-          CudaDecoder.GetLattice(utt,&clat);
+          valid=CudaDecoder.GetLattice(utt,&clat);
         } else {
           Lattice lat;
-          CudaDecoder.GetRawLattice(utt,&lat);
-          ConvertLattice(lat, &clat);
+          valid=CudaDecoder.GetRawLattice(utt,&lat);
+          if(valid) ConvertLattice(lat, &clat);
         }
 
-        GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
-
-        if (write_lattice && iter==0 ) {
-          clat_writer.Write(utt, clat);
+        if(valid) {
+          GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
+    
+          if (write_lattice && iter==0 ) {
+            clat_writer.Write(utt, clat);
+          }
         }
 
         CudaDecoder.CloseDecodeHandle(utt);
-
         processed.pop();
 
       } //end for
