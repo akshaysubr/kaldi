@@ -58,6 +58,7 @@
 // Below that value, we launch the persistent kernel for NonEmitting
 #define KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS 4096
 
+// TODO remove the following two defines (dead)
 // How many "heavy load" non emitting kernels to launch before attemping to start the persistent one
 #define KALDI_CUDA_DECODER_NONEM_NEXPAND_PIPELINE_FIRST 2
 // How many "heavy load" non emitting kernels to launch if previous attempt was not enough
@@ -72,8 +73,10 @@
 // 4kb for compute capability >= 2.0
 #define KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE (4096)
 
-#define KALDI_CUDA_DECODER_NBINS 255
+#define KALDI_CUDA_DECODER_NBINS 255 // TODO rename HISTO_NBINS
 
+#define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT 4
+#define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
 namespace kaldi {
 			typedef float CostType;
 			typedef int32 IntegerCostType;
@@ -206,6 +209,9 @@ namespace kaldi {
 
 		IntegerCostType min_int_cost;
 		IntegerCostType int_beam;
+		int2 adaptive_int_beam_with_validity_index;
+		int32 adaptive_beam_bin_width;
+
 		IntegerCostType int_cutoff; // min_cost + beam (if min_cost < INF, otherwise INF)
 
 		// Only valid after calling GetBestCost

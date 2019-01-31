@@ -182,6 +182,14 @@ namespace kaldi {
 		h_device_params_->init_cost = StdWeight::One().Value();
 		h_device_params_->hashmap_capacity = hashmap_capacity_;
 		h_device_params_->max_active = max_active_;
+		
+		// For the first static_beam_q_length elements of the queue, we will keep the beam static
+		int32 static_beam_q_length = max_tokens_per_frame_ / KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT;
+		// For the last adaptive_beam_q_length elements of the queue, we will decrease the beam, segment by segment
+		int32 adaptive_beam_q_length = (max_tokens_per_frame_ - static_beam_q_length);
+		int32 adaptive_beam_bin_width = adaptive_beam_q_length / KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS;
+		h_device_params_->adaptive_beam_static_segment = static_beam_q_length; 
+		h_device_params_->adaptive_beam_bin_width = adaptive_beam_bin_width; 
 
 		// Reusing aux_q memory to list final states in GetLattice
 		// Those cannot be used at the same time

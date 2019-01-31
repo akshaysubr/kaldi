@@ -104,6 +104,8 @@ namespace kaldi {
 		CostType init_cost;
 		int32 hashmap_capacity;
 		int32 max_active;	
+		int32 adaptive_beam_static_segment;
+		int32 adaptive_beam_bin_width;
 	};
 
 	// TODO add STATIC_ASSERT for this struct size < 4KB
