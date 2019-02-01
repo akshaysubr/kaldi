@@ -103,6 +103,18 @@ namespace kaldi {
 		} while(old.ull!=assumed.ull && old.i2.x > value.i2.x);
 	}
 
+	__device__ void atomicSub(int2 *ptr, int2 sub) {
+		unsigned long long int *ptr64 = reinterpret_cast<unsigned long long int*>(ptr);
+		UInt64UnionInt2 old, assumed, value;
+		old.ull = *ptr64;
+		do {
+			assumed = old;
+			value.i2.x = assumed.i2.x - sub.x;	
+			value.i2.y = assumed.i2.y - sub.y;	
+			old.ull = atomicCAS(ptr64, assumed.ull, value.ull);
+		} while(old.ull!=assumed.ull);
+	}
+
 	// GetAdaptiveBeam is used by ExpandArc and FinalizeProcessNonemitting
 	//
 	// Given the fact that the token queues are too small to store 
@@ -321,10 +333,9 @@ namespace kaldi {
 						// We are overflowing the main_q
 						// We first revert what this CTA has done, ie revert the previous atomicAdd
 						// because all CTAs will revert, we know we will have a valid state after completion of this kernel
-						//atomicSub(&lane_counters->main_q_end_and_narcs, block_sum); TODO
+						atomicSub(&lane_counters->main_q_narcs_and_end, block_sum); 
 						lane_counters->q_overflow = 1; // for the host
 						sh_main_q_global_block_offset.y = cst_dev_params.q_capacity; // used as flag to broadcast the information in the CTA 
-						// We cannot jump to finalize_kernel now, we are in a divergent branch
 					} else 
 						sh_main_q_global_block_offset = block_offset;
 				}
@@ -337,7 +348,7 @@ namespace kaldi {
 				// Checking if we are overflowing the main_q
 				// All threads are executing the next line
 				if(sh_main_q_global_block_offset.y == cst_dev_params.q_capacity) 
-					return;	 //done
+					goto end_lane;	 //done for this lane
 
 				// If we are executing the following lines it means that we are not overflowing the queue
 				// We then continue what we were doing
@@ -360,6 +371,7 @@ namespace kaldi {
 				}
 			}
 
+			end_lane:;
 		}
 	}
 
@@ -674,30 +686,7 @@ namespace kaldi {
 						const int32 total_successors_in_block = int_cost_and_index.y;
 						// Requesting a spot of size total_successors_in_block in the aux_q
 						const int aux_q_index_block_offset = atomicAdd(&lane_counters->aux_q_end, total_successors_in_block);
-						// We can find a lower global_min_cost only in the emitting stage
-						if(IS_EMITTING) {
-							IntegerCostType global_min_int_cost = lane_counters->min_int_cost;
-							IntegerCostType local_min_int_cost = int_cost_and_index.x;
-							// if we found a lower min_cost, update the global value
-							if(local_min_int_cost < global_min_int_cost) {
-								global_min_int_cost = local_min_int_cost;
-								atomicMin(&lane_counters->min_int_cost, global_min_int_cost);
-								CostType beam = orderedIntToFloat(adaptive_int_beam_with_validity_index.x);
-								IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(local_min_int_cost) + beam);
-								atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
-							}
-							int32 beam_valid_until_idx = adaptive_int_beam_with_validity_index.y;
-							if(aux_q_index_block_offset >= beam_valid_until_idx) {
-								// This beam is no longer valid. Updating it
-								// TODO move out of emitting 
-								UpdateAdaptiveBeam(cst_dev_params, 
-										aux_q_index_block_offset, 
-										global_min_int_cost, 
-										&adaptive_int_beam_with_validity_index,
-										lane_counters);
-							}
-						}
-
+				
 						// All threads will need this value
 						// Saving in shared memory
 						sh_aux_q_index_block_offset = aux_q_index_block_offset;
@@ -706,7 +695,7 @@ namespace kaldi {
 						// we detect it before actually using the aux_q
 						// We try to prevent an overflow from happening using an adaptive beam (cf GetAdaptiveBeam)
 						//
-						if((sh_aux_q_index_block_offset + total_successors_in_block) >= cst_dev_params.q_capacity) {
+						if((aux_q_index_block_offset + total_successors_in_block) >= cst_dev_params.q_capacity) {
 							// sh_aux_q_index_block_offset is in shared memory
 							// its value is currently invalid (overflow)
 							// we set it to a special value and use it as a flag to broadcast
@@ -723,6 +712,31 @@ namespace kaldi {
 							// We do not jump to finalize_kernel now, because only threadIdx.x == 0 
 							// is executing this
 							// We wait until the end of the divergent branch
+						} else {
+							// We are not overflowing the queue, updating the global values
+							if(IS_EMITTING) {
+								// We can find a lower global_min_cost only in the emitting stage
+								IntegerCostType global_min_int_cost = lane_counters->min_int_cost;
+								IntegerCostType local_min_int_cost = int_cost_and_index.x;
+								// if we found a lower min_cost, update the global value
+								if(local_min_int_cost < global_min_int_cost) {
+									global_min_int_cost = local_min_int_cost;
+									atomicMin(&lane_counters->min_int_cost, global_min_int_cost);
+									CostType beam = orderedIntToFloat(adaptive_int_beam_with_validity_index.x);
+									IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(local_min_int_cost) + beam);
+									atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
+								}
+								int32 beam_valid_until_idx = adaptive_int_beam_with_validity_index.y;
+								if(aux_q_index_block_offset >= beam_valid_until_idx) {
+									// This beam is no longer valid. Updating it
+									// TODO move out of emitting 
+									UpdateAdaptiveBeam(cst_dev_params, 
+											aux_q_index_block_offset, 
+											global_min_int_cost, 
+											&adaptive_int_beam_with_validity_index,
+											lane_counters);
+								}
+							}
 						}
 					}
 
@@ -732,11 +746,8 @@ namespace kaldi {
 					__syncthreads(); 
 					// The only case where we can have that condition met,
 					// is if we detected an overflow if the previous lines
-					// we need to finalize our work and quit 
-					// Now all threads are executing this code. We can jump
-					// to finalize_kernel
 					if(sh_aux_q_index_block_offset == cst_dev_params.q_capacity) 
-						return;
+						goto end_lane; // done for this lane
 					//
 					// If we're executing the following lines it means everything
 					// is valid and we are not overflowing the aux_q
@@ -761,6 +772,7 @@ namespace kaldi {
 
 					}
 				}
+			end_lane:;
 			}
 		}
 
@@ -1006,7 +1018,7 @@ namespace kaldi {
 	__global__ void clear_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params) {
 		const int nlanes = params.nlanes_used;
 		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
-			const LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
+			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
 			const int main_q_end = lane_counters->main_q_narcs_and_end.y;
 			KALDI_CUDA_DECODER_1D_KERNEL_LOOP(main_q_idx, main_q_end) {
 				int32 hash_idx = cst_dev_params.d_main_q_representative_id.lane(ilane)[main_q_idx];
@@ -1016,6 +1028,11 @@ namespace kaldi {
 					cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx] =  {KALDI_CUDA_DECODER_HASHMAP_NO_KEY, 0, {INT_MAX, -1}}; // clear
 				}
 			}
+
+			// This is the last kernel for that frame
+			// Resets q_overflow
+			if(threadIdx.x == 0 && blockIdx.x == 0)
+				lane_counters->q_overflow = 0;
 		}
 	}
 
@@ -1111,7 +1128,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 						if((aux_q_end + nsuccessors) >= cst_dev_params.q_capacity) {
 							lane_counters->q_overflow = 1;
 							// nothing to revert in global memory
-							goto finalize_kernel;
+							goto finalize_lane;
 						}
 
 						if(has_successor) {
@@ -1160,7 +1177,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 						const int32 total_ntokens = aggregate.y; 
 						if((main_q_end + total_ntokens) >= cst_dev_params.q_capacity) {
 							lane_counters->q_overflow = 1;
-							goto finalize_kernel;
+							goto finalize_lane;
 						}
 						const int32 degree_prefix_sum = main_q_narcs + narcs_and_ntokens_prefix_sum.x;
 						const int32 degree_sum = aggregate.x;
@@ -1180,7 +1197,8 @@ we do not need inter-block communication (we launch only one CUDA block)
 					}
 					aux_q_end = 0; // aux_q is now considered empty
 				}
-finalize_kernel:
+				
+				finalize_lane:
 				if(threadIdx.x == 0) {
 					// This main_q is now final for that frame
 					int32 min_int_cost = lane_counters->min_int_cost;

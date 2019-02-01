@@ -596,7 +596,7 @@ namespace kaldi {
 			//int32 debug_f_narcs = 0;
 			// Computing a new frame
 			// Loglikelihoods from the acoustic model
-			//if(iframe > 2)  KALDI_ASSERT(0);
+			//printf("frame=%i \n", iframe);
 			nvtxRangePop(); // Decoding
 			for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
 				ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
@@ -687,7 +687,6 @@ namespace kaldi {
 				// to have the aux_q_end values
 				CopyLaneCountersToHostAsync(compute_st_);
 				cudaStreamSynchronize(compute_st_);
-        CheckOverflow();
 				{
 					// If one of the aux_q contains more than max_active_ tokens,
 					// we'll reduce the beam to only keep max_active_ tokens
@@ -709,7 +708,6 @@ namespace kaldi {
 				// We need main_q_narcs and main_q_end after contract
 				CopyLaneCountersToHostAsync(compute_st_);
 				cudaStreamSynchronize(compute_st_);
-        CheckOverflow();
 				
         // We'll need max_main_q_narcs for the next expand
 				// We also need to copy the acoustic costs back to host.
@@ -763,6 +761,8 @@ namespace kaldi {
 							KALDI_CUDA_DECODER_LARGEST_1D_BLOCK,
 							0,
 							compute_st_>>>(*h_device_params_,*h_kernel_params_);
+
+			cudaStreamSynchronize(compute_st_); //TODO DEBUG REMOVE
 		  KALDI_DECODER_CUDA_CHECK_ERROR();
 
 			// Moving back to host the final (for this frame) values of :
@@ -772,7 +772,6 @@ namespace kaldi {
 			// Waiting for the copy
 			cudaStreamSynchronize(compute_st_);
 
-      CheckOverflow();
 
 			MoveConcatenatedCopyToVector(h_emitting_main_q_end_lane_offsets_,
 					h_acoustic_cost_concat_,
@@ -786,6 +785,8 @@ namespace kaldi {
 				// - compute the extra costs
 				auto func_main_q_end = [] (const LaneCounters &c) { return c.main_q_narcs_and_end.y; };
 				int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
+				for(int32 ilane = 0; ilane < nlanes_used; ++ilane)
+					KALDI_ASSERT(h_lanes_counters_[ilane].main_q_narcs_and_end.y > 0);
 
 				ApplyMaxActiveAndReduceBeam(false);
 			
@@ -819,14 +820,15 @@ namespace kaldi {
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
 	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
+				// We need the main_q_narcs from preprocess_in_place
+				CopyLaneCountersToHostAsync(compute_st_);
+
 				clear_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,
 					compute_st_>>>(*h_device_params_,*h_kernel_params_);
 	      KALDI_DECODER_CUDA_CHECK_ERROR();
 
-				// We need the main_q_narcs from preprocess_in_place
-				CopyLaneCountersToHostAsync(compute_st_);
 			}
 
 			// Copying InfoTokens back to host
@@ -844,7 +846,7 @@ namespace kaldi {
 			// - h_infotoken_concat_ copy done
 			// - using lane_counters.main_q_n_extra_prev_tokens
 			cudaStreamSynchronize(compute_st_);
-      CheckOverflow();
+		      	CheckOverflow();
 		
 			// Starting the extra_prev_tokens copies
 			{
@@ -892,7 +894,6 @@ namespace kaldi {
 				KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() == h_all_tokens_extra_prev_tokens_[ichannel].size());
 			}	
 
-			CheckOverflow();
 			KALDI_DECODER_CUDA_CHECK_ERROR();
 		}   
 
@@ -916,10 +917,11 @@ namespace kaldi {
 
 	void CudaDecoder::CheckOverflow() {
 		for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
-			bool q_overflow = h_lanes_counters_[ilane].q_overflow;
+			LaneCounters *lane_counters = &h_lanes_counters_[ilane];
+			bool q_overflow = lane_counters->q_overflow;
 			if(q_overflow) {
         //TODO temporary until overflow handling is fixed
-        throw CudaDecoderException("Overflow increase --max-tokens-per-frame", __FILE__, __LINE__, true);
+        //throw CudaDecoderException("Overflow increase --max-tokens-per-frame", __FILE__, __LINE__, true);
 				// An overflow was prevented in a kernel
 				// The algorithm can still go on but quality of the result can be reduced
 				// (less tokens were generated)
@@ -927,6 +929,14 @@ namespace kaldi {
 					<< "execution but the quality of the output may be decreased. "
 					<< "To prevent this from happening, please increase the parameter --max-tokens-per-frame"
 					<< " and/or decrease --beam";
+
+				KALDI_ASSERT(lane_counters->main_q_narcs_and_end.y < max_tokens_per_frame_);
+				KALDI_ASSERT(lane_counters->main_q_narcs_and_end.x >= 0);
+				KALDI_ASSERT(lane_counters->main_q_narcs_and_end.y >= 0);
+				KALDI_ASSERT(lane_counters->post_expand_aux_q_end < max_tokens_per_frame_);
+				KALDI_ASSERT(lane_counters->post_expand_aux_q_end >= 0);
+				KALDI_ASSERT(lane_counters->aux_q_end < max_tokens_per_frame_);
+				KALDI_ASSERT(lane_counters->aux_q_end >= 0);
 			}
 		}
 	}
@@ -1269,6 +1279,9 @@ namespace kaldi {
 				// when merging those tokens, we break the topological order
 				// and we may have to replay that frame. 
 				bool must_replay_frame;
+
+				// Useful assert, making sure the best path is still there for each frame
+				bool dbg_found_best_path = false;
 				do {
 					must_replay_frame = false;
 					// Reading something to do. We are pushing stuff back in q_curr_frame_todo while reading it,
@@ -1285,6 +1298,7 @@ namespace kaldi {
 						// We know this token exists in the output lattice (because it's in q_curr_frame_todo)
 						KALDI_ASSERT(to_map_it != curr_f_raw_lattice_state.end());
 						CostType token_extra_cost = to_map_it->second.token_extra_cost;
+						dbg_found_best_path |= (token_extra_cost == 0.0f);
 						StateId to_fst_lattice_state = to_map_it->second.fst_lattice_state;
 
 						// We read the extra cost from lattice_next_state
@@ -1413,6 +1427,8 @@ namespace kaldi {
 									from_map_it->second.token_extra_cost = prev_token_extra_cost;
 									// Reading the StateId of the source state in the output lattice
 									from_fst_lattice_state = from_map_it->second.fst_lattice_state;
+									//printf("%i [extra=%f] --- %f ---> %i [extra=%f] \n", 
+									//	from_fst_lattice_state, this_arc_prev_token_extra_cost, arc_extra_cost, to_fst_lattice_state, token_extra_cost);
 								} else {
 									from_fst_lattice_state = fst_lattice_start;
 								}
@@ -1458,9 +1474,10 @@ namespace kaldi {
 				f_arc_idx_added.clear();
 
 				KALDI_ASSERT(q_prev_frame_todo.empty());
-				if(iframe > 1)
+				if(iframe > 1) {
 					KALDI_ASSERT(!q_curr_frame_todo.empty());
-
+					KALDI_ASSERT(dbg_found_best_path);
+				}
 			}
 
 			nvtxRangePop();
