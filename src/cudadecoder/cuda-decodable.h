@@ -44,7 +44,7 @@ namespace kaldi {
 			decodable_opts_.Register(po);
 			decoder_opts_.Register(po);
 			po->Register("max-batch-size",&max_batch_size_, "The maximum batch size to be used by the decoder.");
-			po->Register("num-threads",&num_threads_, "The number of workpool threads to use in the ThreadedBatchedCudaDecoder");
+			po->Register("cuda-cpu-threads",&num_threads_, "The number of workpool threads to use in the cuda decoder");
 			decoder_opts_.nlanes=max_batch_size_;
 			decoder_opts_.nchannels=max_batch_size_;
       det_opts_.Register(po);
