@@ -210,7 +210,6 @@ namespace kaldi {
 		IntegerCostType min_int_cost;
 		IntegerCostType int_beam;
 		int2 adaptive_int_beam_with_validity_index;
-		int32 adaptive_beam_bin_width;
 
 		IntegerCostType int_cutoff; // min_cost + beam (if min_cost < INF, otherwise INF)
 
