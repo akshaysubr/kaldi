@@ -604,7 +604,7 @@ namespace kaldi {
 						// To do that, we look for the maximum index maxle_i in the prefix sum array such prefix_sum[i] <= 4
 						//
 						// [0, 3, 3, 5]
-						//         /\
+						//          |
 						//         here
 						// maxle_i = 2
 						// it means that our source token is at index 2 in the main_q
