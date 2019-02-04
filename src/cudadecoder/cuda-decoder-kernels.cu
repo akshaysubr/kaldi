@@ -49,14 +49,19 @@ namespace kaldi {
 	} 
 
 	int32 floatToOrderedIntHost(float floatVal) {
-		int32 intVal = reinterpret_cast<int&>( floatVal );
+		int32 intVal;
+    //Should be optimized away by compiler
+    memcpy(&intVal,&floatVal,sizeof(float));
 		return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
 	}
 
 
 	float orderedIntToFloatHost(int32 intVal) {
 		intVal =  (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
-		return reinterpret_cast<float&>(intVal);
+    float floatVal;
+    //Should be optimized away by compiler
+    memcpy(&floatVal,&intVal,sizeof(float));
+		return floatVal;
 	} 
 
 	struct MinPlus {
