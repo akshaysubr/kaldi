@@ -103,26 +103,50 @@ namespace kaldi {
 		} while(old.ull!=assumed.ull && old.i2.x > value.i2.x);
 	}
 
+	__device__ void atomicSub(int2 *ptr, int2 sub) {
+		unsigned long long int *ptr64 = reinterpret_cast<unsigned long long int*>(ptr);
+		UInt64UnionInt2 old, assumed, value;
+		old.ull = *ptr64;
+		do {
+			assumed = old;
+			value.i2.x = assumed.i2.x - sub.x;	
+			value.i2.y = assumed.i2.y - sub.y;	
+			old.ull = atomicCAS(ptr64, assumed.ull, value.ull);
+		} while(old.ull!=assumed.ull);
+	}
+
 	// GetAdaptiveBeam is used by ExpandArc and FinalizeProcessNonemitting
 	//
 	// Given the fact that the token queues are too small to store 
 	// all possible tokens in the worst case scenario (where we could generate "nstates" tokens),
 	// we need to tighten the beam if we notice that we are at risk of overflowing either the aux_q
 	// or the main_q
-	__device__ __forceinline__ CostType GetAdaptiveBeam(const CostType default_beam,
-			const int32 q_size,
-			const int32 q_capacity) {
-		// Doing something simple for now
-		// We have to keep beam large enough,
-		// the final cutoff will be used for the final
-		// prune. If it is too small, we won't keep enough tokens
-		CostType beam = default_beam;
 
-		// TODO do something better 
-		if(q_size >= q_capacity/2) 
+	__device__ void UpdateAdaptiveBeam(const DeviceParams &cst_dev_params, 
+							const int aux_q_index_block_offset, 
+							IntegerCostType min_int_cost,
+							int2 *adaptive_int_beam_with_validity_index,
+							LaneCounters *lane_counters) {
+		int32 beam_valid_until_idx = adaptive_int_beam_with_validity_index->y;
+		if(aux_q_index_block_offset < beam_valid_until_idx) 
+			return; //nothing to do
+
+		CostType beam = orderedIntToFloat(adaptive_int_beam_with_validity_index->x);
+		while(aux_q_index_block_offset >= beam_valid_until_idx) {
 			beam /= 2;
-
-		return beam;
+			beam_valid_until_idx += cst_dev_params.adaptive_beam_bin_width;
+		}
+		IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(min_int_cost) + beam);
+		IntegerCostType int_beam = floatToOrderedInt(beam);
+		adaptive_int_beam_with_validity_index->x = int_beam;
+		adaptive_int_beam_with_validity_index->y = beam_valid_until_idx; 
+		// We can have races between the two atomics
+		// However the worst than can happen is a CTA might delay updating the beam
+		// This is not a critical bug. However, once we have a floatToOrderedInt
+		// that is generating unsigned ints, we could merge the two atomics into a single atomic64
+		atomicMin(&lane_counters->adaptive_int_beam_with_validity_index.x, int_beam);
+		atomicMax(&lane_counters->adaptive_int_beam_with_validity_index.y, beam_valid_until_idx);
+		atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
 	}
 
 
@@ -309,10 +333,9 @@ namespace kaldi {
 						// We are overflowing the main_q
 						// We first revert what this CTA has done, ie revert the previous atomicAdd
 						// because all CTAs will revert, we know we will have a valid state after completion of this kernel
-						//atomicSub(&lane_counters->main_q_end_and_narcs, block_sum); TODO
+						atomicSub(&lane_counters->main_q_narcs_and_end, block_sum); 
 						lane_counters->q_overflow = 1; // for the host
 						sh_main_q_global_block_offset.y = cst_dev_params.q_capacity; // used as flag to broadcast the information in the CTA 
-						// We cannot jump to finalize_kernel now, we are in a divergent branch
 					} else 
 						sh_main_q_global_block_offset = block_offset;
 				}
@@ -325,7 +348,7 @@ namespace kaldi {
 				// Checking if we are overflowing the main_q
 				// All threads are executing the next line
 				if(sh_main_q_global_block_offset.y == cst_dev_params.q_capacity) 
-					return;	 //done
+					goto end_lane;	 //done for this lane
 
 				// If we are executing the following lines it means that we are not overflowing the queue
 				// We then continue what we were doing
@@ -348,6 +371,7 @@ namespace kaldi {
 				}
 			}
 
+			end_lane:;
 		}
 	}
 
@@ -387,7 +411,6 @@ namespace kaldi {
 		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
 			const LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
 			const int32 main_q_end = lane_counters->main_q_narcs_and_end.y;
-
 			// The condition of the for loop is the same for all threads in the CUDA block
 			// we want to keep all threads alive at the same time for now
 			// otherwise __syncthreads() would fail
@@ -530,6 +553,7 @@ namespace kaldi {
 				const int32 main_q_end = lane_counters->main_q_narcs_and_end.y;
 				const int32 total_narcs = lane_counters->main_q_narcs_and_end.x;
 				KALDI_CUDA_DECODER_1D_BLOCK_OFFSET_KERNEL_LOOP(block_offset, thread_idx, total_narcs) {
+					int2 adaptive_int_beam_with_validity_index = lane_counters->adaptive_int_beam_with_validity_index;
 					// Position of considered token in the main_q
 					const int32 ichannel = params.channel_to_compute[ilane];
 					// Important : this thread is not responsible for a token in the input queue main_q
@@ -657,23 +681,12 @@ namespace kaldi {
 					int2 int_cost_and_index = {int_total_cost, has_successor};
 					BlockScan(sh_temp_storage_scan).InclusiveScan(int_cost_and_index, int_cost_and_index, MinPlus());
 					if(KALDI_CUDA_DECODER_IS_LAST_1D_THREAD()) {
-						// We can find a lower global_min_cost only in the emitting stage
-						if(IS_EMITTING) {
-							IntegerCostType global_min_int_cost = lane_counters->min_int_cost;
-							IntegerCostType local_min_int_cost = int_cost_and_index.x;
-							// if we found a lower min_cost, update the global value
-							if(local_min_int_cost < global_min_int_cost) {
-								atomicMin(&lane_counters->min_int_cost, local_min_int_cost);
-								const CostType beam = orderedIntToFloat(lane_counters->int_beam);
-								IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(local_min_int_cost) + beam);
-								atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
-							}
-						}
 						// We are in a divergent branch
 						// This is the last thread. The last value of the inclusive scan is the total
 						const int32 total_successors_in_block = int_cost_and_index.y;
 						// Requesting a spot of size total_successors_in_block in the aux_q
 						const int aux_q_index_block_offset = atomicAdd(&lane_counters->aux_q_end, total_successors_in_block);
+				
 						// All threads will need this value
 						// Saving in shared memory
 						sh_aux_q_index_block_offset = aux_q_index_block_offset;
@@ -682,7 +695,7 @@ namespace kaldi {
 						// we detect it before actually using the aux_q
 						// We try to prevent an overflow from happening using an adaptive beam (cf GetAdaptiveBeam)
 						//
-						if((sh_aux_q_index_block_offset + total_successors_in_block) >= cst_dev_params.q_capacity) {
+						if((aux_q_index_block_offset + total_successors_in_block) >= cst_dev_params.q_capacity) {
 							// sh_aux_q_index_block_offset is in shared memory
 							// its value is currently invalid (overflow)
 							// we set it to a special value and use it as a flag to broadcast
@@ -700,15 +713,30 @@ namespace kaldi {
 							// is executing this
 							// We wait until the end of the divergent branch
 						} else {
-							// If we are not overflowing the queue, let's check if we need to 
-							// tighten the beam. If the occupancy of the aux_q gets too high,
-							// the adaptive beam will reduce the beam
-							CostType new_beam = GetAdaptiveBeam(cst_dev_params.default_beam, 
-									aux_q_index_block_offset,
-									cst_dev_params.q_capacity);
-							if(new_beam < cst_dev_params.default_beam
-									&& new_beam < orderedIntToFloat(lane_counters->int_beam)) 
-								atomicMin(&lane_counters->int_beam, floatToOrderedInt(new_beam));
+							// We are not overflowing the queue, updating the global values
+							if(IS_EMITTING) {
+								// We can find a lower global_min_cost only in the emitting stage
+								IntegerCostType global_min_int_cost = lane_counters->min_int_cost;
+								IntegerCostType local_min_int_cost = int_cost_and_index.x;
+								// if we found a lower min_cost, update the global value
+								if(local_min_int_cost < global_min_int_cost) {
+									global_min_int_cost = local_min_int_cost;
+									atomicMin(&lane_counters->min_int_cost, global_min_int_cost);
+									CostType beam = orderedIntToFloat(adaptive_int_beam_with_validity_index.x);
+									IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(local_min_int_cost) + beam);
+									atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
+								}
+								int32 beam_valid_until_idx = adaptive_int_beam_with_validity_index.y;
+								if(aux_q_index_block_offset >= beam_valid_until_idx) {
+									// This beam is no longer valid. Updating it
+									// TODO move out of emitting 
+									UpdateAdaptiveBeam(cst_dev_params, 
+											aux_q_index_block_offset, 
+											global_min_int_cost, 
+											&adaptive_int_beam_with_validity_index,
+											lane_counters);
+								}
+							}
 						}
 					}
 
@@ -718,11 +746,8 @@ namespace kaldi {
 					__syncthreads(); 
 					// The only case where we can have that condition met,
 					// is if we detected an overflow if the previous lines
-					// we need to finalize our work and quit 
-					// Now all threads are executing this code. We can jump
-					// to finalize_kernel
 					if(sh_aux_q_index_block_offset == cst_dev_params.q_capacity) 
-						return;
+						goto end_lane; // done for this lane
 					//
 					// If we're executing the following lines it means everything
 					// is valid and we are not overflowing the aux_q
@@ -747,6 +772,7 @@ namespace kaldi {
 
 					}
 				}
+			end_lane:;
 			}
 		}
 
@@ -815,7 +841,11 @@ namespace kaldi {
 			const ChannelCounters *channel_counters = cst_dev_params.d_channels_counters.channel(ichannel);
 			lane_counters->main_q_narcs_and_end = channel_counters->prev_main_q_narcs_and_end;
 			lane_counters->main_q_n_extra_prev_tokens = channel_counters->prev_main_q_n_extra_prev_tokens; 
-			lane_counters->int_beam = floatToOrderedInt(channel_counters->prev_beam); // TODO rename prev_beam is actually the new frame beam
+			CostType beam = channel_counters->prev_beam; // TODO rename prev_beam is actually the new frame beam
+			IntegerCostType int_beam = floatToOrderedInt(beam);
+			lane_counters->int_beam = int_beam; 
+			lane_counters->adaptive_int_beam_with_validity_index.x = int_beam;
+			lane_counters->adaptive_int_beam_with_validity_index.y = cst_dev_params.adaptive_beam_static_segment;
 			lane_counters->main_q_global_offset = channel_counters->prev_main_q_global_offset; // we'll update it after emitting
  			lane_counters->main_q_extra_prev_tokens_global_offset = channel_counters->prev_main_q_extra_prev_tokens_global_offset;
 			lane_counters->int_cutoff = INT_MAX;
@@ -855,6 +885,9 @@ namespace kaldi {
 				lane_counters->aux_q_end = 0;	
 				// We are done processing those arcs
 				lane_counters->main_q_narcs_and_end.x = 0;
+ 				// Resetting the adaptive beam
+				lane_counters->adaptive_int_beam_with_validity_index.x = lane_counters->int_beam;
+				lane_counters->adaptive_int_beam_with_validity_index.y = cst_dev_params.adaptive_beam_static_segment;
 				if(IS_EMITTING) {
 					// the main_q contains the tokens from the previous frame
 					// after emitting, we won't use them anymore to create new tokens
@@ -862,7 +895,8 @@ namespace kaldi {
 					lane_counters->main_q_narcs_and_end = {0,0};
 					// The main_q was flushed - we need to update the global_offset
 					lane_counters->main_q_global_offset += prev_main_q_end;
-					int val = lane_counters->main_q_extra_prev_tokens_global_offset += prev_n_extra_prev_tokens;
+					if(threadIdx.x == 0 && blockIdx.x == 0)
+						lane_counters->main_q_extra_prev_tokens_global_offset += prev_n_extra_prev_tokens;
 					// Moving local offset. Tokens created by last expand
 					// will be pruned, and survivals will be moved at the end
 					// of the main q. Those tokens will be placed after local_offset 
@@ -984,7 +1018,7 @@ namespace kaldi {
 	__global__ void clear_hashmap_kernel(DeviceParams cst_dev_params, KernelParams params) {
 		const int nlanes = params.nlanes_used;
 		KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
-			const LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
+			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
 			const int main_q_end = lane_counters->main_q_narcs_and_end.y;
 			KALDI_CUDA_DECODER_1D_KERNEL_LOOP(main_q_idx, main_q_end) {
 				int32 hash_idx = cst_dev_params.d_main_q_representative_id.lane(ilane)[main_q_idx];
@@ -994,6 +1028,11 @@ namespace kaldi {
 					cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx] =  {KALDI_CUDA_DECODER_HASHMAP_NO_KEY, 0, {INT_MAX, -1}}; // clear
 				}
 			}
+
+			// This is the last kernel for that frame
+			// Resets q_overflow
+			if(threadIdx.x == 0 && blockIdx.x == 0)
+				lane_counters->q_overflow = 0;
 		}
 	}
 
@@ -1089,7 +1128,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 						if((aux_q_end + nsuccessors) >= cst_dev_params.q_capacity) {
 							lane_counters->q_overflow = 1;
 							// nothing to revert in global memory
-							goto finalize_kernel;
+							goto finalize_lane;
 						}
 
 						if(has_successor) {
@@ -1138,7 +1177,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 						const int32 total_ntokens = aggregate.y; 
 						if((main_q_end + total_ntokens) >= cst_dev_params.q_capacity) {
 							lane_counters->q_overflow = 1;
-							goto finalize_kernel;
+							goto finalize_lane;
 						}
 						const int32 degree_prefix_sum = main_q_narcs + narcs_and_ntokens_prefix_sum.x;
 						const int32 degree_sum = aggregate.x;
@@ -1158,7 +1197,8 @@ we do not need inter-block communication (we launch only one CUDA block)
 					}
 					aux_q_end = 0; // aux_q is now considered empty
 				}
-finalize_kernel:
+				
+				finalize_lane:
 				if(threadIdx.x == 0) {
 					// This main_q is now final for that frame
 					int32 min_int_cost = lane_counters->min_int_cost;
@@ -1391,7 +1431,9 @@ finalize_kernel:
 					CostType new_beam = (beam/KALDI_CUDA_DECODER_NBINS)*(bin_id+1);
 					//if(use_aux_q) printf("aux:\t");
 					//printf("ilane=%i, achieved=%i, max_active=%i, new_beam=%f < %f \n",ilane,(prefix_sum+val), max_active, new_beam, beam);
-					lane_counters->int_beam = floatToOrderedInt(new_beam);
+					IntegerCostType new_int_beam = floatToOrderedInt(new_beam);
+					lane_counters->int_beam = new_int_beam; 
+					lane_counters->adaptive_int_beam_with_validity_index.x = new_int_beam; 
 					lane_counters->int_cutoff = floatToOrderedInt(min_cost + new_beam);
 					// keep looping, we need to reset to 0 the histogram
 				}
