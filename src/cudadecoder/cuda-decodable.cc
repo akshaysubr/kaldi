@@ -198,12 +198,15 @@ namespace kaldi {
       nvtxRangePop();
       return false;
     }
-    nvtxRangePushA("DeterminizeLatticePhonePrunedWrapper");
-    //Determinize lattice
-    DeterminizeLatticePhonePrunedWrapper(
-      trans_model_, &state->lat, config_.decoder_opts_.lattice_beam, clat, config_.det_opts_);
-    nvtxRangePop();
 
+    if(!config_.determinize_lattice_) {
+      //Determinzation was not done by worker threads so do it here
+      //TODO make a copy because wrapper below is destructive.  There may be a better way to do this.  Ask Dan.
+      Lattice lat=state->lat;
+      DeterminizeLatticePhonePrunedWrapper(trans_model_, &lat, 
+                    config_.decoder_opts_.lattice_beam, &state->dlat, config_.det_opts_);
+    }
+    *clat=state->dlat;    //grab compact lattice
     nvtxRangePop();
     return true;
   }
@@ -225,7 +228,8 @@ namespace kaldi {
     std::vector<OnlineNnet2FeaturePipeline*> features;
     std::vector<CudaDecodableInterface*> decodables;
     std::vector<int> completed_channels;         
-    std::vector<Lattice*> lattices;        
+    std::vector<Lattice*> lattices;               //Raw lattices
+    std::vector<CompactLattice*> dlattices;       //Determinized Lattices
 
     //Initialize reuseale data structures
     {
@@ -238,6 +242,7 @@ namespace kaldi {
       decodables.reserve(config_.max_batch_size_);
       completed_channels.reserve(config_.max_batch_size_);
       lattices.reserve(config_.max_batch_size_);
+      dlattices.reserve(config_.max_batch_size_);
 
       //add all channels to free channel list
       for (int i=0;i<config_.max_batch_size_;i++) {
@@ -338,6 +343,7 @@ namespace kaldi {
 
             completed_channels.clear();
             lattices.clear();
+            dlattices.clear();
 
             for (int i=0;i<tasks.size();i++) {
               ChannelId channel=channels[cur];
@@ -347,6 +353,7 @@ namespace kaldi {
 
               if (toDecode==numDecoded) {  //if current task is completed  
                 lattices.push_back(&state.lat);
+                dlattices.push_back(&state.dlat);
                 completed_channels.push_back(channel);
                 free_channels.push_back(channel);
 
@@ -367,6 +374,18 @@ namespace kaldi {
 
             //Get best path for completed tasks
             cuda_decoders.GetRawLattice(completed_channels,lattices,true);
+
+            if(config_.determinize_lattice_) {
+              nvtxRangePushA("DeterminizeLattice");
+              for(int i=0;i<completed_channels.size();i++) {
+                //TODO wrapper below is destructive and we want to save the raw lattice.  
+                //So we make a copy here.  There may be a better way to do this.
+                Lattice lat=*lattices[i]; 
+                DeterminizeLatticePhonePrunedWrapper(trans_model_, &lat, 
+                    config_.decoder_opts_.lattice_beam, dlattices[i], config_.det_opts_);
+              }
+              nvtxRangePop();
+            }
 
             // clean up datastructures
             for (int i=cur;i<tasks.size();i++) {

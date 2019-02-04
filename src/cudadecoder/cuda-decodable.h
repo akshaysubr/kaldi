@@ -38,13 +38,14 @@ namespace kaldi {
 	 */
 	//configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
 	struct BatchedCudaDecoderConfig {
-		BatchedCudaDecoderConfig() : max_batch_size_(20) {};
+		BatchedCudaDecoderConfig() : max_batch_size_(10), num_threads_(7), determinize_lattice_(true) {};
 		void Register(OptionsItf *po) {
 			feature_opts_.Register(po);
 			decodable_opts_.Register(po);
 			decoder_opts_.Register(po);
 			po->Register("max-batch-size",&max_batch_size_, "The maximum batch size to be used by the decoder.");
 			po->Register("cuda-cpu-threads",&num_threads_, "The number of workpool threads to use in the cuda decoder");
+      po->Register("determinize-lattice", &determinize_lattice_, "Determinize the lattice before output.");
 			decoder_opts_.nlanes=max_batch_size_;
 			decoder_opts_.nchannels=max_batch_size_;
       det_opts_.Register(po);
@@ -52,6 +53,7 @@ namespace kaldi {
 		}
 		int max_batch_size_;
 		int num_threads_;
+    bool determinize_lattice_;
 
 		OnlineNnet2FeaturePipelineConfig  feature_opts_;           //constant readonly
 		nnet3::NnetSimpleLoopedComputationOptions decodable_opts_; //constant readonly
@@ -159,7 +161,8 @@ namespace kaldi {
         bool error;
         std::string error_string;
 
-        Lattice lat;          //Lattice output
+        Lattice lat;          //Raw Lattice output 
+        CompactLattice dlat;  //Determinized lattice output.  Only set if determinize-lattice=true
         std::atomic<bool> finished;  //Tells master thread if task has finished execution
 
         TaskState() : wave_samples(NULL),sample_frequency(0), error(false), finished(false) {}

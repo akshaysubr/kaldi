@@ -96,14 +96,12 @@ int main(int argc, char *argv[]) {
     int iterations=1;
     ParseOptions po(usage);
     int pipeline_length=2000; //length of pipeline of outstanding requests, this is independent of queue lengths in decoder
-    bool determinize_lattice=true;
 
     po.Register("write-lattice",&write_lattice, "Output lattice to a file.  Setting to false is useful when benchmarking.");
     po.Register("word-symbol-table", &word_syms_rxfilename, "Symbol table for words [for debug output]");
     po.Register("file-limit", &num_todo, 
         "Limits the number of files that are processed by this driver.  After N files are processed the remaing files are ignored.  Useful for profiling.");
     po.Register("iterations", &iterations, "Number of times to decode the corpus.  Output will be written only once.");
-    po.Register("determinize-lattice", &determinize_lattice, "Determinize the lattice before output.");
 
     //Multi-threaded CPU and batched GPU decoder
     BatchedCudaDecoderConfig batchedDecoderConfig;
@@ -169,17 +167,15 @@ int main(int argc, char *argv[]) {
 
         while (processed.size()>=pipeline_length) {
           std::string &utt = processed.front();
-
           CompactLattice clat;
-
           bool valid;
 
-          if(determinize_lattice) {
+          if(batchedDecoderConfig.determinize_lattice_) {
             valid=CudaDecoder.GetLattice(utt,&clat);
           } else {
             Lattice lat;
             valid=CudaDecoder.GetRawLattice(utt,&lat);
-            if(valid) ConvertLattice(lat, &clat);
+            ConvertLattice(lat,&clat);
           }
 
           if(valid) {
@@ -201,27 +197,25 @@ int main(int argc, char *argv[]) {
       while (processed.size()>0) {
         std::string &utt = processed.front();
         CompactLattice clat;
-          
         bool valid;
-        if(determinize_lattice) {
+
+        if(batchedDecoderConfig.determinize_lattice_) {
           valid=CudaDecoder.GetLattice(utt,&clat);
         } else {
           Lattice lat;
           valid=CudaDecoder.GetRawLattice(utt,&lat);
-          if(valid) ConvertLattice(lat, &clat);
+          ConvertLattice(lat,&clat);
         }
 
         if(valid) {
           GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
-    
+
           if (write_lattice && iter==0 ) {
             clat_writer.Write(utt, clat);
           }
         }
-
         CudaDecoder.CloseDecodeHandle(utt);
         processed.pop();
-
       } //end for
       nvtxRangePop();
       auto finish = std::chrono::high_resolution_clock::now();
