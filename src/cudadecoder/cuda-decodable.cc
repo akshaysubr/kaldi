@@ -165,6 +165,7 @@ namespace kaldi {
   }
 
   bool ThreadedBatchedCudaDecoder::GetRawLattice(const std::string &key, Lattice *lat) {
+    nvtxRangePushA("GetRawLattice");
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
@@ -173,14 +174,18 @@ namespace kaldi {
     //wait for task to finish.  This should happens automatically without intervention from the master thread.
     while (state->finished==false);
 
-    if(state->error)
+    if(state->error) {
+      nvtxRangePop();
       return false;
+    }
     //Store off the lattice
     *lat=state->lat;
+    nvtxRangePop();
     return true;
   }
   
   bool ThreadedBatchedCudaDecoder::GetLattice(const std::string &key, CompactLattice *clat) {
+    nvtxRangePushA("GetLattice");
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
 
@@ -189,13 +194,17 @@ namespace kaldi {
     //wait for task to finish.  This should happens automatically without intervention from the master thread.
     while (state->finished==false);
     
-    if(state->error)
+    if(state->error) {
+      nvtxRangePop();
       return false;
-
+    }
+    nvtxRangePushA("DeterminizeLatticePhonePrunedWrapper");
     //Determinize lattice
     DeterminizeLatticePhonePrunedWrapper(
       trans_model_, &state->lat, config_.decoder_opts_.lattice_beam, clat, config_.det_opts_);
+    nvtxRangePop();
 
+    nvtxRangePop();
     return true;
   }
 

@@ -54,7 +54,7 @@ namespace kaldi {
 	}
 
 
-	float orderedIntToFloatHost(int32 intVal) {
+	float orderedIntToFloatHost(__attribute__((__may_alias__)) int32 intVal) {
 		intVal =  (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
 		return reinterpret_cast<float&>(intVal);
 	} 
