@@ -182,7 +182,9 @@ int main(int argc, char *argv[]) {
             GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
 
             if (write_lattice && iter==0 ) {
+              nvtxRangePushA("Lattice Write");
               clat_writer.Write(utt, clat);
+              nvtxRangePop();
             }
           }
           CudaDecoder.CloseDecodeHandle(utt);
@@ -193,7 +195,6 @@ int main(int argc, char *argv[]) {
         if (num_todo!=-1 && num_done>=num_todo) break;
       } //end utterance loop
 
-      nvtxRangePushA("Lattice Write");
       while (processed.size()>0) {
         std::string &utt = processed.front();
         CompactLattice clat;
@@ -209,15 +210,15 @@ int main(int argc, char *argv[]) {
 
         if(valid) {
           GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames, &tot_like);
-
           if (write_lattice && iter==0 ) {
+            nvtxRangePushA("Lattice Write");
             clat_writer.Write(utt, clat);
+            nvtxRangePop();
           }
         }
         CudaDecoder.CloseDecodeHandle(utt);
         processed.pop();
       } //end for
-      nvtxRangePop();
       auto finish = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> total_time = finish-start;
       KALDI_LOG << "Iteration: " << iter << " Aggregate Total Time: " << total_time.count()
