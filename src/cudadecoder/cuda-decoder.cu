@@ -25,8 +25,6 @@
 #include <tuple>
 #include <map>
 
-#define MEMADVISE
-
 namespace kaldi {
 	CudaDecoder::CudaDecoder(const CudaFst &fst, 
 			const CudaDecoderConfig &config,
@@ -40,7 +38,7 @@ namespace kaldi {
 	max_active_(config.max_active), 
 	nlanes_(nlanes),
 	nchannels_(nchannels) {
-		KALDI_ASSERT(nlanes_ < KALDI_CUDA_DECODER_MAX_N_LANES);
+		KALDI_ASSERT(nlanes_ <= KALDI_CUDA_DECODER_MAX_N_LANES);
 		//
 		// For a description of the class members, please refer to the cuda-decoder.h file
 		//
