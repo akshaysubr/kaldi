@@ -882,6 +882,8 @@ namespace kaldi {
 				const int prev_main_q_end = lane_counters->main_q_narcs_and_end.y;
 				const int prev_n_extra_prev_tokens = lane_counters->main_q_n_extra_prev_tokens;
 				const int aux_q_end = lane_counters->aux_q_end;
+				CostType beam = orderedIntToFloat(lane_counters->int_beam);		
+				CostType min_cost = orderedIntToFloat(lane_counters->min_int_cost);		
 				// The next step is the contracting step from aux_q to main_q
 				// It will need the aux_q_end value. But it will also empty the aux_q
 				// We're resetting aux_q_end to 0 now, but we're saving its old value 
@@ -893,6 +895,9 @@ namespace kaldi {
  				// Resetting the adaptive beam
 				lane_counters->adaptive_int_beam_with_validity_index.x = lane_counters->int_beam;
 				lane_counters->adaptive_int_beam_with_validity_index.y = cst_dev_params.adaptive_beam_static_segment;
+				// If the adaptive beam kicked in, we want to reset the beam
+				// the max-active process will take care of selecting the right beam
+				lane_counters->int_cutoff = floatToOrderedInt(min_cost + beam); 
 				if(IS_EMITTING) {
 					// the main_q contains the tokens from the previous frame
 					// after emitting, we won't use them anymore to create new tokens
