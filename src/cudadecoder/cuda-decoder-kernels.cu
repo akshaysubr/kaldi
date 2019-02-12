@@ -18,6 +18,7 @@
 
 #define KALDI_CUDA_DECODER_DIV_ROUND_UP(a,b) ((a+b-1)/b)
 namespace kaldi {
+
 	// 1:1 Conversion float <---> sortable int
 	// We convert floats to sortable ints in order
 	// to use native atomics operation, which are 
@@ -332,17 +333,20 @@ namespace kaldi {
 					//
 					// We then store the return value, which is the global offset on where to store those tokens,
 					// and the total number of arcs up until that global offset
-					int2 block_offset = atomicAddI2(&lane_counters->main_q_narcs_and_end, block_sum);
-					const int32 new_main_q_end = block_offset.y + block_sum.y;
-					if(new_main_q_end >= cst_dev_params.q_capacity) {
-						// We are overflowing the main_q
-						// We first revert what this CTA has done, ie revert the previous atomicAdd
-						// because all CTAs will revert, we know we will have a valid state after completion of this kernel
-						atomicSub(&lane_counters->main_q_narcs_and_end, block_sum); 
-						lane_counters->q_overflow = 1; // for the host
-						sh_main_q_global_block_offset.y = cst_dev_params.q_capacity; // used as flag to broadcast the information in the CTA 
-					} else 
-						sh_main_q_global_block_offset = block_offset;
+				
+          // note: we use 2 atomic counters here to avoid adding another kernel.  
+          // first atomic pass.  Request space for writes.
+          int block_offset = atomicAdd(&lane_counters->main_q_requested, block_sum.y);
+
+          // Verify that we do not overflow
+          if (block_offset + block_sum.y < cst_dev_params.q_capacity) {
+            //we don't overflow we can safely grab a spot in the main_q
+            sh_main_q_global_block_offset = atomicAddI2(&lane_counters->main_q_narcs_and_end, block_sum);
+          } else {
+            //our update would overflow
+						lane_counters->q_overflow |= OVERFLOW_MAIN_Q; // for the host
+					  sh_main_q_global_block_offset.y = cst_dev_params.q_capacity; // used as flag to broadcast the information in the CTA 
+          }
 				}
 
 				// Syncing because : 
@@ -690,35 +694,20 @@ namespace kaldi {
 						// This is the last thread. The last value of the inclusive scan is the total
 						const int32 total_successors_in_block = int_cost_and_index.y;
 						// Requesting a spot of size total_successors_in_block in the aux_q
-						const int aux_q_index_block_offset = atomicAdd(&lane_counters->aux_q_end, total_successors_in_block);
-				
-						// All threads will need this value
-						// Saving in shared memory
-						sh_aux_q_index_block_offset = aux_q_index_block_offset;
-						//
-						// Here we detect an overflow of the aux_q
-						// we detect it before actually using the aux_q
+
+            //note:  using 2 atomics here to avoid adding another kernel
+            //first request more space
+						const int aux_q_index_block_offset = atomicAdd(&lane_counters->aux_q_requested, total_successors_in_block);
+
+            //check for overflow in aux_q
 						// We try to prevent an overflow from happening using an adaptive beam (cf GetAdaptiveBeam)
-						//
-						if((aux_q_index_block_offset + total_successors_in_block) >= cst_dev_params.q_capacity) {
-							// sh_aux_q_index_block_offset is in shared memory
-							// its value is currently invalid (overflow)
-							// we set it to a special value and use it as a flag to broadcast
-							// the fact that we have an overflow and that all threads should exit
-							sh_aux_q_index_block_offset = cst_dev_params.q_capacity;
-							// We revert the last operation. All threads that detected the overflow 
-							// will revert what they've done. It means that at the end of the kernel,
-							// we'll be back to the last valid state 
-							// We'll be able to continue computation, but quality of the output
-							// may be lower (we weren't able to save all tokens)
-							atomicAdd(&lane_counters->aux_q_end, -total_successors_in_block); 
-							// Setting the flag for the host. It will be used to print a warning to stderr
-							lane_counters->q_overflow = 1; 
-							// We do not jump to finalize_kernel now, because only threadIdx.x == 0 
-							// is executing this
-							// We wait until the end of the divergent branch
-						} else {
-							// We are not overflowing the queue, updating the global values
+            if(aux_q_index_block_offset + total_successors_in_block < cst_dev_params.q_capacity) {
+              //no overflow
+
+              //grab the aux_q offset
+              sh_aux_q_index_block_offset = atomicAdd(&lane_counters->aux_q_end, total_successors_in_block);
+							
+              // We are not overflowing the queue, updating the global values
 							if(IS_EMITTING) {
 								// We can find a lower global_min_cost only in the emitting stage
 								IntegerCostType global_min_int_cost = lane_counters->min_int_cost;
@@ -742,7 +731,20 @@ namespace kaldi {
 											lane_counters);
 								}
 							}
-						}
+            } else {
+							// sh_aux_q_index_block_offset is in shared memory
+							// its value is currently invalid (overflow)
+							// we set it to a special value and use it as a flag to broadcast
+							// the fact that we have an overflow and that all threads should exit
+							sh_aux_q_index_block_offset = cst_dev_params.q_capacity;
+							
+              // Setting the flag for the host. It will be used to print a warning to stderr
+							lane_counters->q_overflow |= OVERFLOW_AUX_Q; 
+							
+              // We do not jump to finalize_kernel now, because only threadIdx.x == 0 
+							// is executing this
+							// We wait until the end of the divergent branch
+            }
 					}
 
 					// Sync'ing for two reasons :
@@ -770,11 +772,11 @@ namespace kaldi {
 						// we need to add the offset related to the previous frames index
 						// we add cst_dev_params.main_q_global_offset
 						//if(IS_EMITTING) 
-							cst_dev_params.d_aux_q_acoustic_cost.lane(ilane)[aux_q_index] = acoustic_cost;
-						
-						const int32 prev_token = lane_counters->main_q_global_offset + main_q_idx;
-						cst_dev_params.d_aux_q_info.lane(ilane)[aux_q_index] = {prev_token, arc_idx};
+						cst_dev_params.d_aux_q_acoustic_cost.lane(ilane)[aux_q_index] = acoustic_cost;
 
+						const int32 prev_token = lane_counters->main_q_global_offset + main_q_idx;
+						assert(main_q_idx >= 0 && main_q_idx < cst_dev_params.q_capacity);
+						cst_dev_params.d_aux_q_info.lane(ilane)[aux_q_index] = {prev_token, arc_idx};
 					}
 				}
 			end_lane:;
@@ -791,6 +793,7 @@ namespace kaldi {
 		LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(init_ilane);
 
 		lane_counters->aux_q_end = 0;
+    lane_counters->aux_q_requested = 0;
 		lane_counters->post_expand_aux_q_end = 1;
 		lane_counters->main_q_global_offset = 0; 
 		lane_counters->main_q_local_offset = 0;
@@ -799,6 +802,7 @@ namespace kaldi {
 		lane_counters->min_int_cost = INT_MAX;
 		lane_counters->int_beam = floatToOrderedInt(cst_dev_params.default_beam);
     lane_counters->main_q_narcs_and_end = {0,0};
+    lane_counters->main_q_requested = 0;
 
 		// Simulate a previously generated aux_q containing init state
 		const StateId init_state = cst_dev_params.init_state;
@@ -844,7 +848,8 @@ namespace kaldi {
 			// Getting the lane ready for that channel
 			LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
 			const ChannelCounters *channel_counters = cst_dev_params.d_channels_counters.channel(ichannel);
-			lane_counters->main_q_narcs_and_end = channel_counters->prev_main_q_narcs_and_end;
+      int2 main_q_narcs_and_end = channel_counters->prev_main_q_narcs_and_end;
+			lane_counters->main_q_narcs_and_end = main_q_narcs_and_end;
 			lane_counters->main_q_n_extra_prev_tokens = channel_counters->prev_main_q_n_extra_prev_tokens; 
 			CostType beam = channel_counters->prev_beam; // TODO rename prev_beam is actually the new frame beam
 			IntegerCostType int_beam = floatToOrderedInt(beam);
@@ -855,7 +860,7 @@ namespace kaldi {
  			lane_counters->main_q_extra_prev_tokens_global_offset = channel_counters->prev_main_q_extra_prev_tokens_global_offset;
 			lane_counters->int_cutoff = INT_MAX;
 			lane_counters->min_int_cost = INT_MAX;
-			lane_counters->q_overflow = 0;	  
+			lane_counters->q_overflow = OVERFLOW_NONE;	  
 		}
 	}
 
@@ -890,8 +895,11 @@ namespace kaldi {
 				// in another place
 				lane_counters->post_expand_aux_q_end = aux_q_end;
 				lane_counters->aux_q_end = 0;	
+        lane_counters->aux_q_requested = 0;
 				// We are done processing those arcs
 				lane_counters->main_q_narcs_and_end.x = 0;
+        // reset requested to end of queue
+        lane_counters->main_q_requested = lane_counters->main_q_narcs_and_end.y;
  				// Resetting the adaptive beam
 				lane_counters->adaptive_int_beam_with_validity_index.x = lane_counters->int_beam;
 				lane_counters->adaptive_int_beam_with_validity_index.y = cst_dev_params.adaptive_beam_static_segment;
@@ -903,6 +911,7 @@ namespace kaldi {
 					// after emitting, we won't use them anymore to create new tokens
 					// we reset the main_q
 					lane_counters->main_q_narcs_and_end = {0,0};
+					lane_counters->main_q_requested = 0;
 					// The main_q was flushed - we need to update the global_offset
 					lane_counters->main_q_global_offset += prev_main_q_end;
 					if(threadIdx.x == 0 && blockIdx.x == 0)
@@ -948,6 +957,7 @@ namespace kaldi {
 					const int32 total_n_extra_prev_tokens = prefix_sum.y+val.y; 
 					lane_counters->main_q_narcs_and_end.x = total_narcs;
 					lane_counters->main_q_n_extra_prev_tokens = total_n_extra_prev_tokens;
+					assert(total_n_extra_prev_tokens >= 0 && total_n_extra_prev_tokens <= main_q_end);
 				}
 
 				if(itile == 0) {
@@ -1016,6 +1026,9 @@ namespace kaldi {
 					cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx] = {prev_global_idx+extra_prev_tokens_offset, -prev_counts}; // negative counts to signal that's a (offset,count) pair
 					int list_idx = extra_prev_tokens_offset + local_idx;
 					cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] = inf_tok; // moving the prev_tokens info in another list
+					//printf("dev= %i < %i ? \n", inf_tok.prev_token, (lane_counters->main_q_global_offset+main_q_end));
+					assert(inf_tok.prev_token >= (lane_counters->main_q_global_offset - cst_dev_params.q_capacity)
+						&& inf_tok.prev_token <= (lane_counters->main_q_global_offset+main_q_end));
 					cst_dev_params.d_main_q_extra_cost.lane(ilane)[list_idx] = {extra_cost,acoustic_cost};
 					//printf("extra_cost[%i] = %f \n", list_idx, extra_cost);
 					//InfoToken inf2_tok = cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] ;
@@ -1042,7 +1055,7 @@ namespace kaldi {
 			// This is the last kernel for that frame
 			// Resets q_overflow
 			if(threadIdx.x == 0 && blockIdx.x == 0)
-				lane_counters->q_overflow = 0;
+				lane_counters->q_overflow = OVERFLOW_NONE;
 		}
 	}
 
@@ -1136,7 +1149,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 
 						// Checking if we are overflowing the aux_q
 						if((aux_q_end + nsuccessors) >= cst_dev_params.q_capacity) {
-							lane_counters->q_overflow = 1;
+							lane_counters->q_overflow |= OVERFLOW_AUX_Q;
 							// nothing to revert in global memory
 							goto finalize_lane;
 						}
@@ -1186,7 +1199,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 						// Checking if we are not overflowing the main_q
 						const int32 total_ntokens = aggregate.y; 
 						if((main_q_end + total_ntokens) >= cst_dev_params.q_capacity) {
-							lane_counters->q_overflow = 1;
+							lane_counters->q_overflow |= OVERFLOW_MAIN_Q;
 							goto finalize_lane;
 						}
 						const int32 degree_prefix_sum = main_q_narcs + narcs_and_ntokens_prefix_sum.x;
