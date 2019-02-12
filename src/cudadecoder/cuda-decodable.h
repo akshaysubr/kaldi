@@ -38,7 +38,7 @@ namespace kaldi {
 	 */
 	//configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
 	struct BatchedCudaDecoderConfig {
-		BatchedCudaDecoderConfig() : max_batch_size_(10), num_threads_(7), determinize_lattice_(true) {};
+		BatchedCudaDecoderConfig() : max_batch_size_(10), num_threads_(7), determinize_lattice_(true), max_pending_tasks_(2000) {};
 		void Register(OptionsItf *po) {
 			feature_opts_.Register(po);
 			decodable_opts_.Register(po);
@@ -46,6 +46,8 @@ namespace kaldi {
 			po->Register("max-batch-size",&max_batch_size_, "The maximum batch size to be used by the decoder.");
 			po->Register("cuda-cpu-threads",&num_threads_, "The number of workpool threads to use in the cuda decoder");
       po->Register("determinize-lattice", &determinize_lattice_, "Determinize the lattice before output.");
+      po->Register("max-outstanding-queue-length", &max_pending_tasks_, 
+            "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
 			decoder_opts_.nlanes=max_batch_size_;
 			decoder_opts_.nchannels=max_batch_size_;
       det_opts_.Register(po);
@@ -54,6 +56,7 @@ namespace kaldi {
 		int max_batch_size_;
 		int num_threads_;
     bool determinize_lattice_;
+    int max_pending_tasks_;
 
 		OnlineNnet2FeaturePipelineConfig  feature_opts_;           //constant readonly
 		nnet3::NnetSimpleLoopedComputationOptions decodable_opts_; //constant readonly
@@ -117,12 +120,7 @@ namespace kaldi {
 	class ThreadedBatchedCudaDecoder {
     public:
 
-      ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config), max_pending_tasks_(2000) {};
-
-      void Register(OptionsItf *po) {
-        po->Register("max-outstanding-queue-length", &max_pending_tasks_, 
-            "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
-      }
+      ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config) {};
 
       //TODO should this take an nnet instead of a string?
       //allocates reusable objects that are common across all decodings
@@ -147,7 +145,7 @@ namespace kaldi {
       bool GetLattice(const std::string &key, CompactLattice *lat);
 
       inline int NumPendingTasks() {
-        return (tasks_back_ - tasks_front_ + max_pending_tasks_+1) % (max_pending_tasks_+1); 
+        return (tasks_back_ - tasks_front_ + config_.max_pending_tasks_+1) % (config_.max_pending_tasks_+1); 
       };
 
     private:
@@ -187,8 +185,6 @@ namespace kaldi {
       void ExecuteWorker(int threadId);
 
       const BatchedCudaDecoderConfig &config_;
-
-      int max_pending_tasks_; 
 
       CudaFst cuda_fst_;
       TransitionModel trans_model_;

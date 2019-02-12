@@ -44,7 +44,7 @@ namespace kaldi {
     thread_contexts_.resize(config_.num_threads_);
 
     //create work queue
-    pending_task_queue_ = new TaskState*[max_pending_tasks_+1]; 
+    pending_task_queue_ = new TaskState*[config_.max_pending_tasks_+1]; 
     tasks_front_ =0;
     tasks_back_ =0;
 
@@ -120,7 +120,7 @@ namespace kaldi {
     tasks_add_mutex_.lock();
     
     //wait for room in pending task queue
-    while (NumPendingTasks()==max_pending_tasks_) {
+    while (NumPendingTasks()==config_.max_pending_tasks_) {
         // qualfied to ensure the right call occurs on windows
         kaldi::Sleep(.01);
     }
@@ -129,7 +129,7 @@ namespace kaldi {
     //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
     pending_task_queue_[tasks_back_]=t;
     //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
-    tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
+    tasks_back_=(tasks_back_+1)%(config_.max_pending_tasks_+1);
     
     tasks_add_mutex_.unlock();
   }
@@ -150,7 +150,7 @@ namespace kaldi {
     tasks_add_mutex_.lock();
     
     //wait for room in pending task queue
-    while (NumPendingTasks()==max_pending_tasks_) {
+    while (NumPendingTasks()==config_.max_pending_tasks_) {
         // qualfied to ensure the right call occurs on windows
         kaldi::Sleep(.01);
     }
@@ -159,7 +159,7 @@ namespace kaldi {
     //locking should not be necessary as only the master thread writes to the queue and tasks_back_.  
     pending_task_queue_[tasks_back_]=t;
     //printf("New task: %p:%s, loc: %d\n", t, key.c_str(), (int)tasks_back_);
-    tasks_back_=(tasks_back_+1)%(max_pending_tasks_+1);
+    tasks_back_=(tasks_back_+1)%(config_.max_pending_tasks_+1);
 
     tasks_add_mutex_.unlock();
   }
@@ -281,7 +281,7 @@ namespace kaldi {
               for (int i=0;i<tasksAssigned;i++) {
                 //printf("%d, Assigned task[%d]: %p\n", i, (int)tasks_front_, pending_task_queue_[tasks_front_]);
                 tasks.push_back(pending_task_queue_[tasks_front_]);
-                tasks_front_=(tasks_front_+1)%(max_pending_tasks_+1);              
+                tasks_front_=(tasks_front_+1)%(config_.max_pending_tasks_+1);              
               }
             }
 
@@ -292,6 +292,7 @@ namespace kaldi {
             for (int i=start;i<tasks.size();i++) {
               TaskState &state = *tasks[i];
 
+              //printf("%d: Key: %s\n", threadId, state.key.c_str());
               //assign a free channel
               ChannelId channel=free_channels.back();
               free_channels.pop_back();
