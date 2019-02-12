@@ -87,6 +87,7 @@ namespace kaldi {
 			typedef StdArc::Label Label;
 			typedef StdArc::StateId StateId;
 
+      enum OVERFLOW_TYPE { OVERFLOW_NONE=0, OVERFLOW_MAIN_Q=1, OVERFLOW_AUX_Q=2 };
   class CudaDecodableInterface : public DecodableInterface {
  		public:
       virtual BaseFloat* GetLogLikelihoodsCudaPointer(int32 subsampled_frame) = 0;
@@ -181,6 +182,10 @@ namespace kaldi {
 		// We sometime need to update both end and narcs at the same time,
 		// which is why they're packed together
 		int2 main_q_narcs_and_end;
+    //contains the requested queue length which can
+    //be larger then the actual queue length in the case of overflow
+    int32 main_q_requested;
+    int32 aux_q_requested;
 
 		// Some kernels need to perform some operations before exiting
 		// n_CTA_done is a counter that we increment when a CTA (CUDA blocks)
@@ -194,8 +199,9 @@ namespace kaldi {
 		// Depending on the value of the parameter "max_tokens_per_frame"
 		// we can end up with an overflow when generating the tokens for a frame
 		// We try to prevent this from happening using an adaptive beam
-		// if an overflow is about to happen, the kernels revert all data
-		// to the last valid state, and set that flag to true
+		// if an overflow happens, then the kernels no longer insert any data into 
+    // the queues and set overflow flag to true.  
+    // queue length.
 		// Even if that flag is set, we can continue the execution (quality
 		// of the output can be lowered)
 		// We use that flag to display a warning to stderr

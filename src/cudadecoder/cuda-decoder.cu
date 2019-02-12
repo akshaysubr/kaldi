@@ -409,7 +409,6 @@ namespace kaldi {
 			h_channels_counters_[ichannel] = h_channels_counters_[init_channel_id_];
 			num_frames_decoded_[ichannel] = 0;
 			frame_offsets_[ichannel].clear();	
-			frame_offsets_[ichannel].push_back(0);	
 			frame_offsets_[ichannel].push_back(n_initial_tokens);	
 		}
 	}
@@ -679,7 +678,7 @@ namespace kaldi {
 
 			// We will write to main_q. We need it to be ready
 			// for next kernels on compute_st_ 
-			bool first_nonemitting = true;;
+			bool first_nonemitting = true;
 			while(true) {
 				// Moving the lanes_params to host,
 				// to have the aux_q_end values
@@ -844,7 +843,7 @@ namespace kaldi {
 			// - h_infotoken_concat_ copy done
 			// - using lane_counters.main_q_n_extra_prev_tokens
 			cudaStreamSynchronize(compute_st_);
-		      	CheckOverflow();
+		  CheckOverflow();
 		
 			// Starting the extra_prev_tokens copies
 			{
@@ -882,6 +881,12 @@ namespace kaldi {
 			// Adding 0.0f acoustic_costs for non-emittings 
 			for(LaneId ilane=0; ilane<nlanes_used; ++ilane) {
 				const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
+				KALDI_ASSERT(frame_offsets_[ichannel].back() == h_lanes_counters_[ilane].main_q_global_offset);
+
+				KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() 
+					== (h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset 
+						+ h_lanes_counters_[ilane].main_q_n_extra_prev_tokens));
+				KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() == h_all_tokens_extra_prev_tokens_[ichannel].size());
 				++num_frames_decoded_[ichannel];
 				const int32 main_q_end = h_lanes_counters_[ilane].main_q_narcs_and_end.y;
 				frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() + main_q_end);
@@ -889,8 +894,26 @@ namespace kaldi {
 				auto &vec = h_all_tokens_acoustic_cost_[ichannel];
 				vec.insert(vec.end(), ntokens_nonemitting, 0.0f);
 				KALDI_ASSERT(vec.size() == h_all_tokens_info_[ichannel].size());
-				KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() == h_all_tokens_extra_prev_tokens_[ichannel].size());
 			}	
+
+			#if 0 
+			// deep asserts
+			if(iframe > 0 ) {
+				for(LaneId ilane=0; ilane<nlanes_used; ++ilane) {
+					const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
+					int prev_offset = h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset;
+					int count =  h_lanes_counters_[ilane].main_q_n_extra_prev_tokens;
+					int global_iframe =num_frames_decoded_[ichannel]-1;
+					int next_frame_offset = frame_offsets_[ichannel][global_iframe+1];
+					int prev_frame_offset = frame_offsets_[ichannel][global_iframe-1];
+					for(int i=prev_offset; i < prev_offset+count; ++i) {
+						int prev_token_idx = h_all_tokens_extra_prev_tokens_[ichannel][i].prev_token;
+						KALDI_ASSERT(prev_token_idx >= prev_frame_offset);
+						KALDI_ASSERT(prev_token_idx < next_frame_offset);
+					}
+				}
+			}
+			#endif 
 
 			KALDI_DECODER_CUDA_CHECK_ERROR();
 		}   
@@ -917,24 +940,34 @@ namespace kaldi {
 		for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
 			LaneCounters *lane_counters = &h_lanes_counters_[ilane];
 			bool q_overflow = lane_counters->q_overflow;
-			if(q_overflow) {
-        //TODO temporary until overflow handling is fixed
-        //throw CudaDecoderException("Overflow increase --max-tokens-per-frame", __FILE__, __LINE__, true);
-				// An overflow was prevented in a kernel
-				// The algorithm can still go on but quality of the result can be reduced
-				// (less tokens were generated)
-				KALDI_WARN << "Preventing overflow of the frame tokens. Pursuing "
-					<< "execution but the quality of the output may be decreased. "
-					<< "To prevent this from happening, please increase the parameter --max-tokens-per-frame"
-					<< " and/or decrease --beam";
+			if(q_overflow!=OVERFLOW_NONE) {
+        // An overflow was prevented in a kernel
+        // The algorithm can still go on but quality of the result can be reduced
+        // (less tokens were generated)
 
-				KALDI_ASSERT(lane_counters->main_q_narcs_and_end.y < max_tokens_per_frame_);
-				KALDI_ASSERT(lane_counters->main_q_narcs_and_end.x >= 0);
-				KALDI_ASSERT(lane_counters->main_q_narcs_and_end.y >= 0);
-				KALDI_ASSERT(lane_counters->post_expand_aux_q_end < max_tokens_per_frame_);
-				KALDI_ASSERT(lane_counters->post_expand_aux_q_end >= 0);
-				KALDI_ASSERT(lane_counters->aux_q_end < max_tokens_per_frame_);
-				KALDI_ASSERT(lane_counters->aux_q_end >= 0);
+        if((q_overflow&OVERFLOW_MAIN_Q)==OVERFLOW_MAIN_Q) {
+          //overflowed main_q
+          KALDI_WARN << "Preventing overflow of main_q. Continuing "
+            << "execution but the quality of the output may be decreased. "
+            << "To prevent this from happening, please increase the parameter --max-tokens-per-frame"
+            << " and/or decrease --beam";
+        }
+        if((q_overflow&OVERFLOW_AUX_Q)==OVERFLOW_AUX_Q){
+          //overflowed aux_q
+          KALDI_WARN << "Preventing overflow of aux_q. Continuing "
+            << "execution but the quality of the output may be decreased. "
+            << "execution but the quality of the output may be decreased. "
+            << "To prevent this from happening, please increase the parameter --max-tokens-per-frame"
+            << " and/or decrease --beam";
+        }
+
+        KALDI_ASSERT(lane_counters->main_q_narcs_and_end.y < max_tokens_per_frame_);
+        KALDI_ASSERT(lane_counters->main_q_narcs_and_end.x >= 0);
+        KALDI_ASSERT(lane_counters->main_q_narcs_and_end.y >= 0);
+        KALDI_ASSERT(lane_counters->post_expand_aux_q_end < max_tokens_per_frame_);
+        KALDI_ASSERT(lane_counters->post_expand_aux_q_end >= 0);
+        KALDI_ASSERT(lane_counters->aux_q_end < max_tokens_per_frame_);
+        KALDI_ASSERT(lane_counters->aux_q_end >= 0);
 			}
 		}
 	}
@@ -1144,6 +1177,45 @@ namespace kaldi {
 			// Total number of tokens generated by the utterance on channel ichannel
 			const int32 total_ntokens = h_all_tokens_info_[ichannel].size();
 
+#if 0
+      //validate lattice consistency
+      for(int frame=0;frame<nframes;frame++) {
+        int token_start=frame_offsets_[ichannel][frame];
+        int token_end=(frame+1<nframes) ? frame_offsets_[ichannel][frame+1] : total_ntokens;
+        int prev_frame_offset=(frame>0) ? frame_offsets_[ichannel][frame-1] : 0;
+        int cur_frame_offset=token_start;
+        int next_frame_offset=token_end;
+
+        //for each token in frame
+        for(int i=token_start;i<token_end;i++) {
+          if(i==0) continue;  //initial token skip this...
+          InfoToken token=h_all_tokens_info_[ichannel][i];
+          KALDI_ASSERT(token.prev_token>=0);
+
+          if(token.IsUniqueTokenForStateAndFrame()) {
+            //previous token must be lower than the next frame start
+            KALDI_ASSERT(token.prev_token<next_frame_offset);
+            //previous token must be larger then previous frame start
+            KALDI_ASSERT(token.prev_token>=prev_frame_offset);
+          } else {
+            int32 offset, size;
+            std::tie(offset,size) = token.GetNextStateTokensList();
+            KALDI_ASSERT(size>0);
+            KALDI_ASSERT(offset>=0 && offset<h_all_tokens_extra_prev_tokens_extra_cost_[ichannel].size());
+            for(auto j=0; j<size; ++j) {
+
+              KALDI_ASSERT(offset+j<h_all_tokens_extra_prev_tokens_[ichannel].size());
+              InfoToken extra_token=h_all_tokens_extra_prev_tokens_[ichannel][offset+j];
+              //previous token must be lower than the next frame start
+              KALDI_ASSERT(extra_token.prev_token<next_frame_offset);
+              //previous token must be larger then previous frame start
+              KALDI_ASSERT(extra_token.prev_token>=prev_frame_offset);
+            }
+          }
+        }
+      }
+#endif
+
 			// Returns a unique id for each (iframe, fst_state) pair
 			// we simply use the fact that token_idx < total_ntokens
 			// We need to be able to quickly identity a (iframe, fst_state) ID, without using the 
@@ -1268,9 +1340,11 @@ namespace kaldi {
 			// We're now going to backtrack frame by frame
 			// For each frame we're going to process tokens that need to be inserted into the output lattice
 			// and add their predecessors to the todo list
-			for(int32 iframe=nframes; iframe >= 0; --iframe) {
+			// iframe == -1 contains the start state and the first non emitting tokens. It is not linked
+			// to a real frame
+			for(int32 iframe=nframes-1; iframe >= -1; --iframe) {
 				// Tokens for the current frame were inserted after this offset in the token list
-				const int32 curr_frame_offset = frame_offsets_[ichannel][iframe];	
+				const int32 curr_frame_offset = (iframe >= 0) ? frame_offsets_[ichannel][iframe] : 0;	
 
 				// Tokens by themselves are in topological order. However, when creating the 
 				// lattice, we merge tokens sharing the same (iframe, fst_state) pair. 
@@ -1472,7 +1546,7 @@ namespace kaldi {
 				f_arc_idx_added.clear();
 
 				KALDI_ASSERT(q_prev_frame_todo.empty());
-				if(iframe > 1) {
+				if(iframe > 0) {
 					KALDI_ASSERT(!q_curr_frame_todo.empty());
 					KALDI_ASSERT(dbg_found_best_path);
 				}
