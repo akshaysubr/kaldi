@@ -1168,7 +1168,7 @@ namespace kaldi {
 		// because the arcs were not considered in topological order, we need to run again the step 1,
 		// to get the correct extra_cost[b] (using the latest extra_cost[a])
 		// However, we only re-run the step 1 if the value extra_cost[a] has changed for more than min_delta
-		const float min_delta = 1e-5;
+		const float min_delta = 0;
 		for(int32 i=0; i<channels.size(); ++i) {
 			nvtxRangePushA("GetRawLatticeOneChannel");
 			const ChannelId ichannel = channels[i];
@@ -1186,6 +1186,7 @@ namespace kaldi {
         int cur_frame_offset=token_start;
         int next_frame_offset=token_end;
 
+        bool found_zero = false;
         //for each token in frame
         for(int i=token_start;i<token_end;i++) {
           if(i==0) continue;  //initial token skip this...
@@ -1201,9 +1202,8 @@ namespace kaldi {
             int32 offset, size;
             std::tie(offset,size) = token.GetNextStateTokensList();
             KALDI_ASSERT(size>0);
-            KALDI_ASSERT(offset>=0 && offset<h_all_tokens_extra_prev_tokens_extra_cost_[ichannel].size());
+            KALDI_ASSERT(offset>=0 && offset<h_all_tokens_extra_prev_tokens_[ichannel].size());
             for(auto j=0; j<size; ++j) {
-
               KALDI_ASSERT(offset+j<h_all_tokens_extra_prev_tokens_[ichannel].size());
               InfoToken extra_token=h_all_tokens_extra_prev_tokens_[ichannel][offset+j];
               //previous token must be lower than the next frame start
@@ -1489,7 +1489,7 @@ namespace kaldi {
 										// We have to do the first read again, to get the updated value
 										// that's why we're replaying that frame 
 										// (between frames everything is in topological order)
-										if(diff >= min_delta && from_map_it->second.is_state_closed) {
+										if(diff > min_delta && from_map_it->second.is_state_closed) {
 											must_replay_frame = true;
 										}
 										prev_token_extra_cost = this_arc_prev_token_extra_cost;
