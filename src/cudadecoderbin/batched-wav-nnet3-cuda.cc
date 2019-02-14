@@ -225,7 +225,7 @@ int main(int argc, char *argv[]) {
 
     } //End iterations loop
 
-    while (processed.size()>=0) {
+    while (processed.size()>0) {
       FinishOneDecode();
     } //end while
 
