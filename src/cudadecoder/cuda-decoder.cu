@@ -370,6 +370,9 @@ namespace kaldi {
 		SaveChannelsStateFromLanesCPU();
 
 		KALDI_DECODER_CUDA_CHECK_ERROR();
+
+		KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.x > 0);
+		KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.y > 0);
 	}
 
 	void CudaDecoder::InitDecoding() {
@@ -593,7 +596,6 @@ namespace kaldi {
 			//int32 debug_f_narcs = 0;
 			// Computing a new frame
 			// Loglikelihoods from the acoustic model
-			//printf("frame=%i \n", iframe);
 			nvtxRangePop(); // Decoding
 			for(LaneId ilane=0; ilane<h_kernel_params_->nlanes_used; ++ilane) {
 				ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
@@ -631,8 +633,8 @@ namespace kaldi {
 			{
 				auto func_narcs = [] (const LaneCounters &c) { return c.main_q_narcs_and_end.x; };
 				int32 max_main_q_narcs = GetMaxForAllLanes(func_narcs);
-				KALDI_ASSERT(max_main_q_narcs > 0);
 
+				KALDI_ASSERT(max_main_q_narcs > 0);
 				expand_arcs_kernel<true><<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_narcs, nlanes_used),
 					KALDI_CUDA_DECODER_1D_BLOCK,
 					0,

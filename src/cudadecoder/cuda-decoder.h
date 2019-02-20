@@ -277,7 +277,7 @@ namespace kaldi {
 		generate_lattices(true),
 		max_tokens(2000000),
 		max_tokens_per_frame(1000000),
-		max_active(INT_MAX) {}
+		max_active(10000) {}
 
 		void Register(OptionsItf *opts) {
 			opts->Register("beam", &default_beam, "Decoding beam.  Larger->slower, more accurate. The beam may be"

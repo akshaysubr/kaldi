@@ -111,6 +111,8 @@ namespace kaldi {
 				}
 				h_arc_weights_[idx] = arc.weight.Value();
 				h_arc_nextstates_[idx] = arc.nextstate;
+				if(arc.nextstate == 0)
+					printf("going to start: %i -> %i \n", i, arc.nextstate);
   				// Converting ilabel here, to avoid reindexing when reading nnet3 output
 				h_arc_id_ilabels_[idx]=arc.ilabel;
 				int32 ilabel_pdf = trans_model.TransitionIdToPdf(arc.ilabel);

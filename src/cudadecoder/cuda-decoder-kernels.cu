@@ -142,6 +142,7 @@ namespace kaldi {
 			beam /= 2;
 			beam_valid_until_idx += cst_dev_params.adaptive_beam_bin_width;
 		}
+		// FIXME can overflow
 		IntegerCostType new_int_cutoff = floatToOrderedInt(orderedIntToFloat(min_int_cost) + beam);
 		IntegerCostType int_beam = floatToOrderedInt(beam);
 		adaptive_int_beam_with_validity_index->x = int_beam;
@@ -723,7 +724,6 @@ namespace kaldi {
 								int32 beam_valid_until_idx = adaptive_int_beam_with_validity_index.y;
 								if(aux_q_index_block_offset >= beam_valid_until_idx) {
 									// This beam is no longer valid. Updating it
-									// TODO move out of emitting 
 									UpdateAdaptiveBeam(cst_dev_params, 
 											aux_q_index_block_offset, 
 											global_min_int_cost, 
@@ -799,7 +799,6 @@ namespace kaldi {
 		lane_counters->main_q_local_offset = 0;
 		lane_counters->main_q_n_extra_prev_tokens = 0;
 		lane_counters->int_cutoff = INT_MAX;
-		lane_counters->min_int_cost = INT_MAX;
 		lane_counters->int_beam = floatToOrderedInt(cst_dev_params.default_beam);
     lane_counters->main_q_narcs_and_end = {0,0};
     lane_counters->main_q_requested = 0;
@@ -809,6 +808,9 @@ namespace kaldi {
 		const CostType init_cost = cst_dev_params.init_cost;
 		IntegerCostType int_init_cost = floatToOrderedInt(init_cost);
 		cst_dev_params.d_aux_q_state_and_cost.lane(init_ilane)[0] = {init_state, int_init_cost};
+		lane_counters->min_int_cost = int_init_cost;
+		CostType cutoff = orderedIntToFloat(int_init_cost);
+		lane_counters->int_cutoff = floatToOrderedInt(cutoff + cst_dev_params.default_beam);
 		cst_dev_params.d_aux_q_info.lane(init_ilane)[0] = {INT_MIN, -1};
 	}
 
@@ -861,6 +863,8 @@ namespace kaldi {
 			lane_counters->int_cutoff = INT_MAX;
 			lane_counters->min_int_cost = INT_MAX;
 			lane_counters->q_overflow = OVERFLOW_NONE;	  
+    			lane_counters->aux_q_requested = 0;
+    			lane_counters->main_q_requested = 0;
 		}
 	}
 
@@ -898,14 +902,11 @@ namespace kaldi {
         lane_counters->aux_q_requested = 0;
 				// We are done processing those arcs
 				lane_counters->main_q_narcs_and_end.x = 0;
-        // reset requested to end of queue
-        lane_counters->main_q_requested = lane_counters->main_q_narcs_and_end.y;
  				// Resetting the adaptive beam
 				lane_counters->adaptive_int_beam_with_validity_index.x = lane_counters->int_beam;
 				lane_counters->adaptive_int_beam_with_validity_index.y = cst_dev_params.adaptive_beam_static_segment;
 				// If the adaptive beam kicked in, we want to reset the beam
 				// the max-active process will take care of selecting the right beam
-				lane_counters->int_cutoff = floatToOrderedInt(min_cost + beam); 
 				if(IS_EMITTING) {
 					// the main_q contains the tokens from the previous frame
 					// after emitting, we won't use them anymore to create new tokens
@@ -919,8 +920,12 @@ namespace kaldi {
 					// Moving local offset. Tokens created by last expand
 					// will be pruned, and survivals will be moved at the end
 					// of the main q. Those tokens will be placed after local_offset 
+					lane_counters->int_cutoff = floatToOrderedInt(min_cost + beam); 
+					lane_counters->main_q_requested = 0;
 				} else {
 					lane_counters->main_q_local_offset = prev_main_q_end;
+					// reset requested to end of queue
+					lane_counters->main_q_requested = prev_main_q_end;
 				}
 			}
 		}
@@ -991,7 +996,6 @@ namespace kaldi {
 				if(is_representative) {
 					hash_idx = -hash_idx -1;
 					HashmapValueT &val = cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx];
-					//printf("arg=%i idx=%i off=%i \n", val.min_and_argmin_int_cost.y, main_q_idx, extra_prev_tokens_offset);
 					val.min_and_argmin_int_cost.y = extra_prev_tokens_offset;
 				}
 			}
@@ -1022,17 +1026,13 @@ namespace kaldi {
 					CostType extra_cost = token_cost - best_cost;
 					int extra_prev_tokens_offset = val.min_and_argmin_int_cost.y;
 					int local_idx = cst_dev_params.d_main_q_n_extra_prev_tokens_local_idx.lane(ilane)[main_q_idx]; 
-					//printf("info[%i].prev=%i (local_idx=%i, go=%i, sum=%i) \n", main_q_idx, inf_tok.prev_token, local_idx, prev_global_idx, extra_prev_tokens_offset);
 					cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx] = {prev_global_idx+extra_prev_tokens_offset, -prev_counts}; // negative counts to signal that's a (offset,count) pair
 					int list_idx = extra_prev_tokens_offset + local_idx;
 					cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] = inf_tok; // moving the prev_tokens info in another list
-					//printf("dev= %i < %i ? \n", inf_tok.prev_token, (lane_counters->main_q_global_offset+main_q_end));
 					assert(inf_tok.prev_token >= (lane_counters->main_q_global_offset - cst_dev_params.q_capacity)
 						&& inf_tok.prev_token <= (lane_counters->main_q_global_offset+main_q_end));
 					cst_dev_params.d_main_q_extra_cost.lane(ilane)[list_idx] = {extra_cost,acoustic_cost};
-					//printf("extra_cost[%i] = %f \n", list_idx, extra_cost);
 					//InfoToken inf2_tok = cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] ;
-					//printf("info2[%i].prev=%i \n", list_idx, inf2_tok.prev_token);
 				}
 			}
 		}
@@ -1231,7 +1231,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 					// Resetting values used by GetBestCost
 					// This is just a reset : If we need to read it, we need to call GetBestCost
 					channel_counters->min_int_cost_and_arg_with_final.x = INT_MAX; // it will be set with atomicMins
-					channel_counters->min_int_cost_and_arg_without_final.x = min_int_cost; // we already know what the min cost is
+					channel_counters->min_int_cost_and_arg_without_final.x = min_int_cost; // we already know what the min cost is 
 				}	
 			}
 		}
@@ -1302,9 +1302,6 @@ we do not need inter-block communication (we launch only one CUDA block)
 					lane_counters->min_int_cost_and_arg = compute_final 
 										? min_int_cost_and_arg_with_final
 										: min_int_cost_and_arg_without_final;
-					/* printf("best[%i] = %f (final=%i) \n", lane_counters->min_int_cost_and_arg.y,
-									orderedIntToFloat(lane_counters->min_int_cost_and_arg.x),
-									compute_final); */
 					lane_counters->has_reached_final = has_reached_final;
 				}				 
 				const int2 both = cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[idx];
@@ -1322,7 +1319,6 @@ we do not need inter-block communication (we launch only one CUDA block)
 					// save it
 					int list_idx = atomicAdd(&lane_counters->nfinals, 1);
 					cst_dev_params.d_list_final_tokens_in_main_q.lane(ilane)[list_idx] = {global_offset+idx, token_int_cost};
-					//printf("list[%i] = {%i,%f} \n", list_idx, global_offset+idx, orderedIntToFloat(token_int_cost));
 				}
 			}
 		}
@@ -1401,6 +1397,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 					}
 				}
 				BlockHistogram(temp_storage).Composite(bin_id, smem_histogram); // sync
+				__syncthreads(); // reusing temp_storage
 			}
 		
 			// Not using the macros 1D_LOOP because that loop is only within a CTA	
@@ -1430,7 +1427,7 @@ we do not need inter-block communication (we launch only one CUDA block)
 			if(q_end <= max_active)
 				continue; // nothing to do
 			CostType beam = orderedIntToFloat(lane_counters->int_beam);
-			CostType min_cost = orderedIntToFloat(lane_counters->min_int_cost);
+			CostType min_cost = orderedIntToFloat(lane_counters->min_int_cost); // FIXME min_int_cost == INT_MAX
 			int32 it_sum = 0;
 			// Not using the macros 1D_LOOP because that loop is only within a CTA	
 			for(int32 offset=0;
@@ -1445,15 +1442,12 @@ we do not need inter-block communication (we launch only one CUDA block)
 				int prefix_sum;
 				BlockScan(temp_storage).ExclusiveSum(val, prefix_sum);
 				prefix_sum += it_sum; // adding sum from previous for iterations
-				//printf("main_histo[%i,%i] = %i (q_end=%i) \n", ilane, bin_id, prefix_sum, q_end);
 				if(threadIdx.x == (KALDI_CUDA_DECODER_1D_BLOCK-1))
 					it_sum += (prefix_sum+val);
 
 				if(val != 0 && prefix_sum < max_active && (prefix_sum+val) >= max_active) {
 					// We found our new beam	
 					CostType new_beam = (beam/KALDI_CUDA_DECODER_NBINS)*(bin_id+1);
-					//if(use_aux_q) printf("aux:\t");
-					//printf("ilane=%i, achieved=%i, max_active=%i, new_beam=%f < %f \n",ilane,(prefix_sum+val), max_active, new_beam, beam);
 					IntegerCostType new_int_beam = floatToOrderedInt(new_beam);
 					lane_counters->int_beam = new_int_beam; 
 					lane_counters->adaptive_int_beam_with_validity_index.x = new_int_beam; 
