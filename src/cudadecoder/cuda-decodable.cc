@@ -81,8 +81,8 @@ namespace kaldi {
   bool ThreadedBatchedCudaDecoder::isFinished(const std::string &key) {
     tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
-    tasks_lookup_mutex_.unlock();
     KALDI_ASSERT(it!=tasks_lookup_.end());
+    tasks_lookup_mutex_.unlock();
     return it->second.finished;
   }
 
@@ -90,8 +90,8 @@ namespace kaldi {
   void ThreadedBatchedCudaDecoder::CloseDecodeHandle(const std::string &key) {
     tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
-    tasks_lookup_mutex_.unlock();
     KALDI_ASSERT(it!=tasks_lookup_.end());
+    tasks_lookup_mutex_.unlock();
 
     TaskState &state = it->second;
 
@@ -166,8 +166,10 @@ namespace kaldi {
 
   bool ThreadedBatchedCudaDecoder::GetRawLattice(const std::string &key, Lattice *lat) {
     nvtxRangePushA("GetRawLattice");
+    tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
+    tasks_lookup_mutex_.unlock();
 
     TaskState *state = &it->second;
 
@@ -186,8 +188,10 @@ namespace kaldi {
   
   bool ThreadedBatchedCudaDecoder::GetLattice(const std::string &key, CompactLattice *clat) {
     nvtxRangePushA("GetLattice");
+    tasks_lookup_mutex_.lock();
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
+    tasks_lookup_mutex_.unlock();
 
     TaskState *state = &it->second;
 
