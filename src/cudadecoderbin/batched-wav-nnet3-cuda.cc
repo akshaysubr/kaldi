@@ -247,8 +247,8 @@ int main(int argc, char *argv[]) {
     std::chrono::duration<double> total_time = finish-start;
 
     KALDI_LOG << "Overall: " << " Aggregate Total Time: " << total_time.count()
-      << " Total Audio: " << total_audio 
-      << " RealTimeX: " << total_audio/total_time.count() << std::endl;
+      << " Total Audio: " << total_audio*iterations
+      << " RealTimeX: " << total_audio*iterations/total_time.count() << std::endl;
 
     return 0;
 
