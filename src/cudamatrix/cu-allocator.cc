@@ -501,12 +501,11 @@ void CuMemoryAllocator::AllocateNewRegion(size_t size) {
   // be much larger than that).  1048575 is 2^20 - 1.
   region_size = (region_size + 1048575) & ~((size_t)1048575);
 
-  // Print allocator information informing the user of new allocation.
-  KALDI_LOG << "About to allocate new memory region of " << region_size
-            << " bytes; "
-            << "memory proportion is " << opts_.memory_proportion
-            << " current memory info is: " << mem_info;
-  
+  if (!memory_regions_.empty()) {
+    // If this is not the first region allocated, print some information.
+    KALDI_LOG << "About to allocate new memory region of " << region_size
+              << " bytes; current memory info is: " << mem_info;
+  }
   void *memory_region;
   cudaError_t e;
   {

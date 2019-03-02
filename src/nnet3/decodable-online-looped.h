@@ -99,7 +99,7 @@ class DecodableNnetLoopedOnlineBase: public DecodableInterface {
 
   // The current log-posteriors that we got from the last time we
   // ran the computation.
-  CuMatrix<BaseFloat> current_log_post_;
+  Matrix<BaseFloat> current_log_post_;
 
   // The number of chunks we have computed so far.
   int32 num_chunks_computed_;
