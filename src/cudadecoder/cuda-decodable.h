@@ -13,7 +13,6 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-
 #ifndef KALDI_CUDA_DECODEABLE_H_
 #define KALDI_CUDA_DECODEABLE_H_
 
@@ -31,264 +30,304 @@
 
 namespace kaldi {
 
-  /* BatchedCudaDecoderConfig
-   * This class is a common configuration class for the various components
-   * of a batched cuda multi-threaded pipeline.  It defines a single place
-   * to control all operations and ensures that the various componets
-   * match configurations
-   */
-  //configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
-  struct BatchedCudaDecoderConfig {
-    BatchedCudaDecoderConfig() : max_batch_size(10), batch_drain_size(5), 
-    num_control_threads(7), num_worker_threads(4), determinize_lattice(true), max_pending_tasks(4000) {};
-    void Register(OptionsItf *po) {
+/* BatchedCudaDecoderConfig
+ * This class is a common configuration class for the various components
+ * of a batched cuda multi-threaded pipeline.  It defines a single place
+ * to control all operations and ensures that the various componets
+ * match configurations
+ */
+// configuration options common to the BatchedCudaDecoder and
+// BatchedCudaDecodable
+struct BatchedCudaDecoderConfig {
+  BatchedCudaDecoderConfig()
+      : max_batch_size(10),
+        batch_drain_size(5),
+        num_control_threads(7),
+        num_worker_threads(4),
+        determinize_lattice(true),
+        max_pending_tasks(4000) {};
+  void Register(OptionsItf *po) {
 
-      po->Register("max-batch-size",&max_batch_size, "The maximum batch size to be used by the decoder.");
-      po->Register("batch-drain-size",&batch_drain_size, "How far to drain the batch before refilling work.  This batches pre/post decode work.");
-      po->Register("cuda-control-threads",&num_control_threads, "The number of workpool threads to use in the cuda decoder");
-      po->Register("cuda-worker-threads",&num_worker_threads, "The number of sub threads a worker can spawn to help with CPU tasks.");
-      po->Register("determinize-lattice", &determinize_lattice, "Determinize the lattice before output.");
-      po->Register("max-outstanding-queue-length", &max_pending_tasks, 
-          "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
+    po->Register("max-batch-size", &max_batch_size,
+                 "The maximum batch size to be used by the decoder.");
+    po->Register("batch-drain-size", &batch_drain_size,
+                 "How far to drain the batch before refilling work.  This "
+                 "batches pre/post decode work.");
+    po->Register("cuda-control-threads", &num_control_threads,
+                 "The number of workpool threads to use in the cuda decoder");
+    po->Register(
+        "cuda-worker-threads", &num_worker_threads,
+        "The number of sub threads a worker can spawn to help with CPU tasks.");
+    po->Register("determinize-lattice", &determinize_lattice,
+                 "Determinize the lattice before output.");
+    po->Register("max-outstanding-queue-length", &max_pending_tasks,
+                 "Number of files to allow to be outstanding at a time.  When "
+                 "the number of files is larger than this handles will be "
+                 "closed before opening new ones in FIFO order.");
 
-      decoder_opts.nlanes=max_batch_size;
-      decoder_opts.nchannels=max_batch_size;
+    decoder_opts.nlanes = max_batch_size;
+    decoder_opts.nchannels = max_batch_size;
 
-      feature_opts.Register(po);
-      decoder_opts.Register(po);
-      det_opts.Register(po);
-      compute_opts.Register(po);
+    feature_opts.Register(po);
+    decoder_opts.Register(po);
+    det_opts.Register(po);
+    compute_opts.Register(po);
+  }
+  int max_batch_size;
+  int batch_drain_size;
+  int num_control_threads;
+  int num_worker_threads;
+  bool determinize_lattice;
+  int max_pending_tasks;
+
+  OnlineNnet2FeaturePipelineConfig feature_opts;  // constant readonly
+  CudaDecoderConfig decoder_opts;  // constant readonly
+  fst::DeterminizeLatticePhonePrunedOptions det_opts;  // constant readonly
+  nnet3::NnetBatchComputerOptions compute_opts;  // constant readonly
+};
+
+/**
+  Cuda Decodable matrix.  Takes transition model and posteriors and provides
+  an interface similar to the Decodable Interface
+  */
+class DecodableCuMatrixMapped : public CudaDecodableInterface {
+ public:
+  // This constructor creates an object that will not delete "likes" when done.
+  // the frame_offset is the frame the row 0 of 'likes' corresponds to, would be
+  // greater than one if this is not the first chunk of likelihoods.
+  DecodableCuMatrixMapped(const TransitionModel &tm,
+                          const CuMatrixBase<BaseFloat> &likes,
+                          int32 frame_offset = 0);
+
+  virtual int32 NumFramesReady() const;
+
+  virtual bool IsLastFrame(int32 frame) const;
+
+  virtual BaseFloat LogLikelihood(int32 frame, int32 tid) {
+    KALDI_ASSERT(false);
+  };
+
+  // Note: these indices are 1-based.
+  virtual int32 NumIndices() const;
+
+  virtual ~DecodableCuMatrixMapped() {};
+
+  // returns cuda pointer to nnet3 output
+  virtual BaseFloat *GetLogLikelihoodsCudaPointer(int32 subsampled_frame);
+
+ private:
+  const TransitionModel &trans_model_;  // for tid to pdf mapping
+  const CuMatrixBase<BaseFloat> *likes_;
+
+  int32 frame_offset_;
+
+  // raw_data and stride_ are a kind of fast look-aside for 'likes_', to be
+  // used when KALDI_PARANOID is false.
+  const BaseFloat *raw_data_;
+  int32 stride_;
+
+  KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableCuMatrixMapped);
+};
+
+/*
+ *  ThreadedBatchedCudaDecoder uses multiple levels of parallelism in order to
+ *decode quickly on CUDA GPUs.
+ *  It's API is utterance centric using deferred execution.  That is a user
+ *submits work one utterance at a time
+ *  and the class batches that work behind the scene. Utterance are passed into
+ *the API with a unique key of type string.
+ *  The user must ensure this name is unique.  APIs are provided to enqueue
+ *work, query the best path, and cleanup enqueued work.
+ *  Once a user closes a decode handle they are free to use that key again.
+ *
+ *  Example Usage is as follows:
+ *  ThreadedBatchedCudaDecoder decoder;
+ *  decoder.Initalize(decode_fst, am_nnet_rx_file);
+ *
+ *  //some loop
+ *    std::string utt_key = ...
+ *    while(!decoder.OpenDecodeHandle(utt_key,wave_data));
+ *
+ *  ...
+ *
+ *  //some loop
+ *    Lattice lat;
+ *    std::string utt_key = ...
+ *    decoder.GetRawLattice(utt_key,&lat);
+ *    decoder.CloseDecodeHandle(utt_key);
+ *
+ *  decoder.Finalize();
+ */
+class ThreadedBatchedCudaDecoder {
+ public:
+  ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config)
+      : config_(config) {};
+
+  // TODO should this take an nnet instead of a string?
+  // allocates reusable objects that are common across all decodings
+  void Initialize(const fst::Fst<fst::StdArc> &decode_fst,
+                  std::string nnet3_rxfilename);
+  // deallocates reusable objects
+  void Finalize();
+
+  // query a specific key to see if compute on it is complete
+  bool isFinished(const std::string &key);
+
+  // remove an audio file from the decoding and clean up resources
+  void CloseDecodeHandle(const std::string &key);
+
+  // Adds a decoding task to the decoder
+  void OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
+  // When passing in a vector of data, the caller must ensure the data exists
+  // until the CloseDecodeHandle is called
+  void OpenDecodeHandle(const std::string &key,
+                        const VectorBase<BaseFloat> &wave_data,
+                        float sample_rate);
+
+  // Copies the raw lattice for decoded handle "key" into lat
+  bool GetRawLattice(const std::string &key, Lattice *lat);
+  // Determinizes raw lattice and returns a compact lattice
+  bool GetLattice(const std::string &key, CompactLattice *lat);
+
+  inline int NumPendingTasks() {
+    return (tasks_back_ - tasks_front_ + config_.max_pending_tasks + 1) %
+           (config_.max_pending_tasks + 1);
+  };
+
+ private:
+  // State needed for each decode task.
+  // This state can be passed around by reference or pointer safely
+  // and provides a convieniet way to store all decoding state.
+  struct TaskState {
+    Vector<BaseFloat> raw_data;  // Wave input data when wave_reader passed
+    SubVector<BaseFloat> *wave_samples;  // Used as a pointer to either the raw
+                                         // data or the samples passed
+    std::string key;
+    float sample_frequency;
+    bool error;
+    std::string error_string;
+
+    Lattice lat;  // Raw Lattice output
+    CompactLattice dlat;  // Determinized lattice output.  Only set if
+                          // determinize-lattice=true
+    std::atomic<bool> finished;  // Tells master thread if task has finished
+                                 // execution
+
+    bool determinized;
+
+    Vector<BaseFloat> ivector_features;
+    Matrix<BaseFloat> input_features;
+    CuMatrix<BaseFloat> posteriors;
+
+    TaskState()
+        : wave_samples(NULL),
+          sample_frequency(0),
+          error(false),
+          finished(false),
+          determinized(false) {}
+    ~TaskState() {
+      if (wave_samples) delete wave_samples;
     }
-    int max_batch_size;
-    int batch_drain_size;
-    int num_control_threads;
-    int num_worker_threads;
-    bool determinize_lattice;
-    int max_pending_tasks;
 
-    OnlineNnet2FeaturePipelineConfig  feature_opts;           //constant readonly
-    CudaDecoderConfig decoder_opts;                           //constant readonly
-    fst::DeterminizeLatticePhonePrunedOptions det_opts;       //constant readonly
-    nnet3::NnetBatchComputerOptions compute_opts;             //constant readonly
+    // Init when wave data is passed directly in.  This data is deep copied.
+    void Init(const std::string &key_in, const WaveData &wave_data_in) {
+      raw_data.Resize(
+          wave_data_in.Data().NumRows() * wave_data_in.Data().NumCols(),
+          kUndefined);
+      memcpy(raw_data.Data(), wave_data_in.Data().Data(),
+             raw_data.Dim() * sizeof(BaseFloat));
+      wave_samples = new SubVector<BaseFloat>(raw_data, 0, raw_data.Dim());
+      sample_frequency = wave_data_in.SampFreq();
+      determinized = false;
+      finished = false;
+      key = key_in;
+    };
+    // Init when raw data is passed in.  This data is shallow copied.
+    void Init(const std::string &key_in,
+              const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
+      wave_samples =
+          new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
+      sample_frequency = sample_rate;
+      determinized = false;
+      finished = false;
+      key = key_in;
+    }
   };
 
-  /**
-    Cuda Decodable matrix.  Takes transition model and posteriors and provides
-    an interface similar to the Decodable Interface
-    */
-  class DecodableCuMatrixMapped: public CudaDecodableInterface {
-    public:
-      // This constructor creates an object that will not delete "likes" when done.
-      // the frame_offset is the frame the row 0 of 'likes' corresponds to, would be
-      // greater than one if this is not the first chunk of likelihoods.
-      DecodableCuMatrixMapped(const TransitionModel &tm,
-          const CuMatrixBase<BaseFloat> &likes,
-          int32 frame_offset = 0);
-
-      virtual int32 NumFramesReady() const;
-
-      virtual bool IsLastFrame(int32 frame) const;
-
-      virtual BaseFloat LogLikelihood(int32 frame, int32 tid) {
-        KALDI_ASSERT(false);
-      };
-
-      // Note: these indices are 1-based.
-      virtual int32 NumIndices() const;
-
-      virtual ~DecodableCuMatrixMapped() {};
-
-      //returns cuda pointer to nnet3 output
-      virtual BaseFloat* GetLogLikelihoodsCudaPointer(int32 subsampled_frame);
-
-
-    private:
-      const TransitionModel &trans_model_;  // for tid to pdf mapping
-      const CuMatrixBase<BaseFloat> *likes_;
-
-      int32 frame_offset_;
-
-      // raw_data and stride_ are a kind of fast look-aside for 'likes_', to be
-      // used when KALDI_PARANOID is false.
-      const BaseFloat *raw_data_;
-      int32 stride_;
-
-      KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableCuMatrixMapped);
+  // Holds the current channel state for a worker
+  struct ChannelState {
+    std::vector<ChannelId> channels;
+    std::vector<ChannelId> free_channels;
+    std::vector<ChannelId> completed_channels;
   };
 
-  /*
-   *  ThreadedBatchedCudaDecoder uses multiple levels of parallelism in order to decode quickly on CUDA GPUs.
-   *  It's API is utterance centric using deferred execution.  That is a user submits work one utterance at a time
-   *  and the class batches that work behind the scene. Utterance are passed into the API with a unique key of type string.
-   *  The user must ensure this name is unique.  APIs are provided to enqueue work, query the best path, and cleanup enqueued work.
-   *  Once a user closes a decode handle they are free to use that key again.
-   *  
-   *  Example Usage is as follows:
-   *  ThreadedBatchedCudaDecoder decoder;
-   *  decoder.Initalize(decode_fst, am_nnet_rx_file);
-   *   
-   *  //some loop
-   *    std::string utt_key = ...
-   *    while(!decoder.OpenDecodeHandle(utt_key,wave_data));
-   * 
-   *  ...
-   *
-   *  //some loop
-   *    Lattice lat;
-   *    std::string utt_key = ...
-   *    decoder.GetRawLattice(utt_key,&lat);
-   *    decoder.CloseDecodeHandle(utt_key);
-   *
-   *  decoder.Finalize();
-   */
-  class ThreadedBatchedCudaDecoder {
-    public:
+  // Adds task to the PendingTaskQueue
+  void AddTaskToPendingTaskQueue(TaskState *task);
 
-      ThreadedBatchedCudaDecoder(const BatchedCudaDecoderConfig &config) : config_(config) {};
+  // Attempts to fill the batch from the task queue.  May not fully fill the
+  // batch.
+  void AquireAdditionalTasks(CudaDecoder &cuda_decoder,
+                             ChannelState &channel_state,
+                             std::vector<TaskState *> &tasks);
 
-      //TODO should this take an nnet instead of a string?
-      //allocates reusable objects that are common across all decodings
-      void Initialize(const fst::Fst<fst::StdArc> &decode_fst, std::string nnet3_rxfilename);
-      //deallocates reusable objects
-      void Finalize();
+  // Computes Features for a single decode instance.
+  void ComputeOneFeature(TaskState *task);
 
-      //query a specific key to see if compute on it is complete
-      bool isFinished(const std::string &key);
+  // Computes Nnet across the current decode batch
+  void ComputeBatchNnet(nnet3::NnetBatchComputer &computer, int32 first,
+                        std::vector<TaskState *> &tasks);
 
-      //remove an audio file from the decoding and clean up resources
-      void CloseDecodeHandle(const std::string &key);
+  // Allocates decodables for tasks in the range of
+  // dstates[first,dstates.size())
+  void AllocateDecodables(int32 first, std::vector<TaskState *> &tasks,
+                          std::vector<CudaDecodableInterface *> &decodables);
 
-      //Adds a decoding task to the decoder
-      void OpenDecodeHandle(const std::string &key, const WaveData &wave_data);
-      // When passing in a vector of data, the caller must ensure the data exists until the CloseDecodeHandle is called
-      void OpenDecodeHandle(const std::string &key, const VectorBase<BaseFloat> &wave_data, float sample_rate);
+  // Removes all completed channels from the channel list.
+  // Also enqueues up work for post processing
+  void RemoveCompletedChannels(
+      CudaDecoder &cuda_decoder, ChannelState &channel_state,
+      std::vector<CudaDecodableInterface *> &decodables,
+      std::vector<TaskState *> &tasks);
 
-      //Copies the raw lattice for decoded handle "key" into lat
-      bool GetRawLattice(const std::string &key, Lattice *lat);
-      //Determinizes raw lattice and returns a compact lattice
-      bool GetLattice(const std::string &key, CompactLattice *lat);
+  // For each completed decode perform post processing work and clean up
+  void PostDecodeProcessing(CudaDecoder &cuda_decoder,
+                            ChannelState &channel_state,
+                            std::vector<CudaDecodableInterface *> &decodables,
+                            std::vector<TaskState *> &tasks);
 
-      inline int NumPendingTasks() {
-        return (tasks_back_ - tasks_front_ + config_.max_pending_tasks+1) % (config_.max_pending_tasks+1); 
-      };
+  void DeterminizeOneLattice(TaskState *state);
 
-    private:
+  // Thread execution function.  This is a single worker thread which processes
+  // input.
+  void ExecuteWorker(int threadId);
 
-      //State needed for each decode task. 
-      //This state can be passed around by reference or pointer safely
-      //and provides a convieniet way to store all decoding state.
-      struct TaskState {
-        Vector<BaseFloat> raw_data; // Wave input data when wave_reader passed
-        SubVector<BaseFloat> *wave_samples; // Used as a pointer to either the raw data or the samples passed
-        std::string key;
-        float sample_frequency;
-        bool error;
-        std::string error_string;
+  const BatchedCudaDecoderConfig &config_;
 
-        Lattice lat;          //Raw Lattice output 
-        CompactLattice dlat;  //Determinized lattice output.  Only set if determinize-lattice=true
-        std::atomic<bool> finished;  //Tells master thread if task has finished execution
+  CudaFst cuda_fst_;
+  TransitionModel trans_model_;
+  nnet3::AmNnetSimple am_nnet_;
+  nnet3::DecodableNnetSimpleLoopedInfo *decodable_info_;
+  OnlineNnet2FeaturePipelineInfo *feature_info_;
 
-        bool determinized;
-        
-        Vector<BaseFloat> ivector_features;
-        Matrix<BaseFloat> input_features;
-        CuMatrix<BaseFloat> posteriors;
+  std::mutex tasks_mutex_;  // protects tasks_front_ and pending_task_queue_ for
+                            // workers
+  std::mutex tasks_add_mutex_;  // protect OpenDecodeHandle if multiple threads
+                                // access
+  std::mutex tasks_lookup_mutex_;  // protext tasks_lookup map
+  std::atomic<int> tasks_front_, tasks_back_;
+  TaskState **pending_task_queue_;
 
-        TaskState() : wave_samples(NULL), sample_frequency(0), error(false), finished(false), determinized(false) {}
-        ~TaskState() { if(wave_samples) delete wave_samples;}
+  std::atomic<bool> exit_;  // signals threads to exit
+  std::atomic<int> numStarted_;  // signals master how many threads have started
 
-        //Init when wave data is passed directly in.  This data is deep copied.
-        void Init(const std::string &key_in, const WaveData &wave_data_in) {
-          raw_data.Resize(wave_data_in.Data().NumRows()*wave_data_in.Data().NumCols(), kUndefined);
-          memcpy(raw_data.Data(), wave_data_in.Data().Data(), raw_data.Dim()*sizeof(BaseFloat));
-          wave_samples=new SubVector<BaseFloat>(raw_data, 0, raw_data.Dim());
-          sample_frequency=wave_data_in.SampFreq();
-          determinized=false;
-          finished=false;
-          key=key_in;
-        };
-        //Init when raw data is passed in.  This data is shallow copied.
-        void Init(const std::string &key_in, const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
-          wave_samples=new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
-          sample_frequency=sample_rate;
-          determinized=false;
-          finished=false;
-          key=key_in;
-        }
-      };
+  ThreadPool *work_pool_;  // thread pool for CPU work
 
-      //Holds the current channel state for a worker
-      struct ChannelState {
-        std::vector<ChannelId> channels;
-        std::vector<ChannelId> free_channels; 
-        std::vector<ChannelId> completed_channels; 
-      };
+  std::map<std::string, TaskState> tasks_lookup_;  // Contains a map of
+                                                   // utterance to TaskState
+  std::vector<std::thread> thread_contexts_;  // A list of thread contexts
+};
 
-      //Adds task to the PendingTaskQueue
-      void AddTaskToPendingTaskQueue(TaskState *task);
-
-      //Attempts to fill the batch from the task queue.  May not fully fill the batch.
-      void AquireAdditionalTasks(CudaDecoder &cuda_decoder,
-          ChannelState &channel_state,
-          std::vector<TaskState*> &tasks);
-
-      //Computes Features for a single decode instance.  
-      void ComputeOneFeature(TaskState *task);
-
-      //Computes Nnet across the current decode batch
-      void ComputeBatchNnet(nnet3::NnetBatchComputer &computer, int32 first, 
-          std::vector<TaskState*> &tasks);
-
-      //Allocates decodables for tasks in the range of dstates[first,dstates.size())
-      void AllocateDecodables(int32 first, std::vector<TaskState*> &tasks,
-          std::vector<CudaDecodableInterface*> &decodables);
-
-      //Removes all completed channels from the channel list.
-      //Also enqueues up work for post processing
-      void RemoveCompletedChannels(CudaDecoder &cuda_decoder,
-          ChannelState &channel_state,
-          std::vector<CudaDecodableInterface*> &decodables,
-          std::vector<TaskState*> &tasks);
-
-      //For each completed decode perform post processing work and clean up
-      void PostDecodeProcessing(CudaDecoder &cuda_decoder,
-          ChannelState &channel_state,
-          std::vector<CudaDecodableInterface*> &decodables,
-          std::vector<TaskState*> &tasks);
-
-      void DeterminizeOneLattice(TaskState *state);
-
-      //Thread execution function.  This is a single worker thread which processes input.
-      void ExecuteWorker(int threadId);
-
-      const BatchedCudaDecoderConfig &config_;
-
-      CudaFst cuda_fst_;
-      TransitionModel trans_model_;
-      nnet3::AmNnetSimple am_nnet_;
-      nnet3::DecodableNnetSimpleLoopedInfo *decodable_info_;
-      OnlineNnet2FeaturePipelineInfo *feature_info_;
-
-      std::mutex tasks_mutex_;                      //protects tasks_front_ and pending_task_queue_ for workers
-      std::mutex tasks_add_mutex_;                  //protect OpenDecodeHandle if multiple threads access 
-      std::mutex tasks_lookup_mutex_;               //protext tasks_lookup map 
-      std::atomic<int> tasks_front_, tasks_back_;
-      TaskState** pending_task_queue_;
-
-      std::atomic<bool> exit_;                      //signals threads to exit
-      std::atomic<int> numStarted_;                 //signals master how many threads have started
-
-      ThreadPool *work_pool_;                      //thread pool for CPU work
-
-      std::map<std::string,TaskState> tasks_lookup_; //Contains a map of utterance to TaskState
-      std::vector<std::thread> thread_contexts_;     //A list of thread contexts
-  };
-
-
-
-} // end namespace kaldi.
-
+}  // end namespace kaldi.
 
 #endif
 
