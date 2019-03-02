@@ -179,4 +179,4 @@ onlinebin: base matrix util feat tree gmm transform sgmm2 fstext hmm lm decoder 
 online: decoder gmm transform feat matrix util base lat hmm tree
 online2: decoder gmm transform feat matrix util base lat hmm tree ivector cudamatrix nnet2 nnet3 chain
 kws: base util hmm tree matrix lat
-cudadecoder:  cudamatrix online2 nnet3 ivector feat fstext lat chain transform 
+cudadecoder:  cudamatrix nnet3 ivector feat fstext lat chain transform 
