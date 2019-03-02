@@ -131,7 +131,7 @@ int main(int argc, char *argv[]) {
     int num_todo = -1;
     int iterations=1;
     ParseOptions po(usage);
-    int pipeline_length=2000; //length of pipeline of outstanding requests, this is independent of queue lengths in decoder
+    int pipeline_length=4000; //length of pipeline of outstanding requests, this is independent of queue lengths in decoder
 
     po.Register("write-lattice",&write_lattice, "Output lattice to a file.  Setting to false is useful when benchmarking.");
     po.Register("word-symbol-table", &word_syms_rxfilename, "Symbol table for words [for debug output]");
@@ -142,6 +142,7 @@ int main(int argc, char *argv[]) {
     //Multi-threaded CPU and batched GPU decoder
     BatchedCudaDecoderConfig batchedDecoderConfig;
 
+    CuDevice::RegisterDeviceOptions(&po);
     RegisterCuAllocatorOptions(&po);
     batchedDecoderConfig.Register(&po);
 
@@ -233,14 +234,7 @@ int main(int argc, char *argv[]) {
       << num_err << " with errors.";
     KALDI_LOG << "Overall likelihood per frame was " << (tot_like / num_frames)
       << " per frame over " << num_frames << " frames.";
-
-    delete word_syms; // will delete if non-NULL.
-
-    clat_writer.Close();
-
-    CudaDecoder.Finalize();  
-    cudaDeviceSynchronize();
-
+    
     auto finish = std::chrono::high_resolution_clock::now();
     nvtxRangePop();
 
@@ -249,6 +243,14 @@ int main(int argc, char *argv[]) {
     KALDI_LOG << "Overall: " << " Aggregate Total Time: " << total_time.count()
       << " Total Audio: " << total_audio*iterations
       << " RealTimeX: " << total_audio*iterations/total_time.count() << std::endl;
+
+
+    delete word_syms; // will delete if non-NULL.
+
+    clat_writer.Close();
+
+    CudaDecoder.Finalize();  
+    cudaDeviceSynchronize();
 
     return 0;
 
