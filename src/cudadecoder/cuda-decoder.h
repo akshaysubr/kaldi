@@ -43,7 +43,7 @@
 
 
 // Number of GPU decoder lanes
-#define KALDI_CUDA_DECODER_MAX_N_LANES 40
+#define KALDI_CUDA_DECODER_MAX_N_LANES 200
 
 // If we're at risk of filling the tokens queue,
 // the beam is reduced to keep only the best candidates in the 

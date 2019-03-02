@@ -553,6 +553,7 @@ namespace kaldi {
 	void CudaDecoder::AdvanceDecoding(const std::vector<ChannelId> &channels,
 			std::vector<CudaDecodableInterface*> &decodables,
 			int32 max_num_frames) {
+    nvtxRangePushA("AdvanceDecoding");
 		const int nlanes_used = channels.size();
 		if(nlanes_used <= 0)
 			return;
@@ -936,6 +937,8 @@ namespace kaldi {
 		printf("sum=%i, avg ntokens=%f, avg arcs=%f \n", sum, avg, narcs_avg);
 		*/
 		nvtxRangePop();
+    
+    nvtxRangePop(); //End AdvanceDecoding
 	}
 
 	void CudaDecoder::CheckOverflow() {
