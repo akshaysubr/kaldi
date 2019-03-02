@@ -56,7 +56,7 @@ namespace kaldi {
   };
 
   void ThreadedBatchedCudaDecoder::Initialize(const fst::Fst<fst::StdArc> &decode_fst, std::string nnet3_rxfilename) {
-    KALDI_LOG << "ThreadedBatchedCudaDecoder Initialize with " << config_.num_control_threads_ << " threads\n";
+    KALDI_LOG << "ThreadedBatchedCudaDecoder Initialize with " << config_.num_control_threads << " threads\n";
 
     //read transition model and nnet
     bool binary;
@@ -69,15 +69,15 @@ namespace kaldi {
 
     cuda_fst_.Initialize(decode_fst, trans_model_); 
 
-    feature_info_=new  OnlineNnet2FeaturePipelineInfo(config_.feature_opts_);
+    feature_info_=new  OnlineNnet2FeaturePipelineInfo(config_.feature_opts);
     feature_info_->ivector_extractor_info.use_most_recent_ivector = true;
     feature_info_->ivector_extractor_info.greedy_ivector_extractor = true;
 
     //initialize threads and save their contexts so we can join them later
-    thread_contexts_.resize(config_.num_control_threads_);
+    thread_contexts_.resize(config_.num_control_threads);
 
     //create work queue
-    pending_task_queue_ = new TaskState*[config_.max_pending_tasks_+1]; 
+    pending_task_queue_ = new TaskState*[config_.max_pending_tasks+1]; 
     tasks_front_ =0;
     tasks_back_ =0;
 
@@ -85,18 +85,18 @@ namespace kaldi {
     cudaStreamSynchronize(cudaStreamPerThread);
 
     //Create threadpool for CPU work
-    work_pool_ = new ThreadPool(config_.num_worker_threads_);
+    work_pool_ = new ThreadPool(config_.num_worker_threads);
 
     exit_=false;
     numStarted_=0;
 
     //start workers
-    for (int i=0;i<config_.num_control_threads_;i++) {
+    for (int i=0;i<config_.num_control_threads;i++) {
       thread_contexts_[i]=std::thread(&ThreadedBatchedCudaDecoder::ExecuteWorker,this,i);
     }
 
     //wait for threads to start to ensure allocation time isn't in the timings
-    while (numStarted_<config_.num_control_threads_);
+    while (numStarted_<config_.num_control_threads);
 
   }
   void ThreadedBatchedCudaDecoder::Finalize() {
@@ -104,7 +104,7 @@ namespace kaldi {
     //Tell threads to exit and join them
     exit_=true;
 
-    for (int i=0;i<config_.num_control_threads_;i++) {
+    for (int i=0;i<config_.num_control_threads;i++) {
       thread_contexts_[i].join();
     }
 
@@ -121,7 +121,7 @@ namespace kaldi {
     auto it=tasks_lookup_.find(key);
     KALDI_ASSERT(it!=tasks_lookup_.end());
     tasks_lookup_mutex_.unlock();
-    return it->second.finished_;
+    return it->second.finished;
   }
 
   //remove an audio file from the decoding and clean up resources
@@ -134,7 +134,7 @@ namespace kaldi {
     TaskState &task = it->second;
 
     //wait for task to finish processing
-    while (task.finished_!=true);
+    while (task.finished!=true);
 
     tasks_lookup_mutex_.lock();
     tasks_lookup_.erase(it);
@@ -184,17 +184,17 @@ namespace kaldi {
     TaskState *task = &it->second;
 
     //wait for task to finish.  This should happens automatically without intervention from the master thread.
-    while (task->finished_==false);
+    while (task->finished==false);
 
     //GetRawLattice on a determinized lattice is not supported (Per email from DanP)
-    KALDI_ASSERT(task->determinized_==false);
+    KALDI_ASSERT(task->determinized==false);
 
-    if(task->error_) {
+    if(task->error) {
       nvtxRangePop();
       return false;
     }
     //Store off the lattice
-    *lat=task->lat_;
+    *lat=task->lat;
     nvtxRangePop();
     return true;
   }
@@ -209,20 +209,20 @@ namespace kaldi {
     TaskState *task = &it->second;
 
     //wait for task to finish.  This should happens automatically without intervention from the master thread.
-    while (task->finished_==false);
+    while (task->finished==false);
 
-    if(task->error_) {
+    if(task->error) {
       nvtxRangePop();
       return false;
     }
 
     //if user has not requested a determinized lattice from the decoder then we must
     //determinize it here since it was done done already.  
-    if(!config_.determinize_lattice_ && task->determinized_==false) {
+    if(!config_.determinize_lattice && task->determinized==false) {
       //Determinzation was not done by worker threads so do it here
       DeterminizeOneLattice(task);
     }
-    *clat=task->dlat_;    //grab compact lattice
+    *clat=task->dlat;    //grab compact lattice
     nvtxRangePop();
     return true;
   }
@@ -230,7 +230,7 @@ namespace kaldi {
   //Adds task to the PendingTaskQueue
   void ThreadedBatchedCudaDecoder::AddTaskToPendingTaskQueue(TaskState *task) {
     tasks_add_mutex_.lock();
-    if(NumPendingTasks()==config_.max_pending_tasks_) {
+    if(NumPendingTasks()==config_.max_pending_tasks) {
       //task queue is full launch a new thread to add this task and exit to make room for other work
       work_pool_->enqueue(&ThreadedBatchedCudaDecoder::AddTaskToPendingTaskQueue,this,task);
     } else {
@@ -238,7 +238,7 @@ namespace kaldi {
       //insert into pending task queue
       pending_task_queue_[tasks_back_]=task;
       //printf("New task: %p:%s, loc: %d\n", task, key.c_str(), (int)tasks_back_);
-      tasks_back_=(tasks_back_+1)%(config_.max_pending_tasks_+1);
+      tasks_back_=(tasks_back_+1)%(config_.max_pending_tasks+1);
     }
     tasks_add_mutex_.unlock();
   }
@@ -248,8 +248,8 @@ namespace kaldi {
   void ThreadedBatchedCudaDecoder::AquireAdditionalTasks(CudaDecoder &cuda_decoder, 
       ChannelState &channel_state,
       std::vector<TaskState*> &tasks) {
-    std::vector<ChannelId> &channels=channel_state.channels_;
-    std::vector<ChannelId> &free_channels=channel_state.free_channels_;
+    std::vector<ChannelId> &channels=channel_state.channels;
+    std::vector<ChannelId> &free_channels=channel_state.free_channels;
 
     int tasksRequested=free_channels.size();      
     int tasksAssigned=0;
@@ -264,7 +264,7 @@ namespace kaldi {
       for (int i=0;i<tasksAssigned;i++) {
         //printf("%d, Assigned task[%d]: %p\n", i, (int)tasks_front_, pending_task_queue_[tasks_front_]);
         tasks.push_back(pending_task_queue_[tasks_front_]);
-        tasks_front_=(tasks_front_+1)%(config_.max_pending_tasks_+1);              
+        tasks_front_=(tasks_front_+1)%(config_.max_pending_tasks+1);              
       }
     }
     tasks_mutex_.unlock();
@@ -306,8 +306,8 @@ namespace kaldi {
     //for all new batches enqueue up nnet work.
     for (int i=first;i<tasks.size();i++) {
       TaskState &task = *tasks[i];
-      Vector<BaseFloat> &ivector_features=task.ivector_features_;
-      Matrix<BaseFloat> &input_features=task.input_features_;
+      Vector<BaseFloat> &ivector_features=task.ivector_features;
+      Matrix<BaseFloat> &input_features=task.input_features;
       std::vector<nnet3::NnetInferenceTask> &ntasks=nnet_tasks[i];
 
       //create task list
@@ -326,15 +326,15 @@ namespace kaldi {
     //Extract Posteriors
     for (int i=first;i<tasks.size();i++) {
       TaskState &task = *tasks[i];
-      CuMatrix<BaseFloat> &posteriors=task.posteriors_;
+      CuMatrix<BaseFloat> &posteriors=task.posteriors;
       MergeTaskOutputGPU(nnet_tasks[i], &posteriors);
 
       //nnet output is no longer necessary as we have copied the output out
       nnet_tasks[i].resize(0);
 
       //featurs are no longer needed so free memory
-      task.ivector_features_.Resize(0);
-      task.input_features_.Resize(0,0);
+      task.ivector_features.Resize(0);
+      task.input_features.Resize(0,0);
     }
 
     nvtxRangePop();
@@ -344,15 +344,15 @@ namespace kaldi {
   void ThreadedBatchedCudaDecoder::ComputeOneFeature(TaskState *task_) {
     nvtxRangePushA("ComputeOneFeature");
     TaskState &task=*task_;
-    Vector<BaseFloat> &ivector_features=task.ivector_features_;
-    Matrix<BaseFloat> &input_features=task.input_features_;
+    Vector<BaseFloat> &ivector_features=task.ivector_features;
+    Matrix<BaseFloat> &input_features=task.input_features;
 
     //create decoding state
     OnlineNnet2FeaturePipeline feature(*feature_info_);
 
     //Accept waveforms
-    feature.AcceptWaveform(task.sample_frequency_,
-        SubVector<BaseFloat>(*task.wave_samples_, 0, task.wave_samples_->Dim()));
+    feature.AcceptWaveform(task.sample_frequency,
+        SubVector<BaseFloat>(*task.wave_samples, 0, task.wave_samples->Dim()));
     feature.InputFinished();
     //All frames should be ready here
     int32 numFrames=feature.NumFramesReady();
@@ -381,7 +381,7 @@ namespace kaldi {
       std::vector<CudaDecodableInterface*> &decodables) {
     //Create mapped decodable here
     for (int i=first;i<tasks.size();i++) {
-      CuMatrix<BaseFloat> &posteriors=tasks[i]->posteriors_;
+      CuMatrix<BaseFloat> &posteriors=tasks[i]->posteriors;
       decodables.push_back(new DecodableCuMatrixMapped(trans_model_,posteriors,0));
     }
   }
@@ -393,9 +393,9 @@ namespace kaldi {
       std::vector<CudaDecodableInterface*> &decodables,
       std::vector<TaskState*> &tasks) {
 
-    std::vector<ChannelId> &channels=channel_state.channels_;
-    std::vector<ChannelId> &free_channels=channel_state.free_channels_;
-    std::vector<ChannelId> &completed_channels=channel_state.completed_channels_;
+    std::vector<ChannelId> &channels=channel_state.channels;
+    std::vector<ChannelId> &free_channels=channel_state.free_channels;
+    std::vector<ChannelId> &completed_channels=channel_state.completed_channels;
 
     //Here we will reorder arrays to put finished decodes at the end      
     int cur=0;                  //points to the current unchecked decode
@@ -441,15 +441,15 @@ namespace kaldi {
       ChannelState &channel_state,
       std::vector<CudaDecodableInterface*> &decodables, 
       std::vector<TaskState*> &tasks) {
-    std::vector<ChannelId> &channels=channel_state.channels_;
-    std::vector<ChannelId> &completed_channels=channel_state.completed_channels_;
+    std::vector<ChannelId> &channels=channel_state.channels;
+    std::vector<ChannelId> &completed_channels=channel_state.completed_channels;
 
     //Generate lattices for GetRawLattice
     std::vector<Lattice*> lattices(completed_channels.size());
     for(int i=0;i<completed_channels.size();i++) {
       //reverse order of lattices to match channel order
       //tasks order was reversed when reordering to the back
-      lattices[i]=&(tasks[tasks.size()-i-1]->lat_);
+      lattices[i]=&(tasks[tasks.size()-i-1]->lat);
     }
 
     //Get best path for completed tasks
@@ -458,10 +458,10 @@ namespace kaldi {
     // clean up datastructures for completed tasks
     for (int i=channels.size();i<tasks.size();i++) {
       delete decodables[i];
-      tasks[i]->posteriors_.Resize(0,0);
+      tasks[i]->posteriors.Resize(0,0);
     }      
     
-    if(config_.determinize_lattice_) {
+    if(config_.determinize_lattice) {
       nvtxRangePushA("DeterminizeLattice");
       //One more step to do on the tasks.  Determinize will mark task as finished.
       for (int i=channels.size();i<tasks.size();i++) {
@@ -472,7 +472,7 @@ namespace kaldi {
       //Task is done and ready for consumption
       for (int i=channels.size();i<tasks.size();i++) {
         //notify master threads this work is complete
-        tasks[i]->finished_=true;;
+        tasks[i]->finished=true;;
       }
     }
     
@@ -483,10 +483,10 @@ namespace kaldi {
   void ThreadedBatchedCudaDecoder::DeterminizeOneLattice(TaskState *task) {
     nvtxRangePush("DeterminizeOneLattice");
     //Note this destroys the original raw lattice
-    DeterminizeLatticePhonePrunedWrapper(trans_model_, &task->lat_, 
-        config_.decoder_opts_.lattice_beam, &(task->dlat_), config_.det_opts_);
-    task->determinized_=true;
-    task->finished_=true;
+    DeterminizeLatticePhonePrunedWrapper(trans_model_, &task->lat, 
+        config_.decoder_opts.lattice_beam, &(task->dlat), config_.det_opts);
+    task->determinized=true;
+    task->finished=true;
     nvtxRangePop();
   }
 
@@ -496,8 +496,8 @@ namespace kaldi {
     CuDevice::Instantiate();
 
     //Data structures that are reusable across decodes but unique to each thread
-    CudaDecoder cuda_decoder(cuda_fst_,config_.decoder_opts_,config_.max_batch_size_,config_.max_batch_size_);
-    nnet3::NnetBatchComputer computer(config_.compute_opts_, am_nnet_.GetNnet(), am_nnet_.Priors());
+    CudaDecoder cuda_decoder(cuda_fst_,config_.decoder_opts,config_.max_batch_size,config_.max_batch_size);
+    nnet3::NnetBatchComputer computer(config_.compute_opts, am_nnet_.GetNnet(), am_nnet_.Priors());
 
     ChannelState channel_state;
 
@@ -506,15 +506,15 @@ namespace kaldi {
 
     //Initialize reuseale data structures
     {
-      channel_state.channels_.reserve(config_.max_batch_size_);
-      channel_state.free_channels_.reserve(config_.max_batch_size_);
-      channel_state.completed_channels_.reserve(config_.max_batch_size_);
-      tasks.reserve(config_.max_batch_size_);
-      decodables.reserve(config_.max_batch_size_);
+      channel_state.channels.reserve(config_.max_batch_size);
+      channel_state.free_channels.reserve(config_.max_batch_size);
+      channel_state.completed_channels.reserve(config_.max_batch_size);
+      tasks.reserve(config_.max_batch_size);
+      decodables.reserve(config_.max_batch_size);
 
       //add all channels to free channel list
-      for (int i=0;i<config_.max_batch_size_;i++) {
-        channel_state.free_channels_.push_back(i);
+      for (int i=0;i<config_.max_batch_size;i++) {
+        channel_state.free_channels.push_back(i);
       } 
     }
 
@@ -566,14 +566,14 @@ namespace kaldi {
           {
             //3) Process outstanding work in a batch
             //Advance decoding on all open channels
-            cuda_decoder.AdvanceDecoding(channel_state.channels_,decodables);
+            cuda_decoder.AdvanceDecoding(channel_state.channels,decodables);
 
             //Adjust channel state for all completed decodes
             RemoveCompletedChannels(cuda_decoder,channel_state,decodables,tasks);
 
             //do loop repeates until we meet drain size or run out of work
-          } while(channel_state.completed_channels_.size()<config_.batch_drain_size_
-              && channel_state.channels_.size()>0);
+          } while(channel_state.completed_channels.size()<config_.batch_drain_size
+              && channel_state.channels.size()>0);
 
           //4) Post process work.  This reorders completed work to the end,
           //copies results outs, and cleans up data structures
@@ -592,25 +592,25 @@ namespace kaldi {
             KALDI_LOG << "    Aborting batch for recovery.  Canceling the following decodes:\n";
             for(int i=0;i<tasks.size();i++) {
               //move all channels to free channel queue
-              ChannelId channel=channel_state.channels_[i];
-              channel_state.free_channels_.push_back(channel);
+              ChannelId channel=channel_state.channels[i];
+              channel_state.free_channels.push_back(channel);
 
               TaskState &task=*(tasks[i]);
-              KALDI_LOG << "      Canceled: " << task.key_ << "\n";
+              KALDI_LOG << "      Canceled: " << task.key << "\n";
 
               //set error flag
-              task.error_=true;
-              task.error_string_=e.what();
+              task.error=true;
+              task.error_string=e.what();
 
               //cleanup memory
               delete decodables[i];
-              task.posteriors_.Resize(0,0);
+              task.posteriors.Resize(0,0);
 
               //notifiy master decode is finished
-              task.finished_=true;
+              task.finished=true;
             }
             tasks.resize(0);
-            channel_state.channels_.resize(0);
+            channel_state.channels.resize(0);
             decodables.resize(0);
           }
         }

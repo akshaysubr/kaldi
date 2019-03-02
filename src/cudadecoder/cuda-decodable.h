@@ -39,37 +39,37 @@ namespace kaldi {
    */
   //configuration options common to the BatchedCudaDecoder and BatchedCudaDecodable
   struct BatchedCudaDecoderConfig {
-    BatchedCudaDecoderConfig() : max_batch_size_(10), batch_drain_size_(5), 
-    num_control_threads_(7), num_worker_threads_(4), determinize_lattice_(true), max_pending_tasks_(2000) {};
+    BatchedCudaDecoderConfig() : max_batch_size(10), batch_drain_size(5), 
+    num_control_threads(7), num_worker_threads(4), determinize_lattice(true), max_pending_tasks(4000) {};
     void Register(OptionsItf *po) {
 
-      po->Register("max-batch-size",&max_batch_size_, "The maximum batch size to be used by the decoder.");
-      po->Register("batch-drain-size",&batch_drain_size_, "How far to drain the batch before refilling work.  This batches pre/post decode work.");
-      po->Register("cuda-control-threads",&num_control_threads_, "The number of workpool threads to use in the cuda decoder");
-      po->Register("cuda-worker-threads",&num_worker_threads_, "The number of sub threads a worker can spawn to help with CPU tasks.");
-      po->Register("determinize-lattice", &determinize_lattice_, "Determinize the lattice before output.");
-      po->Register("max-outstanding-queue-length", &max_pending_tasks_, 
+      po->Register("max-batch-size",&max_batch_size, "The maximum batch size to be used by the decoder.");
+      po->Register("batch-drain-size",&batch_drain_size, "How far to drain the batch before refilling work.  This batches pre/post decode work.");
+      po->Register("cuda-control-threads",&num_control_threads, "The number of workpool threads to use in the cuda decoder");
+      po->Register("cuda-worker-threads",&num_worker_threads, "The number of sub threads a worker can spawn to help with CPU tasks.");
+      po->Register("determinize-lattice", &determinize_lattice, "Determinize the lattice before output.");
+      po->Register("max-outstanding-queue-length", &max_pending_tasks, 
           "Number of files to allow to be outstanding at a time.  When the number of files is larger than this handles will be closed before opening new ones in FIFO order.");
 
-      decoder_opts_.nlanes=max_batch_size_;
-      decoder_opts_.nchannels=max_batch_size_;
+      decoder_opts.nlanes=max_batch_size;
+      decoder_opts.nchannels=max_batch_size;
 
-      feature_opts_.Register(po);
-      decoder_opts_.Register(po);
-      det_opts_.Register(po);
-      compute_opts_.Register(po);
+      feature_opts.Register(po);
+      decoder_opts.Register(po);
+      det_opts.Register(po);
+      compute_opts.Register(po);
     }
-    int max_batch_size_;
-    int batch_drain_size_;
-    int num_control_threads_;
-    int num_worker_threads_;
-    bool determinize_lattice_;
-    int max_pending_tasks_;
+    int max_batch_size;
+    int batch_drain_size;
+    int num_control_threads;
+    int num_worker_threads;
+    bool determinize_lattice;
+    int max_pending_tasks;
 
-    OnlineNnet2FeaturePipelineConfig  feature_opts_;           //constant readonly
-    CudaDecoderConfig decoder_opts_;                           //constant readonly
-    fst::DeterminizeLatticePhonePrunedOptions det_opts_;       //constant readonly
-    nnet3::NnetBatchComputerOptions compute_opts_;             //constant readonly
+    OnlineNnet2FeaturePipelineConfig  feature_opts;           //constant readonly
+    CudaDecoderConfig decoder_opts;                           //constant readonly
+    fst::DeterminizeLatticePhonePrunedOptions det_opts;       //constant readonly
+    nnet3::NnetBatchComputerOptions compute_opts;             //constant readonly
   };
 
   /**
@@ -108,7 +108,7 @@ namespace kaldi {
 
       int32 frame_offset_;
 
-      // raw_data_ and stride_ are a kind of fast look-aside for 'likes_', to be
+      // raw_data and stride_ are a kind of fast look-aside for 'likes_', to be
       // used when KALDI_PARANOID is false.
       const BaseFloat *raw_data_;
       int32 stride_;
@@ -169,7 +169,7 @@ namespace kaldi {
       bool GetLattice(const std::string &key, CompactLattice *lat);
 
       inline int NumPendingTasks() {
-        return (tasks_back_ - tasks_front_ + config_.max_pending_tasks_+1) % (config_.max_pending_tasks_+1); 
+        return (tasks_back_ - tasks_front_ + config_.max_pending_tasks+1) % (config_.max_pending_tasks+1); 
       };
 
     private:
@@ -178,51 +178,51 @@ namespace kaldi {
       //This state can be passed around by reference or pointer safely
       //and provides a convieniet way to store all decoding state.
       struct TaskState {
-        Vector<BaseFloat> raw_data_; // Wave input data when wave_reader passed
-        SubVector<BaseFloat> *wave_samples_; // Used as a pointer to either the raw data or the samples passed
-        std::string key_;
-        float sample_frequency_;
-        bool error_;
-        std::string error_string_;
+        Vector<BaseFloat> raw_data; // Wave input data when wave_reader passed
+        SubVector<BaseFloat> *wave_samples; // Used as a pointer to either the raw data or the samples passed
+        std::string key;
+        float sample_frequency;
+        bool error;
+        std::string error_string;
 
-        Lattice lat_;          //Raw Lattice output 
-        CompactLattice dlat_;  //Determinized lattice output.  Only set if determinize-lattice=true
-        std::atomic<bool> finished_;  //Tells master thread if task has finished execution
+        Lattice lat;          //Raw Lattice output 
+        CompactLattice dlat;  //Determinized lattice output.  Only set if determinize-lattice=true
+        std::atomic<bool> finished;  //Tells master thread if task has finished execution
 
-        bool determinized_;
+        bool determinized;
         
-        Vector<BaseFloat> ivector_features_;
-        Matrix<BaseFloat> input_features_;
-        CuMatrix<BaseFloat> posteriors_;
+        Vector<BaseFloat> ivector_features;
+        Matrix<BaseFloat> input_features;
+        CuMatrix<BaseFloat> posteriors;
 
-        TaskState() : wave_samples_(NULL), sample_frequency_(0), error_(false), finished_(false), determinized_(false) {}
-        ~TaskState() { if(wave_samples_) delete wave_samples_;}
+        TaskState() : wave_samples(NULL), sample_frequency(0), error(false), finished(false), determinized(false) {}
+        ~TaskState() { if(wave_samples) delete wave_samples;}
 
         //Init when wave data is passed directly in.  This data is deep copied.
         void Init(const std::string &key_in, const WaveData &wave_data_in) {
-          raw_data_.Resize(wave_data_in.Data().NumRows()*wave_data_in.Data().NumCols(), kUndefined);
-          memcpy(raw_data_.Data(), wave_data_in.Data().Data(), raw_data_.Dim()*sizeof(BaseFloat));
-          wave_samples_=new SubVector<BaseFloat>(raw_data_, 0, raw_data_.Dim());
-          sample_frequency_=wave_data_in.SampFreq();
-          determinized_=false;
-          finished_=false;
-          key_=key_in;
+          raw_data.Resize(wave_data_in.Data().NumRows()*wave_data_in.Data().NumCols(), kUndefined);
+          memcpy(raw_data.Data(), wave_data_in.Data().Data(), raw_data.Dim()*sizeof(BaseFloat));
+          wave_samples=new SubVector<BaseFloat>(raw_data, 0, raw_data.Dim());
+          sample_frequency=wave_data_in.SampFreq();
+          determinized=false;
+          finished=false;
+          key=key_in;
         };
         //Init when raw data is passed in.  This data is shallow copied.
         void Init(const std::string &key_in, const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
-          wave_samples_=new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
-          sample_frequency_=sample_rate;
-          determinized_=false;
-          finished_=false;
-          key_=key_in;
+          wave_samples=new SubVector<BaseFloat>(wave_data_in, 0, wave_data_in.Dim());
+          sample_frequency=sample_rate;
+          determinized=false;
+          finished=false;
+          key=key_in;
         }
       };
 
       //Holds the current channel state for a worker
       struct ChannelState {
-        std::vector<ChannelId> channels_;
-        std::vector<ChannelId> free_channels_; 
-        std::vector<ChannelId> completed_channels_; 
+        std::vector<ChannelId> channels;
+        std::vector<ChannelId> free_channels; 
+        std::vector<ChannelId> completed_channels; 
       };
 
       //Adds task to the PendingTaskQueue
