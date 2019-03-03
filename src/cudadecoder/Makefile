@@ -11,7 +11,7 @@ endif
 
 TESTFILES =
 
-OBJFILES += cuda-decodable.o
+OBJFILES += batched-threaded-cuda-decoder.o decodable-cumatrix.o
 ifeq ($(CUDA), true)
   OBJFILES += cuda-decoder.o cuda-decoder-kernels.o cuda-decoder-utils.o
 endif

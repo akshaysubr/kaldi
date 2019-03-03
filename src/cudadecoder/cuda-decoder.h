@@ -16,16 +16,16 @@
 #ifndef KALDI_DECODER_CUDA_DECODER_H_
 #define KALDI_DECODER_CUDA_DECODER_H_
 
-#include "util/stl-utils.h"
-#include "lat/kaldi-lattice.h"
-#include "nnet3/decodable-online-looped.h"
-#include "omp.h"
 #include <cuda_runtime_api.h>
 #include <vector>
 #include <tuple>
 
+#include "util/stl-utils.h"
+#include "lat/kaldi-lattice.h"
+#include "nnet3/decodable-online-looped.h"
 #include "cudadecoder/cuda-decoder-utils.h"
-			
+#include "cudadecoder/cuda-decodable-itf.h"
+
 //
 // To understand the following lines it is important to 
 // know the difference between what we call a decoder lane and a decoder 
@@ -88,13 +88,6 @@ namespace kaldi {
 			typedef StdArc::StateId StateId;
 
       enum OVERFLOW_TYPE { OVERFLOW_NONE=0, OVERFLOW_MAIN_Q=1, OVERFLOW_AUX_Q=2 };
-  class CudaDecodableInterface : public DecodableInterface {
- 		public:
-      virtual BaseFloat* GetLogLikelihoodsCudaPointer(int32 subsampled_frame) = 0;
-  };
-
-
-
 
 	template<typename T>
 		// if necessary, make a version that always use ld_ as the next power of 2

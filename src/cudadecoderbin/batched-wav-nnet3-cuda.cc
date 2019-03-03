@@ -18,16 +18,16 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include "cudadecoder/batched-threaded-cuda-decoder.h"
 #include "cudamatrix/cu-allocator.h"
-#include "cudadecoder/cuda-decodable.h"
 #include "fstext/fstext-lib.h"
 #include "lat/lattice-functions.h"
 #include "util/kaldi-thread.h"
-#include "nnet3/nnet-utils.h"
-#include <nvToolsExt.h>
-#include <cuda_profiler_api.h>
-#include <cuda.h>
+//#include "nnet3/nnet-utils.h"
 #include <chrono>
+#include <cuda.h>
+#include <cuda_profiler_api.h>
+#include <nvToolsExt.h>
 
 using namespace kaldi;
 
@@ -80,7 +80,7 @@ void GetDiagnosticsAndPrintOutput(const std::string &utt,
     CompactLattice clat;                                                       \
     bool valid;                                                                \
                                                                                \
-    if (batchedDecoderConfig.determinize_lattice_) {                           \
+    if (batchedDecoderConfig.determinize_lattice) {                            \
       valid = CudaDecoder.GetLattice(key, &clat);                              \
     } else {                                                                   \
       Lattice lat;                                                             \
@@ -91,7 +91,7 @@ void GetDiagnosticsAndPrintOutput(const std::string &utt,
       GetDiagnosticsAndPrintOutput(utt, word_syms, clat, &num_frames,          \
                                    &tot_like);                                 \
       if (write_lattice &&                                                     \
-          key == utt) {/*only write output on first iteration*/                \
+          key == utt) { /*only write output on first iteration*/               \
         nvtxRangePushA("Lattice Write");                                       \
         clat_writer.Write(utt, clat);                                          \
         nvtxRangePop();                                                        \
@@ -100,14 +100,15 @@ void GetDiagnosticsAndPrintOutput(const std::string &utt,
     CudaDecoder.CloseDecodeHandle(key);                                        \
     processed.pop();                                                           \
     if (++current_count ==                                                     \
-        count_per_iteration) {/*this utt is the last in an iter*/              \
+        count_per_iteration) { /*this utt is the last in an iter*/             \
       auto finish = std::chrono::high_resolution_clock::now();                 \
       std::chrono::duration<double> total_time = finish - start;               \
       KALDI_LOG << "Iteration: " << output_iter                                \
                 << " ~Aggregate Total Time: " << total_time.count()            \
-                << " Total Audio: " << total_audio *output_iter                \
+                << " Total Audio: " << total_audio * output_iter               \
                 << " RealTimeX: "                                              \
-                << output_iter *total_audio / total_time.count() << std::endl; \
+                << output_iter * total_audio / total_time.count()              \
+                << std::endl;                                                  \
       current_count = 0;                                                       \
       output_iter++;                                                           \
     }                                                                          \
@@ -137,9 +138,9 @@ int main(int argc, char *argv[]) {
     int num_todo = -1;
     int iterations = 1;
     ParseOptions po(usage);
-    int pipeline_length = 4000;  // length of pipeline of outstanding requests,
-                                 // this is independent of queue lengths in
-                                 // decoder
+    int pipeline_length = 4000; // length of pipeline of outstanding requests,
+                                // this is independent of queue lengths in
+                                // decoder
 
     po.Register("write-lattice", &write_lattice,
                 "Output lattice to a file.  Setting to false is useful when "
@@ -155,7 +156,7 @@ int main(int argc, char *argv[]) {
                 "only once.");
 
     // Multi-threaded CPU and batched GPU decoder
-    BatchedCudaDecoderConfig batchedDecoderConfig;
+    BatchedThreadedCudaDecoderConfig batchedDecoderConfig;
 
     CuDevice::RegisterDeviceOptions(&po);
     RegisterCuAllocatorOptions(&po);
@@ -172,7 +173,7 @@ int main(int argc, char *argv[]) {
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
 
-    ThreadedBatchedCudaDecoder CudaDecoder(batchedDecoderConfig);
+    BatchedThreadedCudaDecoder CudaDecoder(batchedDecoderConfig);
 
     std::string nnet3_rxfilename = po.GetArg(1), fst_rxfilename = po.GetArg(2),
                 wav_rspecifier = po.GetArg(3), clat_wspecifier = po.GetArg(4);
@@ -199,16 +200,16 @@ int main(int argc, char *argv[]) {
 
     nvtxRangePush("Global Timer");
     auto start =
-        std::chrono::high_resolution_clock::now();  // starting timer here so we
-                                                    // can measure throughput
-                                                    // without allocation
-                                                    // overheads
+        std::chrono::high_resolution_clock::now(); // starting timer here so we
+                                                   // can measure throughput
+                                                   // without allocation
+                                                   // overheads
 
     int count_per_iteration = 0;
     int current_count = 0;
     int output_iter = 1;
 
-    std::queue<std::pair<std::string, std::string> > processed;
+    std::queue<std::pair<std::string, std::string>> processed;
     for (int iter = 0; iter < iterations; iter++) {
       SequentialTableReader<WaveHolder> wav_reader(wav_rspecifier);
 
@@ -236,17 +237,18 @@ int main(int argc, char *argv[]) {
 
         while (processed.size() >= pipeline_length) {
           FinishOneDecode();
-        }  // end while
+        } // end while
 
         nvtxRangePop();
-        if (num_todo != -1 && num_done >= num_todo) break;
-      }  // end utterance loop
+        if (num_todo != -1 && num_done >= num_todo)
+          break;
+      } // end utterance loop
 
-    }  // end iterations loop
+    } // end iterations loop
 
     while (processed.size() > 0) {
       FinishOneDecode();
-    }  // end while
+    } // end while
 
     KALDI_LOG << "Decoded " << num_done << " utterances, " << num_err
               << " with errors.";
@@ -264,7 +266,7 @@ int main(int argc, char *argv[]) {
               << " RealTimeX: " << total_audio * iterations / total_time.count()
               << std::endl;
 
-    delete word_syms;  // will delete if non-NULL.
+    delete word_syms; // will delete if non-NULL.
 
     clat_writer.Close();
 
@@ -274,9 +276,8 @@ int main(int argc, char *argv[]) {
     return 0;
 
     // return (num_done != 0 ? 0 : 1);
-  }
-  catch (const std::exception &e) {
+  } catch (const std::exception &e) {
     std::cerr << e.what();
     return -1;
   }
-}  // main()
+} // main()
