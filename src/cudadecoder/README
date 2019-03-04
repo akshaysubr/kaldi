@@ -98,6 +98,9 @@ Decoder Options:
     value is exceeded the beam will tighten and accuracy may decrease.
   max-active:  maximum number of arcs active in any given frame.
 
+Device Options:
+  use-tensor-cores:  Enables tensor corse (fp16 math) for gemms.  This is
+    faster but less accurate.  For inferences the loss of accuracy is marginal
 
 GPU MEMORY USAGE:
 
