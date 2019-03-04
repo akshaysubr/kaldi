@@ -22,9 +22,9 @@
 #include "cudamatrix/cu-allocator.h"
 #include "fstext/fstext-lib.h"
 #include "lat/lattice-functions.h"
-#include "util/kaldi-thread.h"
 #include "nnet3/am-nnet-simple.h"
 #include "nnet3/nnet-utils.h"
+#include "util/kaldi-thread.h"
 #include <chrono>
 #include <cuda.h>
 #include <cuda_profiler_api.h>
@@ -169,7 +169,7 @@ int main(int argc, char *argv[]) {
       po.PrintUsage();
       return 1;
     }
-  
+
     g_cuda_allocator.SetOptions(g_allocator_options);
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
@@ -178,7 +178,7 @@ int main(int argc, char *argv[]) {
 
     std::string nnet3_rxfilename = po.GetArg(1), fst_rxfilename = po.GetArg(2),
                 wav_rspecifier = po.GetArg(3), clat_wspecifier = po.GetArg(4);
-   
+
     TransitionModel trans_model;
     nnet3::AmNnetSimple am_nnet;
 

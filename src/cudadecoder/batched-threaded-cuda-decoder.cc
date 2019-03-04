@@ -26,8 +26,8 @@ void BatchedThreadedCudaDecoder::Initialize(
   KALDI_LOG << "BatchedThreadedCudaDecoder Initialize with "
             << config_.num_control_threads << " threads\n";
 
-  am_nnet_=&am_nnet;
-  trans_model_=&trans_model;
+  am_nnet_ = &am_nnet;
+  trans_model_ = &trans_model;
   cuda_fst_.Initialize(decode_fst, *trans_model_);
 
   feature_info_ = new OnlineNnet2FeaturePipelineInfo(config_.feature_opts);

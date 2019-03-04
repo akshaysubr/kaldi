@@ -53,7 +53,8 @@ struct BatchedThreadedCudaDecoderConfig {
                  "batches pre/post decode work.");
     po->Register("cuda-control-threads", &num_control_threads,
                  "The number of workpool threads to use in the cuda decoder");
-    po->Register("cuda-worker-threads", &num_worker_threads,
+    po->Register(
+        "cuda-worker-threads", &num_worker_threads,
         "The number of sub threads a worker can spawn to help with CPU tasks.");
     po->Register("determinize-lattice", &determinize_lattice,
                  "Determinize the lattice before output.");
@@ -86,7 +87,7 @@ struct BatchedThreadedCudaDecoderConfig {
 /*
  * BatchedThreadedCudaDecoder uses multiple levels of parallelism in order to
  * decode quickly on CUDA GPUs. This is the primary interface for cuda decoding.
- * For examples of how to use this decoder see cudadecoder/README and 
+ * For examples of how to use this decoder see cudadecoder/README and
  * cudadecoderbin/batched-wav-nnet3-cuda.cc
  */
 class BatchedThreadedCudaDecoder {
@@ -97,7 +98,8 @@ public:
   // TODO should this take an nnet instead of a string?
   // allocates reusable objects that are common across all decodings
   void Initialize(const fst::Fst<fst::StdArc> &decode_fst,
-                  const nnet3::AmNnetSimple &nnet, const TransitionModel &trans_model);
+                  const nnet3::AmNnetSimple &nnet,
+                  const TransitionModel &trans_model);
 
   // deallocates reusable objects
   void Finalize();
