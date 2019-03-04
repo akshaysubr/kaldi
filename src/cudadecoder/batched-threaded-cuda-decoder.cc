@@ -21,20 +21,14 @@
 namespace kaldi {
 
 void BatchedThreadedCudaDecoder::Initialize(
-    const fst::Fst<fst::StdArc> &decode_fst, std::string nnet3_rxfilename) {
+    const fst::Fst<fst::StdArc> &decode_fst, const nnet3::AmNnetSimple &am_nnet,
+    const TransitionModel &trans_model) {
   KALDI_LOG << "BatchedThreadedCudaDecoder Initialize with "
             << config_.num_control_threads << " threads\n";
 
-  // read transition model and nnet
-  bool binary;
-  Input ki(nnet3_rxfilename, &binary);
-  trans_model_.Read(ki.Stream(), binary);
-  am_nnet_.Read(ki.Stream(), binary);
-  SetBatchnormTestMode(true, &(am_nnet_.GetNnet()));
-  SetDropoutTestMode(true, &(am_nnet_.GetNnet()));
-  nnet3::CollapseModel(nnet3::CollapseModelConfig(), &(am_nnet_.GetNnet()));
-
-  cuda_fst_.Initialize(decode_fst, trans_model_);
+  am_nnet_=&am_nnet;
+  trans_model_=&trans_model;
+  cuda_fst_.Initialize(decode_fst, *trans_model_);
 
   feature_info_ = new OnlineNnet2FeaturePipelineInfo(config_.feature_opts);
   feature_info_->ivector_extractor_info.use_most_recent_ivector = true;
@@ -377,7 +371,7 @@ void BatchedThreadedCudaDecoder::AllocateDecodables(
   for (int i = first; i < tasks.size(); i++) {
     CuMatrix<BaseFloat> &posteriors = tasks[i]->posteriors;
     decodables.push_back(
-        new DecodableCuMatrixMapped(trans_model_, posteriors, 0));
+        new DecodableCuMatrixMapped(*trans_model_, posteriors, 0));
   }
 }
 
@@ -482,7 +476,7 @@ void BatchedThreadedCudaDecoder::PostDecodeProcessing(
 void BatchedThreadedCudaDecoder::DeterminizeOneLattice(TaskState *task) {
   nvtxRangePush("DeterminizeOneLattice");
   // Note this destroys the original raw lattice
-  DeterminizeLatticePhonePrunedWrapper(trans_model_, &task->lat,
+  DeterminizeLatticePhonePrunedWrapper(*trans_model_, &task->lat,
                                        config_.decoder_opts.lattice_beam,
                                        &(task->dlat), config_.det_opts);
   task->determinized = true;
@@ -497,15 +491,15 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
   // Data structures that are reusable across decodes but unique to each thread
   CudaDecoder cuda_decoder(cuda_fst_, config_.decoder_opts,
                            config_.max_batch_size, config_.max_batch_size);
-  nnet3::NnetBatchComputer computer(config_.compute_opts, am_nnet_.GetNnet(),
-                                    am_nnet_.Priors());
+  nnet3::NnetBatchComputer computer(config_.compute_opts, am_nnet_->GetNnet(),
+                                    am_nnet_->Priors());
 
   ChannelState channel_state;
 
   std::vector<TaskState *> tasks; // The state for each decode
   std::vector<CudaDecodableInterface *> decodables;
 
-  // Initialize reuseale data structures
+  // Initialize reuseable data structures
   {
     channel_state.channels.reserve(config_.max_batch_size);
     channel_state.free_channels.reserve(config_.max_batch_size);

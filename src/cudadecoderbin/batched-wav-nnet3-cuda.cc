@@ -23,7 +23,8 @@
 #include "fstext/fstext-lib.h"
 #include "lat/lattice-functions.h"
 #include "util/kaldi-thread.h"
-//#include "nnet3/nnet-utils.h"
+#include "nnet3/am-nnet-simple.h"
+#include "nnet3/nnet-utils.h"
 #include <chrono>
 #include <cuda.h>
 #include <cuda_profiler_api.h>
@@ -168,7 +169,7 @@ int main(int argc, char *argv[]) {
       po.PrintUsage();
       return 1;
     }
-
+  
     g_cuda_allocator.SetOptions(g_allocator_options);
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
@@ -177,13 +178,25 @@ int main(int argc, char *argv[]) {
 
     std::string nnet3_rxfilename = po.GetArg(1), fst_rxfilename = po.GetArg(2),
                 wav_rspecifier = po.GetArg(3), clat_wspecifier = po.GetArg(4);
+   
+    TransitionModel trans_model;
+    nnet3::AmNnetSimple am_nnet;
+
+    // read transition model and nnet
+    bool binary;
+    Input ki(nnet3_rxfilename, &binary);
+    trans_model.Read(ki.Stream(), binary);
+    am_nnet.Read(ki.Stream(), binary);
+    SetBatchnormTestMode(true, &(am_nnet.GetNnet()));
+    SetDropoutTestMode(true, &(am_nnet.GetNnet()));
+    nnet3::CollapseModel(nnet3::CollapseModelConfig(), &(am_nnet.GetNnet()));
 
     CompactLatticeWriter clat_writer(clat_wspecifier);
 
     fst::Fst<fst::StdArc> *decode_fst =
         fst::ReadFstKaldiGeneric(fst_rxfilename);
 
-    CudaDecoder.Initialize(*decode_fst, nnet3_rxfilename);
+    CudaDecoder.Initialize(*decode_fst, am_nnet, trans_model);
 
     delete decode_fst;
 

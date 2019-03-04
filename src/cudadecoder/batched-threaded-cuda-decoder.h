@@ -53,8 +53,7 @@ struct BatchedThreadedCudaDecoderConfig {
                  "batches pre/post decode work.");
     po->Register("cuda-control-threads", &num_control_threads,
                  "The number of workpool threads to use in the cuda decoder");
-    po->Register(
-        "cuda-worker-threads", &num_worker_threads,
+    po->Register("cuda-worker-threads", &num_worker_threads,
         "The number of sub threads a worker can spawn to help with CPU tasks.");
     po->Register("determinize-lattice", &determinize_lattice,
                  "Determinize the lattice before output.");
@@ -85,33 +84,10 @@ struct BatchedThreadedCudaDecoderConfig {
 };
 
 /*
- *  BatchedThreadedCudaDecoder uses multiple levels of parallelism in order to
- *decode quickly on CUDA GPUs.
- *  It's API is utterance centric using deferred execution.  That is a user
- *submits work one utterance at a time
- *  and the class batches that work behind the scene. Utterance are passed into
- *the API with a unique key of type string.
- *  The user must ensure this name is unique.  APIs are provided to enqueue
- *work, query the best path, and cleanup enqueued work.
- *  Once a user closes a decode handle they are free to use that key again.
- *
- *  Example Usage is as follows:
- *  BatchedThreadedCudaDecoder decoder;
- *  decoder.Initalize(decode_fst, am_nnet_rx_file);
- *
- *  //some loop
- *    std::string utt_key = ...
- *    while(!decoder.OpenDecodeHandle(utt_key,wave_data));
- *
- *  ...
- *
- *  //some loop
- *    Lattice lat;
- *    std::string utt_key = ...
- *    decoder.GetRawLattice(utt_key,&lat);
- *    decoder.CloseDecodeHandle(utt_key);
- *
- *  decoder.Finalize();
+ * BatchedThreadedCudaDecoder uses multiple levels of parallelism in order to
+ * decode quickly on CUDA GPUs. This is the primary interface for cuda decoding.
+ * For examples of how to use this decoder see cudadecoder/README and 
+ * cudadecoderbin/batched-wav-nnet3-cuda.cc
  */
 class BatchedThreadedCudaDecoder {
 public:
@@ -121,7 +97,8 @@ public:
   // TODO should this take an nnet instead of a string?
   // allocates reusable objects that are common across all decodings
   void Initialize(const fst::Fst<fst::StdArc> &decode_fst,
-                  std::string nnet3_rxfilename);
+                  const nnet3::AmNnetSimple &nnet, const TransitionModel &trans_model);
+
   // deallocates reusable objects
   void Finalize();
 
@@ -258,8 +235,8 @@ private:
   const BatchedThreadedCudaDecoderConfig &config_;
 
   CudaFst cuda_fst_;
-  TransitionModel trans_model_;
-  nnet3::AmNnetSimple am_nnet_;
+  const TransitionModel *trans_model_;
+  const nnet3::AmNnetSimple *am_nnet_;
   nnet3::DecodableNnetSimpleLoopedInfo *decodable_info_;
   OnlineNnet2FeaturePipelineInfo *feature_info_;
 
