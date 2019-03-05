@@ -23,9 +23,6 @@ DecodableCuMatrixMapped::DecodableCuMatrixMapped(
     const TransitionModel &tm, const CuMatrixBase<BaseFloat> &likes,
     int32 frame_offset)
     : trans_model_(tm), likes_(&likes), frame_offset_(frame_offset) {
-  stride_ = likes.Stride();
-  raw_data_ = likes.Data() - (stride_ * frame_offset);
-
   if (likes.NumCols() != tm.NumPdfs())
     KALDI_ERR << "Mismatch, matrix has " << likes.NumCols()
               << " rows but transition-model has " << tm.NumPdfs()
