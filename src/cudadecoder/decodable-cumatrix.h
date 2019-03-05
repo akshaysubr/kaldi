@@ -1,6 +1,7 @@
 // cudadecoder/decodable-cumatrix.h
 /*
  * Copyright (c) 2017, NVIDIA CORPORATION.  All rights reserved.
+ * Authors:  Hugo Braun, Justin Luitjens, Ryan Leary
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
