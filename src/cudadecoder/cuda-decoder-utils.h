@@ -1,16 +1,18 @@
 // cudadecoder/cuda-decoder-utils.h
-// TODO nvidia apache2
+//
+// Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+// Hugo Braun, Justin Luitjens, Ryan Leary
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//  http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-// WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-// MERCHANTABLITY OR NON-INFRINGEMENT.
-// See the Apache 2 License for the specific language governing permissions and
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
 // limitations under the License.
 
 #ifndef KALDI_DECODER_CUDA_DECODER_UTILS_H_
@@ -245,7 +247,47 @@ struct ChannelCounters {
   int2 min_int_cost_and_arg_with_final;
   int2 min_int_cost_and_arg_without_final;
 };
+//
+// Data structures used by the kernels
+//
 
+// Count of tokens and arcs in a queue
+// narcs = sum(number of arcs going out of token i next state) for each token
+// in the queue
+// We use this struct to keep the two int32s adjacent in memory
+// we need this in order to update both using an atomic64 operation
+struct TokenAndArcCount {
+  int32 ntokens;
+  int32 narcs;
+};
+
+// Union structure of the TokenAndArcCount
+// We use split to access the int32s
+// We use both to update both using an atomic64
+union TokenAndArcCountUnion {
+  TokenAndArcCount split;
+  unsigned long long both;
+};
+
+//
+// Used for the cutoff
+// cutoff = min_cost + beam
+// We store both separatly because we have an adaptive beam
+// We may change the beam after discovering min_cost
+// we need to keep track of min_cost to apply the new beam
+// (we don't know what the old beam was)
+//
+// Native float and Integers version
+//
+struct MinCostAndBeam {
+  CostType min_cost;
+  CostType beam;
+};
+
+struct MinCostAndBeamIntegers {
+  IntegerCostType min_cost;
+  IntegerCostType beam;
+};
 class CudaDecoderException : public std::exception {
  public:
   CudaDecoderException(const char *str_, const char *file_, int line_,
