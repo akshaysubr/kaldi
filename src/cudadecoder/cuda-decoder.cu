@@ -38,6 +38,13 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
       nlanes_(nlanes),
       nchannels_(nchannels) {
   KALDI_ASSERT(nlanes_ <= KALDI_CUDA_DECODER_MAX_N_LANES);
+
+  // Checking if all constants look ok. TODO move into another function
+  // TODO we could use static asserts
+  // We need that because we need to be able to do the scan in one pass in the kernel
+  // update_beam_using_histogram_kernel
+  KALDI_ASSERT(KALDI_CUDA_DECODER_HISTO_NBINS < KALDI_CUDA_DECODER_1D_BLOCK);
+
   //
   // For a description of the class members, please refer to the cuda-decoder.h
   // file
@@ -59,7 +66,7 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
 
   ++nchannels_;  // allocating init_channel_params at the same time
   init_channel_id_ = nchannels_ - 1;  // Using last one as init_channel_params
-  hashmap_capacity_ = max_tokens_per_frame_;  // TODO
+  hashmap_capacity_ = KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR * max_tokens_per_frame_; 
 
   d_channels_counters_.Resize(nchannels_, 1);
   d_lanes_counters_.Resize(nlanes, 1);
@@ -68,9 +75,9 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
   d_aux_q_state_and_cost_.Resize(nlanes, max_tokens_per_frame_);
   d_aux_q_info_.Resize(nlanes, max_tokens_per_frame_);
   d_main_q_degrees_prefix_sum_.Resize(nchannels_, max_tokens_per_frame_);
-  d_histograms_.Resize(nlanes_, KALDI_CUDA_DECODER_NBINS);
+  d_histograms_.Resize(nlanes_, KALDI_CUDA_DECODER_HISTO_NBINS);
   cudaMemsetAsync(d_histograms_.lane(0), 0,
-                  sizeof(int32) * KALDI_CUDA_DECODER_NBINS * nlanes_,
+                  sizeof(int32) * KALDI_CUDA_DECODER_HISTO_NBINS * nlanes_,
                   compute_st_);
 
   // TODO use aux_q_state_and_cost for following 2
@@ -230,6 +237,8 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
       d_aux_q_state_and_cost_.GetInterface();
   h_kernel_params_ = new KernelParams();
 
+  // Making sure the params are small enough to be passed to a cuda kernel
+KALDI_ASSERT((sizeof(KernelParams) + sizeof(DeviceParams)) < KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE);
   init_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(hashmap_capacity_,
                                                       nlanes_),
                         KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(

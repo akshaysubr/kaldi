@@ -57,29 +57,33 @@
 // Below that value, we launch the persistent kernel for NonEmitting
 #define KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS 4096
 
-// TODO remove the following two defines (dead)
-// How many "heavy load" non emitting kernels to launch before attemping to
-// start the persistent one
-#define KALDI_CUDA_DECODER_NONEM_NEXPAND_PIPELINE_FIRST 2
-// How many "heavy load" non emitting kernels to launch if previous attempt was
-// not enough
-#define KALDI_CUDA_DECODER_NONEM_NEXPAND_PIPELINE_RELAUNCH 2
-
-// Moves data back to the CPU during computation and looks if everything looks
-// ok
-// Three levels 0 (no debugging), and 1 to 3, depending on how much we want to
-// check things
-// (performance will decrease)
-#define KALDI_CUDA_DECODER_DEBUG_LEVEL 0
+// We know we will have at least X elements in the hashmap
+// We allocate space for X*KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR elements
+// to avoid having too much collisions
+#define KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR 1
 
 // Max size of the total kernel arguments
 // 4kb for compute capability >= 2.0
 #define KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE (4096)
 
-#define KALDI_CUDA_DECODER_NBINS 255  // TODO rename HISTO_NBINS
+// When applying the max-active, we need to compute a topk
+// to perform that (soft) topk, we compute a histogram
+// here we define the number of bins in that histogram
+// it has to be less than the number of 1D threads 
+#define KALDI_CUDA_DECODER_HISTO_NBINS 255
 
+// Adaptive beam parameters 
+// We will decrease the beam when we detect that we are generating too many tokens
+// for the first segment of the aux_q, we don't do anything (keep the original beam)
+// the first segment is made of (aux_q capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
+// then we will decrease the beam step by step, until 0.
+// we will decrease the beam every m elements, with:
+// x = (aux_q capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT (static segment
+// y = (aux_q capacity) - x
+// m = y / KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT 4
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
+
 namespace kaldi {
 typedef float CostType;
 typedef int32 IntegerCostType;
@@ -98,6 +102,7 @@ enum OVERFLOW_TYPE {
 
 template <typename T>
 // if necessary, make a version that always use ld_ as the next power of 2
+// TODO move in utils
 class DeviceMatrix {
   T *data_;
   void Allocate() {
@@ -315,29 +320,34 @@ class CudaDecoder {
               int32 nlanes = 1, int32 nchannels = 1);
   ~CudaDecoder();
 
-  // Computes the initial channel
-  // The initial channel is used to initialize a channel
-  // when a new utterance starts
-  // TODO private
-  void ComputeInitialChannel();
-
   // InitDecoding initializes the decoding, and should only be used if you
   // intend to call AdvanceDecoding() on the channels listed in channels
   //
   void InitDecoding(const std::vector<ChannelId> &channels);
-  void InitDecoding();  // batch size = 1
 
-  /// This will decode until there are no more frames ready in the decodable
-  /// object, but if max_num_frames is >= 0 it will decode no more than
-  /// that many frames.  If it returns false, then no tokens are alive,
-  /// which is a kind of error state.
+  // AdvanceDecoding on a given batch
+  // a batch is defined by the channels vector
+  // We can compute N channels at the same time (in the same batch)
+  // where N = number of lanes, as defined in the constructor 
+  // AdvanceDecoding will compute as many frames as possible while running the full batch
+  // when at least one channel has no more frames ready to be computed, AdvanceDecoding returns
+  // The user then decides what to do, i.e.:
+  // 
+  // 1) either remove the empty channel from the channels list
+  // and call again AdvanceDecoding
+  // 2) or swap the empty channel with another one that has frames ready
+  // and call again AdvanceDecoding
+  //
+  // Solution 2) should always be preferred because we need to run full, big batches to saturate the GPU
+  //
+  // If max_num_frames is >= 0 it will decode no more than
+  // that many frames.
   void AdvanceDecoding(const std::vector<ChannelId> &channels,
                        std::vector<CudaDecodableInterface *> &decodables,
                        int32 max_num_frames = -1);
 
-  /// Returns the number of frames already decoded.
+  // Returns the number of frames already decoded in a given channel
   int32 NumFramesDecoded(ChannelId ichannel) const;
-  // int32 NumFramesDecoded() const; // batch size = 1
 
   // GetBestPath gets the decoding traceback. If "use_final_probs" is true
   // AND we reached a final state, it limits itself to final states;
@@ -366,15 +376,6 @@ class CudaDecoder {
       std::vector<std::pair<int32, CostType>> *argmins,
       std::vector<std::vector<std::pair<int, float>>> *list_finals_token_idx,
       std::vector<bool> *has_reached_final);
-
-  /// FinalRelativeCost() serves the same function as ReachedFinal(), but gives
-  /// more information.  It returns the difference between the best (final-cost
-  /// plus
-  /// cost) of any token on the final frame, and the best cost of any token
-  /// on the final frame.  If it is infinity it means no final-states were
-  /// present
-  /// on the final frame.  It will usually be nonnegative.
-  CostType FinalRelativeCost() const;
 
   //
   // Data structures used by the kernels
@@ -408,7 +409,6 @@ class CudaDecoder {
   //
   // Native float and Integers version
   //
-
   struct MinCostAndBeam {
     CostType min_cost;
     CostType beam;
@@ -420,18 +420,17 @@ class CudaDecoder {
   };
 
  private:
+  // Computes the initial channel
+  // The initial channel is used to initialize a channel
+  // when a new utterance starts
+  void ComputeInitialChannel();
+
   // Updates *h_kernel_params using channels
   void SetChannelsInKernelParams(const std::vector<ChannelId> &channels);
 
   // Called by InitDecoding. Does the part of InitDecoding that needs to be done
   // on the device
   void InitDecodingOnDevice(const std::vector<ChannelId> &channels);
-
-  //
-  // Kernel wrappers
-  // The following functions are wrappers for cuda kernels
-  //
-
   //
   // ExpandArcs kernel
   // This kernel reads token from the main_q and uses the FST graph
@@ -536,8 +535,6 @@ class CudaDecoder {
   // main_q_size_estimate is used to decide how many threads to launch
   // it is not used inside the kernel, where the exact value will be used
   //
-
-  void PreprocessInPlace(int32 main_q_size_estimate);
 
   void LoadChannelsStateToLanesCPU();
   void SaveChannelsStateFromLanesCPU();
