@@ -168,25 +168,6 @@ void CuArrayBase<T>::CopyFromArray(const CuArrayBase<T> &src) {
   } else
 #endif
   {
-    memcpy(this->data_, src.data_, this->dim_ * sizeof(T));
-  }
-}
-
-template<typename T>
-void CuArrayBase<T>::CopyFromArray(const CuArrayBase<T> &src) {
-  KALDI_ASSERT(src.Dim() == Dim());
-  if (dim_ == 0)
-    return;
-#if HAVE_CUDA == 1
-  if (CuDevice::Instantiate().Enabled()) {
-    CuTimer tim;
-    CU_SAFE_CALL(
-        cudaMemcpy(this->data_, src.data_, dim_ * sizeof(T),
-                   cudaMemcpyDeviceToDevice));
-    CuDevice::Instantiate().AccuProfile(__func__, tim);
-  } else
-#endif
-  {
     memcpy(this->data_, src.data_, dim_ * sizeof(T));
   }
 }

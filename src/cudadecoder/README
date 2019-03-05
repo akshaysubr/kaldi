@@ -90,7 +90,6 @@ BatchedThreadedCudaDecoderOptions:
 Decoder Options:
   beam:  The width of the beam during decoding
   lattice-beam:  The width of the lattice beam
-  generate-lattices:  true=generate lattices, false=generate one-best
   max-tokens-preallocated:  number of tokens allocated in host buffers.  If
     this size is exceeded the buffer will reallocate larger consuming more
     resources
@@ -99,8 +98,8 @@ Decoder Options:
   max-active:  maximum number of arcs active in any given frame.
 
 Device Options:
-  use-tensor-cores:  Enables tensor corse (fp16 math) for gemms.  This is
-    faster but less accurate.  For inferences the loss of accuracy is marginal
+  use-tensor-cores:  Enables tensor core (fp16 math) for gemms.  This is
+    faster but less accurate.  For inference the loss of accuracy is marginal
 
 GPU MEMORY USAGE:
 

@@ -69,7 +69,7 @@ void LatticeFasterDecoderTpl<FST, Token>::InitDecoding() {
   active_toks_[0].toks = start_tok;
   toks_.Insert(start_state, start_tok);
   num_toks_++;
-  ProcessNonemittingWrapper(config_.beam);
+  ProcessNonemitting(config_.beam);
 }
 
 // Returns true if any kind of traceback is available (not necessarily from
@@ -86,8 +86,8 @@ bool LatticeFasterDecoderTpl<FST, Token>::Decode(DecodableInterface *decodable) 
   while (!decodable->IsLastFrame(NumFramesDecoded() - 1)) {
     if (NumFramesDecoded() % config_.prune_interval == 0)
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
-    BaseFloat cost_cutoff = ProcessEmittingWrapper(decodable);
-    ProcessNonemittingWrapper(cost_cutoff);
+    BaseFloat cost_cutoff = ProcessEmitting(decodable);
+    ProcessNonemitting(cost_cutoff);
   }
   FinalizeDecoding();
 
@@ -626,8 +626,8 @@ void LatticeFasterDecoderTpl<FST, Token>::AdvanceDecoding(DecodableInterface *de
     if (NumFramesDecoded() % config_.prune_interval == 0) {
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
-    BaseFloat cost_cutoff = ProcessEmittingWrapper(decodable);
-    ProcessNonemittingWrapper(cost_cutoff);
+    BaseFloat cost_cutoff = ProcessEmitting(decodable);
+    ProcessNonemitting(cost_cutoff);
   }
 }
 
@@ -836,7 +836,6 @@ void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cutoff) {
   // Note: "frame" is the time-index we just processed, or -1 if
   // we are processing the nonemitting transitions before the
   // first frame (called from InitDecoding()).
-  const FstType &fst = dynamic_cast<const FstType&>(fst_);
 
   // Processes nonemitting arcs for one frame.  Propagates within toks_.
   // Note-- this queue structure is is not very optimal as
@@ -899,22 +898,6 @@ void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cutoff) {
   } // while queue not empty
 }
 
-template void LatticeFasterDecoder::ProcessNonemitting<fst::ConstFst<fst::StdArc>>(
-        BaseFloat cutoff);
-template void LatticeFasterDecoder::ProcessNonemitting<fst::VectorFst<fst::StdArc>>(
-        BaseFloat cutoff);
-template void LatticeFasterDecoder::ProcessNonemitting<fst::Fst<fst::StdArc>>(
-        BaseFloat cutoff);
-
-void LatticeFasterDecoder::ProcessNonemittingWrapper(BaseFloat cost_cutoff) {
-  if (fst_.Type() == "const") {
-    return LatticeFasterDecoder::ProcessNonemitting<fst::ConstFst<Arc>>(cost_cutoff);
-  } else if (fst_.Type() == "vector") {
-    return LatticeFasterDecoder::ProcessNonemitting<fst::VectorFst<Arc>>(cost_cutoff);
-  } else {
-    return LatticeFasterDecoder::ProcessNonemitting<fst::ConstFst<Arc>>(cost_cutoff);
-  }
-}
 
 template <typename FST, typename Token>
 void LatticeFasterDecoderTpl<FST, Token>::DeleteElems(Elem *list) {

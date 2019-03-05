@@ -118,7 +118,7 @@ fi
 if [ $stage -le 4 ]; then
   local/chain/run_tdnn.sh --decode-only $tdnn_decode_only $enhancement
 fi
-flatstart=false
+
 # LM-rescoring experiment with 5-gram and RNN LMs
 # It takes a few days to train a RNNLM.
 if [ $stage -le 5 ]; then

@@ -83,7 +83,6 @@ if ! cat $dir/garbage_phones.txt $dir/silence_phones.txt | \
   exit 1
 fi
 
-data_id=$(basename $data_dir)
 whole_data_dir=${data_dir}_whole
 whole_data_id=$(basename $whole_data_dir)
 

@@ -450,10 +450,7 @@ class LatticeFasterDecoderTpl {
   /// Processes nonemitting (epsilon) arcs for one frame.  Called after
   /// ProcessEmitting() on each frame.  The cost cutoff is computed by the
   /// preceding ProcessEmitting().
-  /// the templated design is similar to ProcessEmitting()
-  template <typename FstType> void ProcessNonemitting(BaseFloat cost_cutoff);
-
-  void ProcessNonemittingWrapper(BaseFloat cost_cutoff);
+  void ProcessNonemitting(BaseFloat cost_cutoff);
 
   // HashList defined in ../util/hash-list.h.  It actually allows us to maintain
   // more than one list (e.g. for current and previous frames), but only one of

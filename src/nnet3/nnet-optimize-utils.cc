@@ -733,9 +733,7 @@ bool VariableMergingOptimizer::MergeVariables() {
     // potentially merge into a single variable.
     const NnetComputation::Command &c = computation_->commands[command_index];
     int32 s1 = -1, s2 = -1;
-    // TODO: add kScale command and remove the check for 1.0
     if (c.command_type == kMatrixCopy &&
-        //        c.alpha == 1.0 &&
         config_.remove_assignments) {
       s2 = c.arg1;  // s2 is the written-to matrix.
       s1 = c.arg2;

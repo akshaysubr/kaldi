@@ -2849,21 +2849,6 @@ NaturalGradientAffineComponent::NaturalGradientAffineComponent(
   preconditioner_out_.SetUpdatePeriod(4);
 }
 
-
-NaturalGradientAffineComponent::NaturalGradientAffineComponent(
-    const CuMatrixBase<BaseFloat> &linear_params,
-    const CuVectorBase<BaseFloat> &bias_params):
-    AffineComponent(linear_params, bias_params, 0.001) {
-  KALDI_ASSERT(bias_params.Dim() == linear_params.NumRows() &&
-               bias_params.Dim() != 0);
-  num_samples_history_ = 2000.0;
-  alpha_ = 4.0;
-  rank_in_ = 20;
-  rank_out_ = 80;
-  update_period_ = 4;
-  SetNaturalGradientConfigs();
-}
-
 void NaturalGradientAffineComponent::InitFromConfig(ConfigLine *cfl) {
   bool ok = true;
   std::string matrix_filename;
@@ -2943,7 +2928,6 @@ void NaturalGradientAffineComponent::InitFromConfig(ConfigLine *cfl) {
               << cfl->UnusedValues();
   if (!ok)
     KALDI_ERR << "Bad initializer " << cfl->WholeLine();
-  SetNaturalGradientConfigs();
 }
 
 void NaturalGradientAffineComponent::Write(std::ostream &os,

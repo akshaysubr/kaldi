@@ -1,23 +1,25 @@
-// decoder/cuda-decoder-kernels.cu
-// TODO nvidia apache2
+// cudadecoder/cuda-decoder-kernels.cu
+//
+// Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+// Hugo Braun, Justin Luitjens, Ryan Leary
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
 //  http://www.apache.org/licenses/LICENSE-2.0
 //
-// THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-// WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-// MERCHANTABLITY OR NON-INFRINGEMENT.
-// See the Apache 2 License for the specific language governing permissions and
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
 // limitations under the License.
 
 #include <cub/cub.cuh>
 #include "cuda-decoder-kernels.h"
 
-#define KALDI_CUDA_DECODER_DIV_ROUND_UP(a, b) ((a + b - 1) / b)
 namespace kaldi {
+namespace CudaDecoder {
 
 // 1:1 Conversion float <---> sortable int
 // We convert floats to sortable ints in order
@@ -169,8 +171,7 @@ __device__ int hash_func(int key) {
   return key;  // TODO
 }
 
-__global__ void init_hashmap_kernel(DeviceParams cst_dev_params,
-                                    KernelParams params) {
+__global__ void init_hashmap_kernel(DeviceParams cst_dev_params) {
   const int max_nlanes = cst_dev_params.max_nlanes;
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, max_nlanes) {
     const int capacity = cst_dev_params.hashmap_capacity;
@@ -1627,10 +1628,10 @@ __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
                                                bool use_aux_q) {
   const int nlanes = params.nlanes_used;
   typedef cub::BlockHistogram<BinId, KALDI_CUDA_DECODER_1D_BLOCK, 1,
-                              KALDI_CUDA_DECODER_NBINS + 1>
+                              KALDI_CUDA_DECODER_HISTO_NBINS + 1>
       BlockHistogram;
   __shared__ typename BlockHistogram::TempStorage temp_storage;
-  __shared__ unsigned int smem_histogram[KALDI_CUDA_DECODER_NBINS + 1];
+  __shared__ unsigned int smem_histogram[KALDI_CUDA_DECODER_HISTO_NBINS + 1];
 
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
     const int32 ichannel = params.channel_to_compute[ilane];
@@ -1644,7 +1645,7 @@ __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
     BlockHistogram(temp_storage).InitHistogram(smem_histogram);
     CostType beam = orderedIntToFloat(lane_counters->int_beam);
     CostType min_cost = orderedIntToFloat(lane_counters->min_int_cost);
-    CostType bin_width = beam / KALDI_CUDA_DECODER_NBINS;
+    CostType bin_width = beam / KALDI_CUDA_DECODER_HISTO_NBINS;
 
     // We have a sync inside the loop, keeping all threads alive
     KALDI_CUDA_DECODER_1D_BLOCK_OFFSET_KERNEL_LOOP(block_offset, thread_idx,
@@ -1653,7 +1654,7 @@ __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
       // The last bin is for everything we don't want to count:
       // cost already above the beam, or non-valid tokens
       BinId bin_id[1];
-      bin_id[0] = KALDI_CUDA_DECODER_NBINS;
+      bin_id[0] = KALDI_CUDA_DECODER_HISTO_NBINS;
       if (q_idx < q_end) {
         IntegerCostType int_cost =
             use_aux_q
@@ -1673,7 +1674,7 @@ __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
     }
 
     // Not using the macros 1D_LOOP because that loop is only within a CTA
-    for (int32 bin_id_w = threadIdx.x; bin_id_w < KALDI_CUDA_DECODER_NBINS;
+    for (int32 bin_id_w = threadIdx.x; bin_id_w < KALDI_CUDA_DECODER_HISTO_NBINS;
          bin_id_w += KALDI_CUDA_DECODER_1D_BLOCK) {
       // Writing the local histo to global
       // We don't care about the last bin (cf above)
@@ -1704,11 +1705,11 @@ __global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,
         lane_counters->min_int_cost);  // FIXME min_int_cost == INT_MAX
     int32 it_sum = 0;
     // Not using the macros 1D_LOOP because that loop is only within a CTA
-    for (int32 offset = 0; offset < KALDI_CUDA_DECODER_NBINS;
+    for (int32 offset = 0; offset < KALDI_CUDA_DECODER_HISTO_NBINS;
          offset += KALDI_CUDA_DECODER_1D_BLOCK) {
       int bin_id = offset + threadIdx.x;
       int val = 0;
-      if (bin_id < KALDI_CUDA_DECODER_NBINS) {
+      if (bin_id < KALDI_CUDA_DECODER_HISTO_NBINS) {
         val = cst_dev_params.d_histograms.lane(ilane)[bin_id];
         cst_dev_params.d_histograms.lane(ilane)[bin_id] =
             0;  // reset for next time
@@ -1722,7 +1723,7 @@ __global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,
       if (val != 0 && prefix_sum < max_active &&
           (prefix_sum + val) >= max_active) {
         // We found our new beam
-        CostType new_beam = (beam / KALDI_CUDA_DECODER_NBINS) * (bin_id + 1);
+        CostType new_beam = (beam / KALDI_CUDA_DECODER_HISTO_NBINS) * (bin_id + 1);
         IntegerCostType new_int_beam = floatToOrderedInt(new_beam);
         lane_counters->int_beam = new_int_beam;
         lane_counters->adaptive_int_beam_with_validity_index.x = new_int_beam;
@@ -1755,4 +1756,5 @@ template __global__ void concatenate_lanes_data<float2>(
 template __global__ void concatenate_lanes_data<int32>(
     DeviceParams cst_dev_params, KernelParams params,
     LaneMatrixInterface<int32> src, int32 *concat);
+}  // end namespace CudaDecoder
 }  // end namespace kaldi

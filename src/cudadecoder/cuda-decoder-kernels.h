@@ -1,3 +1,20 @@
+// cudadecoder/cuda-decoder-kernels.h
+//
+// Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+// Hugo Braun, Justin Luitjens, Ryan Leary
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #ifndef KALDI_DECODER_CUDA_DECODER_KERNELS_H_
 #define KALDI_DECODER_CUDA_DECODER_KERNELS_H_
 
@@ -6,6 +23,7 @@
 #include "cuda-decoder.h"
 
 namespace kaldi {
+namespace CudaDecoder {
 __global__ void get_best_cost_kernel(DeviceParams cst_dev_params,
                                      KernelParams params, bool isfinal,
                                      CostType fst_zero);
@@ -46,8 +64,7 @@ struct __align__(16) HashmapValueT {
   int2 min_and_argmin_int_cost;
 };
 
-__global__ void init_hashmap_kernel(DeviceParams cst_dev_params,
-                                    KernelParams params);
+__global__ void init_hashmap_kernel(DeviceParams cst_dev_params);
 __global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,
                                           KernelParams params);
 __global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params,
@@ -152,4 +169,5 @@ float orderedIntToFloatHost(int32 intVal);
 
 typedef unsigned char BinId;
 }  // namespace kaldi
+}  // namespace CudaDecoder
 #endif

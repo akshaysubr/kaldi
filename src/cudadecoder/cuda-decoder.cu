@@ -1,22 +1,23 @@
-// decoder/cuda-decoder.cu
-// TODO nvidia apache2
+// cudadecoder/cuda-decoder.cu
+//
+// Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+// Hugo Braun, Justin Luitjens, Ryan Leary
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
 //  http://www.apache.org/licenses/LICENSE-2.0
 //
-// THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-// WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-// MERCHANTABLITY OR NON-INFRINGEMENT.
-// See the Apache 2 License for the specific language governing permissions and
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
 // limitations under the License.
 
 #include <cuda_runtime_api.h>
 #include <float.h>
 #include <nvToolsExt.h>
-#include <algorithm>
 #include <algorithm>
 #include <cub/cub.cuh>
 #include "cuda-decoder-kernels.h"
@@ -26,87 +27,91 @@
 #include <tuple>
 
 namespace kaldi {
+namespace CudaDecoder {
 CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
                          int32 nlanes, int32 nchannels)
     : fst_(fst),
       default_beam_(config.default_beam),
       lattice_beam_(config.lattice_beam),
-      generate_lattices_(config.generate_lattices),
       max_tokens_(config.max_tokens),
       max_tokens_per_frame_(config.max_tokens_per_frame),
       max_active_(config.max_active),
       nlanes_(nlanes),
       nchannels_(nchannels) {
-  KALDI_ASSERT(nlanes_ <= KALDI_CUDA_DECODER_MAX_N_LANES);
-  //
-  // For a description of the class members, please refer to the cuda-decoder.h
-  // file
-  //
-  cudaStreamCreate(&compute_st_);
-  cudaStreamCreate(&copy_st_);
+  // Static asserts on constants
+  CheckStaticAsserts();
 
-  cudaEventCreate(&can_read_h_main_q_narcs_);
-  cudaEventCreate(&can_write_to_main_q_);
-  cudaEventCreate(&can_read_final_h_main_q_end_);
-  cudaEventCreate(&before_finalize_nonemitting_kernel_);
-
-  cudaEventCreate(&can_use_acoustic_cost_);
-  cudaEventCreate(&can_use_infotoken_);
-  cudaEventCreate(&can_use_extra_cost_);
-
+  // Runtime asserts
   KALDI_ASSERT(nlanes > 0);
   KALDI_ASSERT(nchannels > 0);
+  KALDI_ASSERT(nlanes_ <= KALDI_CUDA_DECODER_MAX_N_LANES);
+  KALDI_ASSERT(nlanes_ <= nchannels_);
 
+  // All GPU work in decoder will be sent to compute_st_
+  cudaStreamCreate(&compute_st_);
+
+  AllocateHostData();
+  AllocateDeviceData();
+  AllocateDeviceKernelParams();
+
+  InitDeviceParams();
+  InitHostData();
+  InitDeviceData();
+
+  ComputeInitialChannel();
+  --nchannels_;  // removing the init_channel_params from general list
+
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+
+  // Making sure that everything is ready to use
+  cudaStreamSynchronize(compute_st_);
+}
+
+void CudaDecoder::AllocateDeviceData() {
+  // We add one to nchannels_ because we will create a special channel
+  // containing the exact state a channel should have when starting a new decode
+  // It contains fst.Start(), the non-emitting tokens created by fst.Start(),
+  // and all the data used by the decoder.
+  // When calling InitDecoding() on a new channel, we simply clone this special
+  // channel into that new channel
   ++nchannels_;  // allocating init_channel_params at the same time
   init_channel_id_ = nchannels_ - 1;  // Using last one as init_channel_params
-  hashmap_capacity_ = max_tokens_per_frame_;  // TODO
-
+  hashmap_capacity_ =
+      KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR * max_tokens_per_frame_;
   d_channels_counters_.Resize(nchannels_, 1);
-  d_lanes_counters_.Resize(nlanes, 1);
+  d_lanes_counters_.Resize(nlanes_, 1);
   d_main_q_state_and_cost_.Resize(nchannels_, max_tokens_per_frame_);
-  d_main_q_info_.Resize(nlanes, max_tokens_per_frame_);
-  d_aux_q_state_and_cost_.Resize(nlanes, max_tokens_per_frame_);
-  d_aux_q_info_.Resize(nlanes, max_tokens_per_frame_);
+  d_main_q_info_.Resize(nlanes_, max_tokens_per_frame_);
+  d_aux_q_state_and_cost_.Resize(nlanes_, max_tokens_per_frame_);
+  d_aux_q_info_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_degrees_prefix_sum_.Resize(nchannels_, max_tokens_per_frame_);
-  d_histograms_.Resize(nlanes_, KALDI_CUDA_DECODER_NBINS);
+  d_histograms_.Resize(nlanes_, KALDI_CUDA_DECODER_HISTO_NBINS);
   cudaMemsetAsync(d_histograms_.lane(0), 0,
-                  sizeof(int32) * KALDI_CUDA_DECODER_NBINS * nlanes_,
+                  sizeof(int32) * KALDI_CUDA_DECODER_HISTO_NBINS * nlanes_,
                   compute_st_);
 
-  // TODO use aux_q_state_and_cost for following 2
-  // TODO maybe aux_q_info because that one can be used temporarly
   d_main_q_extra_prev_tokens_prefix_sum_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_n_extra_prev_tokens_local_idx_.Resize(nlanes_,
                                                  max_tokens_per_frame_);
 
-  // TODO can use aux_q_acoustic for following
   d_main_q_representative_id_.Resize(nlanes_, max_tokens_per_frame_);
-
-  // +8
   d_main_q_extra_prev_tokens_.Resize(nlanes_, max_tokens_per_frame_);
-  // +8
   d_main_q_extra_cost_.Resize(nlanes_, max_tokens_per_frame_);
-
   d_main_q_block_sums_prefix_sum_.Resize(
-      nlanes, KALDI_CUDA_DECODER_DIV_ROUND_UP(max_tokens_per_frame_,
+      nlanes_, KALDI_CUDA_DECODER_DIV_ROUND_UP(max_tokens_per_frame_,
                                               KALDI_CUDA_DECODER_1D_BLOCK) +
                   1);
   d_main_q_arc_offsets_.Resize(nchannels_, max_tokens_per_frame_);
   d_hashmap_values_.Resize(nlanes_, hashmap_capacity_);
-  frame_offsets_.resize(nchannels);
-
   d_main_q_acoustic_cost_.Resize(nlanes_, max_tokens_per_frame_);
-
-  // We could remove this one
   d_aux_q_acoustic_cost_.Resize(nlanes_, max_tokens_per_frame_);
-
-  // TODO use infotoken for next
-
   cudaMalloc(&d_extra_cost_concat_,
              sizeof(*d_extra_cost_concat_) * (size_t)max_tokens_per_frame_ *
                  nlanes_);  // FIXME cudafree, use main malloc
-
   d_acoustic_cost_concat_ = d_aux_q_acoustic_cost_.lane(0);
+}
+
+void CudaDecoder::AllocateHostData() {
   cudaMallocHost(&h_extra_cost_concat_, nlanes_ * max_tokens_per_frame_ *
                                             sizeof(*h_extra_cost_concat_));
   cudaMallocHost(
@@ -133,38 +138,42 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
   h_main_q_end_lane_offsets_.resize(nlanes_ + 1);
   h_emitting_main_q_end_lane_offsets_.resize(nlanes_ + 1);
   h_n_extra_prev_tokens_lane_offsets_.resize(nlanes_ + 1);
-
-  // Init hashmap
-  /*
-                  cudaMalloc(&d_map_values_,
-     nlanes_capacity_*sizeof(*d_map_values_));
-                  init_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(capacity,
-     nlanes_),
-                          KALDI_CUDA_DECODER_1D_BLOCK,
-                          0,
-                          stream_>>>();
-  */
-
-  // Concat for copies
-
-  // Setting Kernel Params
-  // sent to kernels by copy
-  // Making sure we'll be able to send it to the kernels
-  // KALDI_STATIC_ASSERT(sizeof(KernelParams) <
-  // KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE); TODO find include
-
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(
-      d_channels_counters_.MutableData(), 0,
-      nchannels_ * sizeof(*d_channels_counters_.MutableData())));
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(
-      cudaMemsetAsync(d_lanes_counters_.MutableData(), 0,
-                      nlanes_ * sizeof(*d_lanes_counters_.MutableData())));
+  frame_offsets_.resize(nchannels_);
   KALDI_DECODER_CUDA_API_CHECK_ERROR(
       cudaMallocHost(&h_lanes_counters_, nlanes_ * sizeof(*h_lanes_counters_)));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(
       &h_channels_counters_, nchannels_ * sizeof(*h_channels_counters_)));
+  num_frames_decoded_.resize(nchannels_, 0);
+}
 
+void CudaDecoder::InitDeviceData() {
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(
+      d_channels_counters_.MutableData(), 0,
+      nchannels_ * sizeof(*d_channels_counters_.MutableData()), compute_st_));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(
+      d_lanes_counters_.MutableData(), 0,
+      nlanes_ * sizeof(*d_lanes_counters_.MutableData()), compute_st_));
+  init_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(hashmap_capacity_,
+     nlanes_),
+                        KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
+      *h_device_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void CudaDecoder::InitHostData() {}
+
+void CudaDecoder::AllocateDeviceKernelParams() {
   h_device_params_ = new DeviceParams();
+  h_kernel_params_ = new KernelParams();
+}
+
+void CudaDecoder::InitDeviceParams() {
+  // Setting Kernel Params
+  // Sent to cuda kernels by copy
+  // Making sure we'll be able to send it to the kernels
+  KALDI_ASSERT((sizeof(KernelParams) + sizeof(DeviceParams)) <
+               KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE);
+
   h_device_params_->d_channels_counters = d_channels_counters_.GetInterface();
   h_device_params_->d_lanes_counters = d_lanes_counters_.GetInterface();
   h_device_params_->d_main_q_state_and_cost =
@@ -201,7 +210,6 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
   h_device_params_->d_fst_final_costs = fst_.d_final_;
   h_device_params_->default_beam = default_beam_;
   h_device_params_->lattice_beam = lattice_beam_;
-  h_device_params_->generate_lattices = generate_lattices_;
   h_device_params_->q_capacity = max_tokens_per_frame_;
   h_device_params_->init_channel_id = init_channel_id_;
   h_device_params_->max_nlanes = nlanes_;
@@ -228,44 +236,17 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
   // Those cannot be used at the same time
   h_device_params_->d_list_final_tokens_in_main_q =
       d_aux_q_state_and_cost_.GetInterface();
-  h_kernel_params_ = new KernelParams();
-
-  init_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(hashmap_capacity_,
-                                                      nlanes_),
-                        KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-      *h_device_params_, *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  ComputeInitialChannel();
-  --nchannels_;  // removing the init_channel_params from general list
-
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-  num_frames_decoded_.resize(nchannels_, 0);
-
-  // Making sure that everything is ready to use
-  cudaStreamSynchronize(compute_st_);
 }
 
 CudaDecoder::~CudaDecoder() {
   cudaStreamDestroy(compute_st_);
-  cudaStreamDestroy(copy_st_);
-
-  cudaEventDestroy(can_read_h_main_q_narcs_);
-  cudaEventDestroy(can_write_to_main_q_);
-  cudaEventDestroy(can_read_final_h_main_q_end_);
-  cudaEventDestroy(before_finalize_nonemitting_kernel_);
-  cudaEventDestroy(can_use_extra_cost_);
-  cudaEventDestroy(can_use_infotoken_);
-  cudaEventDestroy(can_use_acoustic_cost_);
 
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_lanes_counters_));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_channels_counters_));
 
-  if (generate_lattices_) {
-    cudaFreeHost(h_extra_cost_concat_);
-    cudaFreeHost(h_acoustic_cost_concat_);
-    cudaFreeHost(h_extra_prev_tokens_concat_);
-  }
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_extra_cost_concat_));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_acoustic_cost_concat_));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_extra_prev_tokens_concat_));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_infotoken_concat_));
 
   // Will call the cudaFrees inside destructors
@@ -398,11 +379,6 @@ void CudaDecoder::ComputeInitialChannel() {
 
   KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.x > 0);
   KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.y > 0);
-}
-
-void CudaDecoder::InitDecoding() {
-  std::vector<ChannelId> channels = {0};
-  InitDecoding(channels);
 }
 
 void CudaDecoder::InitDecoding(const std::vector<ChannelId> &channels) {
@@ -1098,19 +1074,7 @@ void CudaDecoder::GetBestCost(const std::vector<ChannelId> &channels,
   cudaStreamSynchronize(compute_st_);
 }
 
-//
-// GetBestPath is called at the end of the computation
-// It chooses the best token from the last frame,
-// and backtracks all the path to the beginning (StartState)
-// from there
-// It then returns that path
-//
-bool CudaDecoder::GetBestPath(Lattice *fst_out, bool use_final_probs) {
-  std::vector<ChannelId> channels = {0};
-  std::vector<Lattice *> fst_out_vec = {fst_out};
-  return GetBestPath(channels, fst_out_vec, use_final_probs);
-}
-bool CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
+void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
                               std::vector<Lattice *> &fst_out_vec,
                               bool use_final_probs) {
   KALDI_ASSERT(channels.size() == fst_out_vec.size());
@@ -1126,7 +1090,6 @@ bool CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
 
   // We want the copy to host of the last tokens to be done
   // we're going to read h_all_tokens_info
-  cudaEventSynchronize(can_write_to_main_q_);
   for (int32 i = 0; i < channels.size(); ++i) {
     const ChannelId ichannel = channels[i];
     const int32 token_with_best_cost = argmins[i].first;
@@ -1207,10 +1170,9 @@ bool CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
     fst::RemoveEpsLocal(fst_out);
   }
   nvtxRangePop();
-  return true;
 }
 
-bool CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
+void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
                                 std::vector<Lattice *> &fst_out_vec,
                                 bool use_final_probs) {
   KALDI_ASSERT(channels.size() == fst_out_vec.size());
@@ -1679,7 +1641,6 @@ bool CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
 
     nvtxRangePop();
   }
-  return true;
 }
 
 void CudaDecoder::SetChannelsInKernelParams(
@@ -1695,9 +1656,20 @@ int32 CudaDecoder::NumFramesDecoded(ChannelId ichannel) const {
   KALDI_ASSERT(ichannel < nchannels_);
   return num_frames_decoded_[ichannel];
 }
+
+void CudaDecoder::CheckStaticAsserts() {
+  // Checking if all constants look ok
+
+  // We need that because we need to be able to do the scan in one pass in the
+  // kernel
+  // update_beam_using_histogram_kernel
+  KALDI_ASSERT(KALDI_CUDA_DECODER_HISTO_NBINS < KALDI_CUDA_DECODER_1D_BLOCK);
+  // TODO
+}
 /*
         int32 CudaDecoder::NumFramesDecoded() const {
                 return NumFramesDecoded(0);
         }
 */
+}  // end namespace CudaDecoder
 }  // end namespace kaldi.
