@@ -12,13 +12,16 @@ ARG PYVER=3.5
 RUN apt-get update && apt-get install -y --no-install-recommends \
         automake \
         autoconf \
-        bzip2 \
+        cmake \
+        flac \
         gawk \
-        gzip \
         libatlas3-base \
         libtool \
         python$PYVER \
         python$PYVER-dev \
+        sox \
+        subversion \
+        unzip \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
