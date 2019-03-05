@@ -1,10 +1,13 @@
-FROM gitlab-dl.nvidia.com:5005/dgx/cuda:10.0-cudnn7.2-devel-ubuntu16.04-cuda10.0--18.06
+ARG FROM_IMAGE_NAME=gitlab-master.nvidia.com:5005/dl/dgx/cuda:10.1-devel-ubuntu16.04--master
+FROM ${FROM_IMAGE_NAME}
 
-ENV KALDI_VERSION 5.2
+ARG KALDI_VERSION
+ENV KALDI_VERSION=${KALDI_VERSION}
 LABEL com.nvidia.kaldi.version="${KALDI_VERSION}"
-ENV NVIDIA_KALDI_VERSION 18.06
+ARG NVIDIA_KALDI_VERSION
+ENV NVIDIA_KALDI_VERSION=${NVIDIA_KALDI_VERSION}
 
-ARG PYVER=2.7
+ARG PYVER=3.5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         automake \
@@ -14,10 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gzip \
         libatlas3-base \
         libtool \
+        python$PYVER \
         python$PYVER-dev \
-        python2.7 \
-        python3 \
-        subversion \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
