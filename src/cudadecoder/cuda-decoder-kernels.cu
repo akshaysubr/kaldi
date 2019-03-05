@@ -18,8 +18,8 @@
 #include <cub/cub.cuh>
 #include "cuda-decoder-kernels.h"
 
-#define KALDI_CUDA_DECODER_DIV_ROUND_UP(a, b) ((a + b - 1) / b)
 namespace kaldi {
+namespace CudaDecoder {
 
 // 1:1 Conversion float <---> sortable int
 // We convert floats to sortable ints in order
@@ -171,8 +171,7 @@ __device__ int hash_func(int key) {
   return key;  // TODO
 }
 
-__global__ void init_hashmap_kernel(DeviceParams cst_dev_params,
-                                    KernelParams params) {
+__global__ void init_hashmap_kernel(DeviceParams cst_dev_params) {
   const int max_nlanes = cst_dev_params.max_nlanes;
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, max_nlanes) {
     const int capacity = cst_dev_params.hashmap_capacity;
@@ -1757,4 +1756,5 @@ template __global__ void concatenate_lanes_data<float2>(
 template __global__ void concatenate_lanes_data<int32>(
     DeviceParams cst_dev_params, KernelParams params,
     LaneMatrixInterface<int32> src, int32 *concat);
+}  // end namespace CudaDecoder
 }  // end namespace kaldi

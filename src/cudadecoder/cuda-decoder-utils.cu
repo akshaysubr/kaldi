@@ -19,4 +19,5 @@
 #include "cudadecoder/cuda-decoder-utils.h"
 
 namespace kaldi {
+namespace CudaDecoder {}  // end namespace CudaDecoder
 }  // end namespace kaldi

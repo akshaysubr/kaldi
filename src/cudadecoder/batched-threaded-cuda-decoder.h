@@ -33,6 +33,7 @@
 #include "thread-pool.h"
 
 namespace kaldi {
+namespace CudaDecoder {
 
 /* BatchedThreadedCudaDecoderConfig
  * This class is a common configuration class for the various components
@@ -263,6 +264,7 @@ private:
   std::vector<std::thread> thread_contexts_;      // A list of thread contexts
 };
 
+}  // end namespace CudaDecoder
 } // end namespace kaldi.
 
 #endif

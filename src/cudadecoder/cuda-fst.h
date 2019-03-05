@@ -16,14 +16,15 @@
 // limitations under the License.
 
 #ifndef KALDI_DECODER_CUDA_FST_H_
-#define KALDI_DECODER_CUDA_FST_H
+#define KALDI_DECODER_CUDA_FST_H_
 #include "cudadecoder/cuda-decodable-itf.h"
 #include "cudamatrix/cu-device.h"
 #include "lat/kaldi-lattice.h"
-#include "util/stl-utils.h"
+#include "nnet3/decodable-online-looped.h"
 #include "util/stl-utils.h"
 
 namespace kaldi {
+namespace CudaDecoder {
 typedef fst::StdArc StdArc;
 typedef StdArc::Weight StdWeight;
 typedef StdArc::Label Label;
@@ -85,5 +86,6 @@ class CudaFst {
   std::vector<float> h_final_;
   float *d_final_;
 };
+}  // end namespace CudaDecoder
 }  // end namespace kaldi
 #endif

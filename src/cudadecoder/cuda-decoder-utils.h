@@ -22,6 +22,8 @@
 #include "util/stl-utils.h"
 #include "cudamatrix/cu-device.h"
 
+#define KALDI_CUDA_DECODER_DIV_ROUND_UP(a, b) ((a + b - 1) / b)
+
 #define CUDA_DECODER_ASSERT(val, recoverable)                               \
   {                                                                         \
     if ((val) != true) {                                                    \
@@ -80,6 +82,7 @@ inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
 #include "util/stl-utils.h"
 
 namespace kaldi {
+namespace CudaDecoder {
 typedef float CostType;
 // IntegerCostType is the type used in the lookup table d_state_best_cost
 // and the d_cutoff
@@ -367,6 +370,7 @@ class InfoTokenVector {
 // Hashmap
 //
 
+}  // end namespace CudaDecoder
 }  // end namespace kaldi
 
 #endif

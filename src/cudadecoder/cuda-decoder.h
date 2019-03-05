@@ -81,6 +81,7 @@
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
 
 namespace kaldi {
+namespace CudaDecoder {
 enum OVERFLOW_TYPE {
   OVERFLOW_NONE = 0,
   OVERFLOW_MAIN_Q = 1,
@@ -183,8 +184,8 @@ class CudaDecoder {
   // Increasing the number of lanes is only useful if it increases performance.
   // If the GPU is saturated at nlanes=200,
   // you should not increase that number
-  CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
-              int32 nlanes = 1, int32 nchannels = 1);
+  CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config, int32 nlanes,
+              int32 nchannels);
   ~CudaDecoder();
 
   // InitDecoding initializes the decoding, and should only be used if you
@@ -249,6 +250,13 @@ class CudaDecoder {
       std::vector<bool> *has_reached_final);
 
  private:
+  void AllocateDeviceData();
+  void AllocateHostData();
+  void AllocateDeviceKernelParams();
+  void InitDeviceData();
+  void InitHostData();
+  void InitDeviceParams();
+
   // Computes the initial channel
   // The initial channel is used to initialize a channel
   // when a new utterance starts (we clone it into the given channel)
@@ -331,6 +339,12 @@ class CudaDecoder {
   void MoveConcatenatedCopyToVector(const std::vector<int32> &lanes_offsets,
                                     T *h_concat,
                                     std::vector<std::vector<T>> *vecvec);
+
+  // Computes a set of static asserts on the static values
+  // such as the defines : KALDI_CUDA_DECODER_MAX_N_LANES for example
+  // In theory we should do them at compile time
+  void CheckStaticAsserts();
+
   // Data members
 
   // The CudaFst data structure contains the FST graph
@@ -506,6 +520,7 @@ class CudaDecoder {
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
 
-}  // end namespace kaldi.
+}  // end namespace CudaDecoder
+}  // end namespace kaldi
 
 #endif
