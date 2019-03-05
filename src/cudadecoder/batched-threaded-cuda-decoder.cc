@@ -313,7 +313,7 @@ void BatchedThreadedCudaDecoder::ComputeBatchNnet(
   for (int i = first; i < tasks.size(); i++) {
     TaskState &task = *tasks[i];
     CuMatrix<BaseFloat> &posteriors = task.posteriors;
-    MergeTaskOutputGPU(nnet_tasks[i], &posteriors);
+    MergeTaskOutput(nnet_tasks[i], &posteriors);
 
     // nnet output is no longer necessary as we have copied the output out
     nnet_tasks[i].resize(0);
