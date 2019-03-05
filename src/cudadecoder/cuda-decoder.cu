@@ -31,7 +31,6 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
     : fst_(fst),
       default_beam_(config.default_beam),
       lattice_beam_(config.lattice_beam),
-      generate_lattices_(config.generate_lattices),
       max_tokens_(config.max_tokens),
       max_tokens_per_frame_(config.max_tokens_per_frame),
       max_active_(config.max_active),
@@ -407,11 +406,6 @@ void CudaDecoder::ComputeInitialChannel() {
 
   KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.x > 0);
   KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.y > 0);
-}
-
-void CudaDecoder::InitDecoding() {
-  std::vector<ChannelId> channels = {0};
-  InitDecoding(channels);
 }
 
 void CudaDecoder::InitDecoding(const std::vector<ChannelId> &channels) {

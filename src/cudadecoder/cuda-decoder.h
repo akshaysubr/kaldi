@@ -85,10 +85,6 @@
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
 
 namespace kaldi {
-typedef float CostType;
-typedef int32 IntegerCostType;
-typedef int32 LaneId;
-typedef int32 ChannelId;
 typedef fst::StdArc StdArc;
 typedef StdArc::Weight StdWeight;
 typedef StdArc::Label Label;
@@ -100,175 +96,16 @@ enum OVERFLOW_TYPE {
   OVERFLOW_AUX_Q = 2
 };
 
-template <typename T>
-// if necessary, make a version that always use ld_ as the next power of 2
-// TODO move in utils
-class DeviceMatrix {
-  T *data_;
-  void Allocate() {
-    KALDI_ASSERT(nrows_ > 0);
-    KALDI_ASSERT(ld_ > 0);
-    KALDI_ASSERT(!data_);
-    data_ = static_cast<T *>(
-        CuDevice::Instantiate().Malloc((size_t)nrows_ * ld_ * sizeof(*data_)));
-    KALDI_ASSERT(data_);
-  }
-  void Free() {
-    KALDI_ASSERT(data_);
-    CuDevice::Instantiate().Free(data_);
-  }
-
- protected:
-  int32 ld_;     // leading dimension
-  int32 nrows_;  // leading dimension
- public:
-  DeviceMatrix() : data_(NULL), ld_(0), nrows_(0) {}
-
-  virtual ~DeviceMatrix() {
-    if (data_) Free();
-  }
-
-  void Resize(int32 nrows, int32 ld) {
-    KALDI_ASSERT(nrows > 0);
-    KALDI_ASSERT(ld > 0);
-    nrows_ = nrows;
-    ld_ = ld;
-  }
-
-  T *MutableData() {
-    if (!data_) Allocate();
-    return data_;
-  }
-  // abstract getInterface...
-};
-
-template <typename T>
-class LaneMatrixInterface;
-
-template <typename T>
-class ChannelMatrixInterface;
-
-template <typename T>
-class DeviceLaneMatrix : public DeviceMatrix<T> {
- public:
-  LaneMatrixInterface<T> GetInterface() {
-    return {this->MutableData(), this->ld_};
-  }
-
-  T *lane(const int32 ilane) { return &this->MutableData()[ilane * this->ld_]; }
-};
-
-template <typename T>
-class DeviceChannelMatrix : public DeviceMatrix<T> {
- public:
-  ChannelMatrixInterface<T> GetInterface() {
-    return {this->MutableData(), this->ld_};
-  }
-  T *channel(const int32 ichannel) {
-    return &this->MutableData()[ichannel * this->ld_];
-  }
-};
-
+// Forward declaration 
 class DeviceParams;
 class KernelParams;
-class HashmapValueT;
-
-struct LaneCounters {
-  // Contains both main_q_end and narcs
-  // End index of the main queue
-  // only tokens at index i with i < main_q_end
-  // are valid tokens
-  // Each valid token the subqueue main_q[main_q_offset, main_q_end[ has
-  // a number of outgoing arcs (out-degree)
-  // main_q_narcs is the sum of those numbers
-  //
-  // We sometime need to update both end and narcs at the same time,
-  // which is why they're packed together
-  int2 main_q_narcs_and_end;
-  // contains the requested queue length which can
-  // be larger then the actual queue length in the case of overflow
-  int32 main_q_requested;
-  int32 aux_q_requested;
-
-  // Some kernels need to perform some operations before exiting
-  // n_CTA_done is a counter that we increment when a CTA (CUDA blocks)
-  // is done
-  // Each CTA then tests the value for n_CTA_done to detect if it's the last to
-  // exit
-  // If that's the cast, it does what it has to do, and sets n_CTA_done back to
-  // 0
-  int32 aux_q_end;
-  int32 post_expand_aux_q_end;  // used for double buffering
-  int32 main_q_n_extra_prev_tokens;
-
-  // Depending on the value of the parameter "max_tokens_per_frame"
-  // we can end up with an overflow when generating the tokens for a frame
-  // We try to prevent this from happening using an adaptive beam
-  // if an overflow happens, then the kernels no longer insert any data into
-  // the queues and set overflow flag to true.
-  // queue length.
-  // Even if that flag is set, we can continue the execution (quality
-  // of the output can be lowered)
-  // We use that flag to display a warning to stderr
-  int32 q_overflow;
-
-  // ExpandArcs does not use at its input the complete main queue
-  // It only reads from the index range [main_q_local_offset, end[
-  int32 main_q_local_offset;
-  int32 main_q_global_offset;
-  int32 main_q_extra_prev_tokens_global_offset;
-
-  IntegerCostType min_int_cost;
-  IntegerCostType int_beam;
-  int2 adaptive_int_beam_with_validity_index;
-
-  IntegerCostType
-      int_cutoff;  // min_cost + beam (if min_cost < INF, otherwise INF)
-
-  // Only valid after calling GetBestCost
-  int2 min_int_cost_and_arg;
-  int32 nfinals;
-  int32 has_reached_final;
-};
-
-//
-// Parameters used by a decoder channel
-// Their job is to save the state of the decoding
-// channel between frames
-//
-struct ChannelCounters {
-  // Cutoff for the current frame
-  // Contains both the global min cost (min cost for that frame)
-  // And the current beam
-  // We use an adaptive beam, so the beam might change during computation
-  CostType prev_beam;
-
-  // main_q_end and main_q_narcs at the end of the previous frame
-  int2 prev_main_q_narcs_and_end;
-  int32 prev_main_q_n_extra_prev_tokens;
-
-  // The token at index i in the main queue has in reality
-  // a global index of (i + main_q_global_offset)
-  // This global index is unique and takes into account that
-  // we've flushed the main_q back to the host. We need unique indexes
-  // for each token in order to have valid token.prev_token data members
-  // and be able to backtrack at the end
-  int32 prev_main_q_global_offset;
-  int32 prev_main_q_extra_prev_tokens_global_offset;
-
-  // Only valid after calling GetBestCost
-  // different than min_int_cost : we include the "final" cost
-  int2 min_int_cost_and_arg_with_final;
-  int2 min_int_cost_and_arg_without_final;
-};
+class HashmapValueT; // TODO why forward?
 
 class CudaDecoder;
 
 struct CudaDecoderConfig {
   BaseFloat default_beam;
   BaseFloat lattice_beam;
-  // Explicit opt in for lattices
-  bool generate_lattices;
   int32 max_tokens;
   int32 max_tokens_per_frame;
   int32 nlanes;
@@ -278,7 +115,6 @@ struct CudaDecoderConfig {
   CudaDecoderConfig()
       : default_beam(15.0),
         lattice_beam(10.0),
-        generate_lattices(true),
         max_tokens(2000000),
         max_tokens_per_frame(1000000),
         max_active(10000) {}
@@ -296,9 +132,6 @@ struct CudaDecoderConfig {
     opts->Register("max-tokens-per-frame", &max_tokens_per_frame,
                    "Number of tokens allocated per frame. If actual usaged "
                    "exceeds this the results are undefined.");
-    opts->Register("generate-lattices", &generate_lattices,
-                   "1=Generate lattices using the lattice-beam, 0=only "
-                   "generate the 1-best path");
     opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam");
     opts->Register("max-active", &max_active,
                    "Max number of tokens active for each frame");
@@ -590,13 +423,6 @@ class CudaDecoder {
   // main_q_size_estimate is used to decide how many threads to launch
   // it is not used inside the kernel, where the exact value will be used
   //
-
-  void ResetStateBestCostLookupAndFinalizePreprocessInPlace(
-      int main_q_size_estimate);
-
-  // Pre-computes log likelihoods for the current frame
-  void ComputeLogLikelihoods(std::vector<DecodableInterface *> &decodables_vec);
-
   // CheckOverflow
   // If a kernel sets the flag h_q_overflow, we send a warning to stderr
   void CheckOverflow();
@@ -616,15 +442,6 @@ class CudaDecoder {
   void MoveConcatenatedCopyToVector(const std::vector<int32> &lanes_offsets,
                                     T *h_concat,
                                     std::vector<std::vector<T>> *vecvec);
-
-  //
-  // Debug functions
-  // Called only if necessary
-  // depends on the value of KALDI_CUDA_DECODER_DEBUG_LEVEL
-  //
-  void DebugAssertsNewFrame();
-  void DebugAssertsBeforeExpand(bool is_emitting);
-
   //
   // Data members
   //

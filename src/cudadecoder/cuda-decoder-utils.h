@@ -15,26 +15,10 @@
 
 #ifndef KALDI_DECODER_CUDA_DECODER_UTILS_H_
 #define KALDI_DECODER_CUDA_DECODER_UTILS_H_
+#include <cuda_runtime_api.h>
 #include <string>
-
-class CudaDecoderException : public std::exception {
- public:
-  CudaDecoderException(const char *str_, const char *file_, int line_,
-                       const bool recoverable_)
-      : str(str_),
-        file(file_),
-        line(line_),
-        buffer(std::string(file) + ":" + std::to_string(line) + " :" +
-               std::string(str)),
-        recoverable(recoverable_) {}
-  const char *what() const throw() { return buffer.c_str(); }
-
-  const char *str;
-  const char *file;
-  const int line;
-  const std::string buffer;
-  const bool recoverable;
-};
+#include "util/stl-utils.h"
+#include "cudamatrix/cu-device.h"
 
 #define CUDA_DECODER_ASSERT(val, recoverable)                               \
   {                                                                         \
@@ -94,6 +78,187 @@ inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
 #include "util/stl-utils.h"
 
 namespace kaldi {
+typedef float CostType;
+typedef int32 IntegerCostType;
+typedef int32 LaneId;
+typedef int32 ChannelId;
+
+template <typename T>
+// if necessary, make a version that always use ld_ as the next power of 2
+class DeviceMatrix {
+  T *data_;
+  void Allocate() {
+    KALDI_ASSERT(nrows_ > 0);
+    KALDI_ASSERT(ld_ > 0);
+    KALDI_ASSERT(!data_);
+    data_ = static_cast<T *>(
+        CuDevice::Instantiate().Malloc((size_t)nrows_ * ld_ * sizeof(*data_)));
+    KALDI_ASSERT(data_);
+  }
+  void Free() {
+    KALDI_ASSERT(data_);
+    CuDevice::Instantiate().Free(data_);
+  }
+
+ protected:
+ int32 ld_;     // leading dimension
+  int32 nrows_;  // leading dimension
+ public:
+  DeviceMatrix() : data_(NULL), ld_(0), nrows_(0) {}
+
+  virtual ~DeviceMatrix() {
+    if (data_) Free();
+  }
+
+  void Resize(int32 nrows, int32 ld) {
+    KALDI_ASSERT(nrows > 0);
+    KALDI_ASSERT(ld > 0);
+    nrows_ = nrows;
+    ld_ = ld;
+  }
+
+  T *MutableData() {
+    if (!data_) Allocate();
+    return data_;
+  }
+  // abstract getInterface...
+};
+
+// The interfaces contains CUDA code
+// We will declare them in a .cu file
+template <typename T>
+class LaneMatrixInterface;
+template <typename T>
+class ChannelMatrixInterface;
+template <typename T>
+
+class DeviceLaneMatrix : public DeviceMatrix<T> {
+ public:
+  LaneMatrixInterface<T> GetInterface() {
+    return {this->MutableData(), this->ld_};
+  }
+
+  T *lane(const int32 ilane) { return &this->MutableData()[ilane * this->ld_]; }
+};
+
+template <typename T>
+class DeviceChannelMatrix : public DeviceMatrix<T> {
+ public:
+  ChannelMatrixInterface<T> GetInterface() {
+    return {this->MutableData(), this->ld_};
+  }
+  T *channel(const int32 ichannel) {
+    return &this->MutableData()[ichannel * this->ld_];
+  }
+};
+
+struct LaneCounters {
+  // Contains both main_q_end and narcs
+  // End index of the main queue
+  // only tokens at index i with i < main_q_end
+  // are valid tokens
+  // Each valid token the subqueue main_q[main_q_offset, main_q_end[ has
+  // a number of outgoing arcs (out-degree)
+  // main_q_narcs is the sum of those numbers
+  //
+  // We sometime need to update both end and narcs at the same time,
+  // which is why they're packed together
+  int2 main_q_narcs_and_end;
+  // contains the requested queue length which can
+  // be larger then the actual queue length in the case of overflow
+  int32 main_q_requested;
+  int32 aux_q_requested;
+
+  // Some kernels need to perform some operations before exiting
+  // n_CTA_done is a counter that we increment when a CTA (CUDA blocks)
+  // is done
+  // Each CTA then tests the value for n_CTA_done to detect if it's the last to
+  // exit
+  // If that's the cast, it does what it has to do, and sets n_CTA_done back to
+  // 0
+  int32 aux_q_end;
+  int32 post_expand_aux_q_end;  // used for double buffering
+  int32 main_q_n_extra_prev_tokens;
+
+  // Depending on the value of the parameter "max_tokens_per_frame"
+  // we can end up with an overflow when generating the tokens for a frame
+  // We try to prevent this from happening using an adaptive beam
+  // if an overflow happens, then the kernels no longer insert any data into
+  // the queues and set overflow flag to true.
+  // queue length.
+  // Even if that flag is set, we can continue the execution (quality
+  // of the output can be lowered)
+  // We use that flag to display a warning to stderr
+  int32 q_overflow;
+
+  // ExpandArcs does not use at its input the complete main queue
+  // It only reads from the index range [main_q_local_offset, end[
+  int32 main_q_local_offset;
+  int32 main_q_global_offset;
+  int32 main_q_extra_prev_tokens_global_offset;
+
+  IntegerCostType min_int_cost;
+  IntegerCostType int_beam;
+  int2 adaptive_int_beam_with_validity_index;
+
+  IntegerCostType
+      int_cutoff;  // min_cost + beam (if min_cost < INF, otherwise INF)
+
+  // Only valid after calling GetBestCost
+  int2 min_int_cost_and_arg;
+  int32 nfinals;
+  int32 has_reached_final;
+};
+
+//
+// Parameters used by a decoder channel
+// Their job is to save the state of the decoding
+// channel between frames
+//
+struct ChannelCounters {
+  // Cutoff for the current frame
+  // Contains both the global min cost (min cost for that frame)
+  // And the current beam
+  // We use an adaptive beam, so the beam might change during computation
+  CostType prev_beam;
+
+  // main_q_end and main_q_narcs at the end of the previous frame
+  int2 prev_main_q_narcs_and_end;
+  int32 prev_main_q_n_extra_prev_tokens;
+
+  // The token at index i in the main queue has in reality
+  // a global index of (i + main_q_global_offset)
+  // This global index is unique and takes into account that
+  // we've flushed the main_q back to the host. We need unique indexes
+  // for each token in order to have valid token.prev_token data members
+  // and be able to backtrack at the end
+  int32 prev_main_q_global_offset;
+  int32 prev_main_q_extra_prev_tokens_global_offset;
+
+  // Only valid after calling GetBestCost
+  // different than min_int_cost : we include the "final" cost
+  int2 min_int_cost_and_arg_with_final;
+  int2 min_int_cost_and_arg_without_final;
+};
+
+class CudaDecoderException : public std::exception {
+ public:
+  CudaDecoderException(const char *str_, const char *file_, int line_,
+                       const bool recoverable_)
+      : str(str_),
+        file(file_),
+        line(line_),
+        buffer(std::string(file) + ":" + std::to_string(line) + " :" +
+               std::string(str)),
+        recoverable(recoverable_) {}
+  const char *what() const throw() { return buffer.c_str(); }
+
+  const char *str;
+  const char *file;
+  const int line;
+  const std::string buffer;
+  const bool recoverable;
+};
 
 class CudaFst {
  public:
