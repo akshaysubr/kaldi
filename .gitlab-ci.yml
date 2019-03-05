@@ -5,6 +5,10 @@
 variables:
     EXTRA_DOCKER_RUN_ARGS: "--shm-size=1G --ulimit memlock=-1 --ulimit stack=$$((1024*65536))"
     DATADIR: /raid/dldata
+ 
+    # variables that may be overridden by the pipeline vars
+    API_LOGGING: 0
+    VIRTUAL: 0
 
     # the following will be overridden by jobs of the pipeline that actually need to check out the sources
     GIT_STRATEGY: none
@@ -20,12 +24,15 @@ stages:
     - build devel
     - trigger
     - test
-    - staging
+    - finalize
 
 before_script:
+    - echo "${CI_BUILD_NAME}" | grep -Eq "(^|-)py2($|-)" && export PYVER=2.7 || export PYVER=3.5   && echo "${PYVER}"
+    - export KALDI_VERSION=$(cat src/.version)                                                     && echo "${KALDI_VERSION}"
     - export NV_DOCKER_ARGS="curl -s http://localhost:3476/docker/cli?dev=${RUNNER_GPUS//,/+}"     && echo "${NV_DOCKER_ARGS}"
     - export RELEASE_BRANCH_NAME=${CI_COMMIT_REF_NAME%%-devel}                                     && echo "${RELEASE_BRANCH_NAME}"
-    - export IMAGE_NAME_ROOT="${CI_REGISTRY_IMAGE}:${RELEASE_BRANCH_NAME}"                         && echo "${IMAGE_NAME_PREFIX}"
+    - export IMAGE_NAME_ROOT="${CI_REGISTRY_IMAGE}:${RELEASE_BRANCH_NAME}-py${PYVER%.*}"           && echo "${IMAGE_NAME_PREFIX}"
+    - export MASTER_BASE_IMAGE_NAME="${CI_REGISTRY_IMAGE}:master-py${PYVER%.*}-base"               && echo "${MASTER_BASE_IMAGE_NAME}"
     - export BASE_IMAGE_NAME="${IMAGE_NAME_ROOT}-base"                                             && echo "${BASE_IMAGE_NAME}"
     - export BASE_IMAGE_NAME_VERSIONED="${IMAGE_NAME_ROOT}.${CI_PIPELINE_ID}"                      && echo "${BASE_IMAGE_NAME_VERSIONED}"
     - export DEVEL_IMAGE_NAME="${IMAGE_NAME_ROOT}-devel"                                           && echo "${DEVEL_IMAGE_NAME}"
@@ -33,7 +40,7 @@ before_script:
     - export STAGE_IMAGE_NAME="${IMAGE_NAME_ROOT}-stage"                                           && echo "${STAGE_IMAGE_NAME}"
     - export QA_IMAGE_NAME="${IMAGE_NAME_ROOT}-qa"                                                 && echo "${QA_IMAGE_NAME}"
     - export ORIGIN1="${CI_REPOSITORY_URL##*@}"
-    - export ORIGIN_SSH=git@${ORIGIN1/\//:}                                                        && echo "${ORIGIN_SSH}"
+    - export ORIGIN_SSH=ssh://git@${ORIGIN1/\//:12051\/}                                           && echo "${ORIGIN_SSH}"
     - export ORIGIN_HTTPS=https://${ORIGIN1}                                                       && echo "${ORIGIN_HTTPS}"
     - docker login -u gitlab-ci-token -p "${CI_JOB_TOKEN}" "${CI_REGISTRY}"
 
@@ -46,22 +53,30 @@ before_script:
     - echo -e "Dockerfile*\n"
               ".git*\n"
               ".dockerignore\n"
-              "RapidSSL_TLS_RSA_CA_G1.crt\n"
               "qa" > .dockerignore
-    - docker pull "${BASE_IMAGE_NAME}" || true
+    - docker pull "${BASE_IMAGE_NAME}" ||
+      docker pull "${MASTER_BASE_IMAGE_NAME}" || true
     - docker build --pull
                    --cache-from "${BASE_IMAGE_NAME}"
+                   --cache-from "${MASTER_BASE_IMAGE_NAME}"
                    -t "${BASE_IMAGE_NAME}" -t "${BASE_IMAGE_NAME_VERSIONED}"
                    --build-arg "NVIDIA_BUILD_REF=${CI_COMMIT_SHA}"
-                   --build-arg "NVIDIA_BUILD_ID=${CI_JOB_ID}" .
-    - docker push "${BASE_IMAGE_NAME}"
+                   --build-arg "NVIDIA_BUILD_ID=${CI_JOB_ID}"
+                   --build-arg "NVIDIA_KALDI_VERSION=${RELEASE_BRANCH_NAME}"
+                   --build-arg "KALDI_VERSION=${KALDI_VERSION}"
+                   --build-arg "PYVER=${PYVER}" .
+    - test "${VIRTUAL}" -ne 1 && docker push "${BASE_IMAGE_NAME}"
     - docker push "${BASE_IMAGE_NAME_VERSIONED}"
     except:
     - tags
 
-py2+3-base:
+py2-base:
     stage: build base
     <<: *BASE
+
+#py3-base:
+#    stage: build base
+#    <<: *BASE
 
 .devel_template : &DEVEL
     variables:
@@ -69,26 +84,39 @@ py2+3-base:
       GIT_SUBMODULE_STRATEGY: recursive
       GET_SOURCES_ATTEMPTS: 3
     script:
-    - echo -e "FROM ${BASE_IMAGE_NAME_VERSIONED}\n"
+    - echo -e "FROM ${CI_REGISTRY}/dl/devops/build-scripts:latest AS build-scripts\n"
+              "FROM ${BASE_IMAGE_NAME_VERSIONED}\n"
               "COPY Dockerfile* /opt/${CI_PROJECT_NAME}/\n"
               "COPY .gitignore /opt/${CI_PROJECT_NAME}/\n"
               "COPY .gitlab-ci.yml /opt/${CI_PROJECT_NAME}/\n"
               "COPY .git/ /opt/${CI_PROJECT_NAME}/.git/\n"
-              "COPY RapidSSL_TLS_RSA_CA_G1.crt /usr/local/share/ca-certificates/\n"
               "COPY qa/   /opt/${CI_PROJECT_NAME}/qa/\n"
-              "RUN update-ca-certificates\n"
+              "COPY --from=build-scripts / /nvidia/\n"
+              "$(test "${VIRTUAL}" -eq 1 -a -n "${NCCL_VERSION}"   && echo "ENV NCCL_VERSION=\"${NCCL_VERSION}\"     NCCL_VIRTUAL=1"  )\n"
+              "$(test "${VIRTUAL}" -eq 1 -a -n "${CUBLAS_VERSION}" && echo "ENV CUBLAS_VERSION=\"${CUBLAS_VERSION}\" CUBLAS_VIRTUAL=1")\n"
+              "$(test "${VIRTUAL}" -eq 1 -a -n "${CUDNN_VERSION}"  && echo "ENV CUDNN_VERSION=\"${CUDNN_VERSION}\"   CUDNN_VIRTUAL=1" )\n"
+              "$(test "${VIRTUAL}" -eq 1 -a -n "${TRT_VERSION}"    && echo "ENV TRT_VERSION=\"${TRT_VERSION}\"       TRT_VIRTUAL=1"   )\n"
+              "RUN VIRTUAL=${VIRTUAL:-0} /nvidia/internal/install_internal.sh\n"
+              "ARG NVIDIA_PIPELINE_ID\n"
+              "ENV NVIDIA_PIPELINE_ID=\${NVIDIA_PIPELINE_ID:-'unknown'}\n"
+              "LABEL com.nvidia.pipeline.id=\"${NVIDIA_PIPELINE_ID}\"\n"
         > Dockerfile.${CI_PROJECT_NAME}.${CI_COMMIT_REF_NAME}
     - git remote set-url origin ${ORIGIN_HTTPS}
     - docker build --pull -t "${DEVEL_IMAGE_NAME}" -t "${DEVEL_IMAGE_NAME_VERSIONED}"
+                   --build-arg "NVIDIA_PIPELINE_ID=${CI_PIPELINE_ID}"
                    -f Dockerfile.${CI_PROJECT_NAME}.${CI_COMMIT_REF_NAME} .
-    - docker push "${DEVEL_IMAGE_NAME}"
+    - test "${VIRTUAL}" -ne 1 && docker push "${DEVEL_IMAGE_NAME}"
     - docker push "${DEVEL_IMAGE_NAME_VERSIONED}"
     except:
     - tags
 
-py2+3-devel:
+py2-devel:
     stage: build devel
     <<: *DEVEL
+
+#py3-devel:
+#    stage: build devel
+#    <<: *DEVEL
 
 .stage_template : &STAGE
     environment: staging
@@ -96,6 +124,7 @@ py2+3-devel:
       GIT_STRATEGY: fetch
       GIT_SUBMODULE_STRATEGY: recursive
       GET_SOURCES_ATTEMPTS: 3
+    dependencies: []
     script:
     # push a xx.yy-stage tag that records the commit we staged from
     - git remote set-url origin ${ORIGIN_SSH}
@@ -114,12 +143,22 @@ py2+3-devel:
     only:
     - /^.*-devel$/
     except:
+    - api
+    - external
+    - pipelines
+    - schedules
     - tags
+    - triggers
+    - web
     when: manual
 
-py2+3-stage:
-    stage: staging
+py2-stage:
+    stage: finalize
     <<: *STAGE
+
+#py3-stage:
+#    stage: finalize
+#    <<: *STAGE
 
 .test_template: &TEST_TEMPLATE
     environment: "${CI_JOB_NAME}"
@@ -128,25 +167,68 @@ py2+3-stage:
       TEST_SCRIPT: "./test.sh"
     script:
     - export TEST_WORK_DIR="${TEST_WORK_DIR%%--*}"
+    - export CONTAINER_NAME="${CI_PROJECT_NAME}.${CI_JOB_ID}.${CI_JOB_NAME}"
+    - test "${CI_JOB_NAME:0:3}" == "L3_" && export TEST_TIMEOUT=$((24*60*60)) || export TEST_TIMEOUT=$((3*60*60))
+    - test "${API_LOGGING}" == "0" && export LOGGER="" || export LOGGER="cudnnLog.sh"
+    - echo Test timeout set to $TEST_TIMEOUT seconds
     - cat /proc/driver/nvidia/version
-    - set -x &&
-      docker run --rm $(eval ${NV_DOCKER_ARGS})
+    - docker pull "${DEVEL_IMAGE_NAME_VERSIONED}"
+    - ( sleep $TEST_TIMEOUT && echo "******TIMEOUT EXPIRED******" && docker kill "${CONTAINER_NAME}" ) &
+      set -x &&
+      docker run $(eval ${NV_DOCKER_ARGS})
+             --name "${CONTAINER_NAME}"
              -v $DATADIR:/data
              $(eval echo ${EXTRA_DOCKER_RUN_ARGS})
+             -w ${TEST_WORK_DIR}
              ${DEVEL_IMAGE_NAME_VERSIONED}
-             /bin/bash -c "nvidia-smi && cd ${TEST_WORK_DIR} && exec bash -ex ${TEST_SCRIPT}"
+             /bin/bash -c "nvidia-smi && exec ${LOGGER} bash -ex ${TEST_SCRIPT}" || RV=$?;
+      set +x;
+      rm -rf logs/;
+      docker cp "${CONTAINER_NAME}:/logs/" "logs/" 2>/dev/null || true;
+      for LOGNAME in logs/*; do
+          mv "${LOGNAME}" $(echo "${LOGNAME}" | sed "s/-.....\./-${CI_JOB_NAME}./") 2>/dev/null || true;
+      done;
+      if [ $(cat logs/cudnnapilog-*.txt 2>/dev/null | wc -l) -eq 0 ]; then rm -f logs/cudnnapilog-* 2>/dev/null; fi;
+      gzip logs/*.txt 2>/dev/null || true;
+      docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1;
+      pkill -HUP sleep >/dev/null 2>&1 || true;
+      exit ${RV:-0}
+    artifacts:
+      name: "${CI_JOB_NAME}"
+      paths:
+      - logs/*
+      expire_in: 3 days
+      when: always
     tags:
     - must_specify_runner
     except:
     - tags
     allow_failure: false
 
+gather:
+    stage: finalize
+    script:
+    - /bin/true
+    artifacts:
+      name: "${CI_PIPELINE_ID}"
+      paths:
+      - logs/*
+      - wheelhouse/*
+      expire_in: 1 month
+      when: always
+    when: manual
+    except:
+      refs:
+        - tags
+      variables:
+        - $API_LOGGING == "0"
+
 .manual_test_trigger: &MANUAL_TEST_TRIGGER
     stage: trigger
     script:
     - export SCOPE1=${CI_JOB_NAME%% tests}; export SCOPE=${SCOPE1##Run all }
-    - docker pull ${CI_REGISTRY}/devops/scripts:nvdl_nightly_test_scheduler
-    - docker run --rm ${CI_REGISTRY}/devops/scripts:nvdl_nightly_test_scheduler ${CI_PIPELINE_ID} ${CI_PROJECT_PATH} ${SCOPE}
+    - docker pull ${CI_REGISTRY}/dl/devops/scripts:nvdl_nightly_test_scheduler
+    - docker run --rm ${CI_REGISTRY}/dl/devops/scripts:nvdl_nightly_test_scheduler ${CI_PIPELINE_ID} ${CI_PROJECT_PATH} ${SCOPE}
     except:
     - tags
     when: manual
@@ -179,65 +261,15 @@ py2+3-stage:
 "Run all L2 tests":
     <<: *MANUAL_TEST_TRIGGER
 
-.P100_R384_4GPU: &P100_R384_4GPU
+.P100_4GPU: &P100_4GPU
     tags:
     - P100
-    - R384
     - 4GPU
 
-.V100_R384_4GPU: &V100_R384_4GPU
+.V100_4GPU: &V100_4GPU
     tags:
     - V100
-    - R384
     - 4GPU
-
-.1080Ti_R384_1GPU: &1080Ti_R384_1GPU
-    tags:
-    - 1080Ti
-    - R384
-    - 1GPU
-    only:
-    - /^.*-devel$/
-
-.TitanXP_R384_2GPU: &TitanXP_R384_2GPU
-    tags:
-    - TitanXP
-    - R384
-    - 2GPU
-    only:
-    - /^.*-devel$/
-
-.M60_R384_2GPU: &M60_R384_2GPU
-    tags:
-    - M60
-    - R384
-    - 2GPU
-    only:
-    - /^.*-devel$/
-
-.K80_R384_2GPU: &K80_R384_2GPU
-    tags:
-    - K80
-    - R384
-    - 2GPU
-    only:
-    - /^.*-devel$/
-
-.P40_R384_1GPU: &P40_R384_1GPU
-    tags:
-    - P40
-    - R384
-    - 1GPU
-    only:
-    - /^.*-devel$/
-
-.M40_R384_1GPU: &M40_R384_1GPU
-    tags:
-    - M40
-    - R384
-    - 1GPU
-    only:
-    - /^.*-devel$/
 
 ######################################################
 ##
@@ -266,20 +298,20 @@ py2+3-stage:
 ##
 ######################################################
 
-#L0_verify_sig:
-#    <<: *L0_TEST
-#    tags:
-#    - 1GPU
-
-#### P100_R384_4GPU Python 2 ####
-
-L0_egs_voxforge--P100_R384_4GPU:
+L0_verify_sig:
     <<: *L0_TEST
-    <<: *P100_R384_4GPU
+    tags:
+    - 1GPU
 
-#### P100_R384_4GPU Python 3 ####
+#### P100_4GPU ####
 
-L0_egs_voxforge--py3--P100_R384_4GPU:
+L0_egs_voxforge--P100_4GPU:
     <<: *L0_TEST
-    <<: *P100_R384_4GPU
+    <<: *P100_4GPU
+
+#### V100_4GPU ####
+
+L0_egs_voxforge--V100_4GPU:
+    <<: *L0_TEST
+    <<: *V100_4GPU
 
