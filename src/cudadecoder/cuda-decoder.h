@@ -26,11 +26,6 @@
 #include "nnet3/decodable-online-looped.h"
 #include "util/stl-utils.h"
 
-//
-// To understand the following lines it is important to
-// know the difference between what we call a decoder lane and a decoder
-// channel
-//
 // A decoder channel is linked to one utterance. Frames
 // from the same must be sent to the same channel.
 //
@@ -39,7 +34,6 @@
 // and does the actual computation
 //
 // An analogy would be lane -> a core, channel -> a software thread
-//
 
 // Number of GPU decoder lanes
 #define KALDI_CUDA_DECODER_MAX_N_LANES 200
@@ -145,17 +139,59 @@ struct CudaDecoderConfig {
 
 class CudaDecoder {
  public:
-  // IntegerCostType is the type used in the lookup table d_state_best_cost
-  // and the d_cutoff
-  // We use a 1:1 conversion between CostType <--> IntegerCostType
-  // IntegerCostType is used because it triggers native atomic operations
+  // Creating a new CudaDecoder, associated to the FST fst
+  // nlanes and nchannels are defined as follow
+
+  // A decoder channel is linked to one utterance.
+  // When we need to perform decoding on an utterance,
+  // we pick an available channel, call InitDecoding on that channel
+  // (with that ChannelId in the channels vector in the arguments)
+  // then call AdvanceDecoding whenever frames are ready for the decoder
+  // for that utterance (also passing the same ChannelId to AdvanceDecoding)
+  //
+  // A decoder lane is where the computation actually happens
+  // a decoder lane is channel, and perform the actual decoding
+  // of that channel.
+  // If we have 200 lanes, we can compute 200 utterances (channels)
+  // at the same time. We need many lanes in parallel to saturate the big GPUs
+  //
+  // An analogy would be lane -> a CPU core, channel -> a software thread
+  // A channel saves the current state of the decoding for a given utterance.
+  // It can be kept idle until more frames are ready to be processed
+  //
+  // We will use as many lanes as necessary to saturate the GPU, but not more.
+  // A lane has an higher memory usage than a channel. If you just want to be
+  // able to
+  // keep more audio channels open at the same time (when I/O is the bottleneck
+  // for instance,
+  // typically in the context of online decoding), you should instead use more
+  // channels.
+  //
+  // A channel is typically way smaller in term of memory usage, and can be used
+  // to oversubsribe lanes in the context of online decoding
+  // For instance, we could choose nlanes=200 because it gives us good
+  // performance
+  // on a given GPU. It gives us an end-to-end performance of 3000 XRTF. We are
+  // doing online,
+  // so we only get audio at realtime speed for a given utterance/channel.
+  // We then decide to receive audio from 2500 audio channels at the same time
+  // (each at realtime speed),
+  // and as soon as we have frames ready for nlanes=200 channels, we call
+  // AdvanceDecoding on those channels
+  // In that configuration, we have nlanes=200 (for performance), and
+  // nchannels=2500 (to have enough audio
+  // available at a given time).
+  // Using nlanes=2500 in that configuration would first not be possible (out of
+  // memory), but also not necessary.
+  // Increasing the number of lanes is only useful if it increases performance.
+  // If the GPU is saturated at nlanes=200,
+  // you should not increase that number
   CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
               int32 nlanes = 1, int32 nchannels = 1);
   ~CudaDecoder();
 
   // InitDecoding initializes the decoding, and should only be used if you
   // intend to call AdvanceDecoding() on the channels listed in channels
-  //
   void InitDecoding(const std::vector<ChannelId> &channels);
 
   // AdvanceDecoding on a given batch

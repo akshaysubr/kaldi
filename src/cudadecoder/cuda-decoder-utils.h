@@ -79,6 +79,11 @@ inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
 
 namespace kaldi {
 typedef float CostType;
+// IntegerCostType is the type used in the lookup table d_state_best_cost
+// and the d_cutoff
+// We use a 1:1 conversion between CostType <--> IntegerCostType
+// IntegerCostType is used because it triggers native atomic operations
+// (CostType does not)
 typedef int32 IntegerCostType;
 typedef int32 LaneId;
 typedef int32 ChannelId;
