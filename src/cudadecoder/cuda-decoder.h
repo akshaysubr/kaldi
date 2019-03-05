@@ -24,7 +24,7 @@
 
 #include "cudadecoder/cuda-decodable-itf.h"
 #include "cudadecoder/cuda-decoder-utils.h"
-#include "lat/kaldi-lattice.h"
+#include "cudadecoder/cuda-fst.h"
 #include "nnet3/decodable-online-looped.h"
 #include "util/stl-utils.h"
 
@@ -81,11 +81,6 @@
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
 
 namespace kaldi {
-typedef fst::StdArc StdArc;
-typedef StdArc::Weight StdWeight;
-typedef StdArc::Label Label;
-typedef StdArc::StateId StateId;
-
 enum OVERFLOW_TYPE {
   OVERFLOW_NONE = 0,
   OVERFLOW_MAIN_Q = 1,
