@@ -22,31 +22,12 @@
 
 namespace kaldi {
 namespace CudaDecoder {
-void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
-                         const TransitionModel &trans_model) {
-  nvtxRangePushA("CudaFst constructor");
-  // count states since Fst doesn't provide this functionality
-  num_states_ = 0;
-  for (fst::StateIterator<fst::Fst<StdArc> > iter(fst); !iter.Done();
-       iter.Next())
-    ++num_states_;
 
-  start_ = fst.Start();
-
+void CudaFst::ComputeOffsets(const fst::Fst<StdArc> &fst) {
   // allocate and initialize offset arrays
   h_final_.resize(num_states_);
   h_e_offsets_.resize(num_states_ + 1);
   h_ne_offsets_.resize(num_states_ + 1);
-
-  d_e_offsets_ = static_cast<unsigned int *>(CuDevice::Instantiate().Malloc(
-      (num_states_ + 1) * sizeof(*d_e_offsets_)));
-  d_ne_offsets_ = static_cast<unsigned int *>(CuDevice::Instantiate().Malloc(
-      (num_states_ + 1) * sizeof(*d_ne_offsets_)));
-  d_final_ = static_cast<float *>(
-      CuDevice::Instantiate().Malloc((num_states_) * sizeof(*d_final_)));
-  KALDI_ASSERT(d_e_offsets_);
-  KALDI_ASSERT(d_ne_offsets_);
-  KALDI_ASSERT(d_final_);
 
   // iterate through states and arcs and count number of arcs per state
   e_count_ = 0;
@@ -79,16 +60,15 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
     h_ne_offsets_[i] += e_count_;  // e_arcs before
 
   arc_count_ = e_count_ + ne_count_;
+}
 
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(
-      d_e_offsets_, &h_e_offsets_[0], (num_states_ + 1) * sizeof(*d_e_offsets_),
-      cudaMemcpyHostToDevice));
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(
-      d_ne_offsets_, &h_ne_offsets_[0],
-      (num_states_ + 1) * sizeof(*d_ne_offsets_), cudaMemcpyHostToDevice));
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_final_, &h_final_[0],
-                                                num_states_ * sizeof(*d_final_),
-                                                cudaMemcpyHostToDevice));
+void CudaFst::AllocateData(const fst::Fst<StdArc> &fst {
+  d_e_offsets_ = static_cast<unsigned int *>(CuDevice::Instantiate().Malloc(
+      (num_states_ + 1) * sizeof(*d_e_offsets_)));
+  d_ne_offsets_ = static_cast<unsigned int *>(CuDevice::Instantiate().Malloc(
+      (num_states_ + 1) * sizeof(*d_ne_offsets_)));
+  d_final_ = static_cast<float *>(
+      CuDevice::Instantiate().Malloc((num_states_) * sizeof(*d_final_)));
 
   h_arc_weights_.resize(arc_count_);
   h_arc_nextstates_.resize(arc_count_);
@@ -106,13 +86,9 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
   // Only the ilabels for the e_arc are needed on the device
   d_arc_pdf_ilabels_ = static_cast<int32 *>(
       CuDevice::Instantiate().Malloc(e_count_ * sizeof(*d_arc_pdf_ilabels_)));
+}
 
-  KALDI_ASSERT(d_arc_weights_);
-  KALDI_ASSERT(d_arc_nextstates_);
-  KALDI_ASSERT(d_arc_pdf_ilabels_);
-
-  // We do not need the olabels on the device - GetBestPath is on CPU
-
+void CudaFst::CopyData(const fst::Fst<StdArc> &fst) {
   // now populate arc data
   int e_idx = 0;
   int ne_idx = e_count_;  // starts where e_offsets_ ends
@@ -138,6 +114,16 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
     }
   }
 
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(
+      d_e_offsets_, &h_e_offsets_[0], (num_states_ + 1) * sizeof(*d_e_offsets_),
+      cudaMemcpyHostToDevice));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(
+      d_ne_offsets_, &h_ne_offsets_[0],
+      (num_states_ + 1) * sizeof(*d_ne_offsets_), cudaMemcpyHostToDevice));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(d_final_, &h_final_[0],
+                                                num_states_ * sizeof(*d_final_),
+                                                cudaMemcpyHostToDevice));
+
   KALDI_DECODER_CUDA_API_CHECK_ERROR(
       cudaMemcpy(d_arc_weights_, &h_arc_weights_[0],
                  arc_count_ * sizeof(*d_arc_weights_), cudaMemcpyHostToDevice));
@@ -147,6 +133,30 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpy(
       d_arc_pdf_ilabels_, &h_arc_pdf_ilabels_[0],
       e_count_ * sizeof(*d_arc_pdf_ilabels_), cudaMemcpyHostToDevice));
+}
+
+void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
+                         const TransitionModel &trans_model) {
+  nvtxRangePushA("CudaFst constructor");
+  // count states since Fst doesn't provide this functionality
+  num_states_ = 0;
+  for (fst::StateIterator<fst::Fst<StdArc> > iter(fst); !iter.Done();
+       iter.Next())
+    ++num_states_;
+
+  start_ = fst.Start();
+
+  ComputeOffsets(fst);
+  AllocateData(fst);
+
+  KALDI_ASSERT(d_e_offsets_);
+  KALDI_ASSERT(d_ne_offsets_);
+  KALDI_ASSERT(d_final_);
+  KALDI_ASSERT(d_arc_weights_);
+  KALDI_ASSERT(d_arc_nextstates_);
+  KALDI_ASSERT(d_arc_pdf_ilabels_);
+
+  CopyData(fst);
 
   // Making sure the graph is ready
   cudaDeviceSynchronize();
