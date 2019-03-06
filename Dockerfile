@@ -32,22 +32,27 @@ RUN MAJ=`echo "$PYVER" | cut -c1-1` && \
 WORKDIR /opt/kaldi
 
 COPY tools tools
-RUN cd tools/ && make -j"$(nproc)" 
-RUN cd tools/ && make clean
+RUN cd tools/ \
+ && make -j"$(nproc)" \
+ && make clean
 
 # Copy remainder of source code
 COPY . .
 
-RUN cd src/ && \
-    ./configure --shared && \
-    make -j"$(nproc)" depend && \
-    make -j"$(nproc)" && \
-    make -j"$(nproc)" ext && \
-    ldconfig
+RUN cd src/ \
+ && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ \
+ && make -j"$(nproc)" depend \
+ && make -j"$(nproc)" \
+ && make -j"$(nproc)" ext \
+ && ldconfig \
+ && find . -name "*.o" -exec rm {} \; \
+ && find . -name "*.a" -exec rm {} \;
 
 ENV PYTHONPATH $PYTHONPATH:/usr/local/python
 
 WORKDIR /workspace
+RUN ln -s /opt/kaldi/egs /workspace/examples
+COPY nvidia-examples nvidia-examples
 RUN chmod -R a+w /workspace
 
 COPY nvidia_entrypoint.sh /usr/local/bin
