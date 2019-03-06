@@ -48,6 +48,7 @@ for test_set in $DATASETS ; do
   $KALDI_ROOT/egs/wsj/s5/utils/sym2int.pl --map-oov $oovtok -f 2- $result_path/words.txt $result_path/$test_set/text > $result_path/$test_set/text_ints_$model_path_hash 2> /dev/null
 done
 
+fail=0
 for decoder in $DECODERS ; do
   for test_set in $DATASETS ; do
     log_file="$result_path/log.$decoder.$test_set.out"
@@ -70,6 +71,7 @@ for decoder in $DECODERS ; do
 
     if [ $? -ne 0 ]; then
       echo "  ERROR encountered while decoding. Check $log_file"
+      fail=1
       continue
     fi
 
@@ -101,8 +103,11 @@ for decoder in $DECODERS ; do
     echo "  Expected: $expected_sentences, Actual: $actual_sentences"
     if [ $expected_sentences -ne $actual_sentences ]; then
       echo "  Error: did not return expected number of utterances. Check $log_file"
+      fail=1
     else
       echo "  Decoding completed successfully."
     fi
   done
 done
+
+exit $fail
