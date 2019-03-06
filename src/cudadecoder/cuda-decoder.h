@@ -288,7 +288,11 @@ class CudaDecoder {
 
   // TODO comments
   void ExpandArcsEmitting();
+  void ExpandArcsNonEmitting(bool *should_iterate);
   void PruneAndPreprocess(bool *all_aux_queues_empty);
+  void StartCopyAcousticCostsToHostAsync();
+  void FinalizeCopyAcousticCostsToHost();
+  void PostProcessMainQueue();
 
   // CheckOverflow
   // If a kernel sets the flag h_q_overflow, we send a warning to stderr
@@ -305,13 +309,14 @@ class CudaDecoder {
   int32 NumFramesToDecode(const std::vector<ChannelId> &channels,
                           std::vector<CudaDecodableInterface *> &decodables,
                           int32 max_num_frames);
-  // Copy the lane counters back to host, async, using stream st
+  // Copy the lane counters back to host, async or sync
   // The lanes counters contain all the information such as main_q_end (number
   // of tokens in the main_q)
   // main_q_narcs (number of arcs) during the computation. That's why we
   // frequently copy it back to host
   // to know what to do next
-  void CopyLaneCountersToHostAsync(cudaStream_t st);
+  void CopyLaneCountersToHostAsync();
+  void CopyLaneCountersToHostSync();
 
   // The selected tokens for each frame will be copied back to host. We will
   // store them

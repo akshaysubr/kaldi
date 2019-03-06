@@ -465,10 +465,15 @@ int32 CudaDecoder::GetMaxForAllLanes(
   return max_val;
 }
 
-void CudaDecoder::CopyLaneCountersToHostAsync(cudaStream_t st) {
+void CudaDecoder::CopyLaneCountersToHostAsync() {
   cudaMemcpyAsync(h_lanes_counters_, d_lanes_counters_.MutableData(),
                   nlanes_used_ * sizeof(*h_lanes_counters_),
-                  cudaMemcpyDeviceToHost, st);
+                  cudaMemcpyDeviceToHost, compute_st_);
+}
+
+void CudaDecoder::CopyLaneCountersToHostSync() {
+	CopyLaneCountersToHostAsync();
+	cudaStreamSynchronize(compute_st_);
 }
 
 template <typename T>
@@ -609,6 +614,44 @@ void CudaDecoder::ExpandArcsEmitting() {
   KALDI_DECODER_CUDA_CHECK_ERROR();
 }
 
+void CudaDecoder::ExpandArcsNonEmitting(bool *should_iterate) {
+        auto func_main_q_narcs = [](const LaneCounters &c) {
+          return c.main_q_narcs_and_end.x;
+        };
+        int32 max_main_q_narcs = GetMaxForAllLanes(func_main_q_narcs);
+
+        // If we have only a few arcs, jumping to the one-CTA per lane
+        // persistent version
+	bool launch_persistent_version = (max_main_q_narcs < KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS);
+	// If we cannot launch the persistent version, we will have to iterate on the heavy load kernels 
+	*should_iterate = !launch_persistent_version;
+        if(launch_persistent_version)  {
+		// Finalizing process non emitting. Takes care of the long tail,
+		// the final iterations with a small numbers of arcs. Do the work inside a
+		// single CTA (per lane),
+		finalize_process_non_emitting_kernel<<<
+			KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
+			KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 0, compute_st_>>>(
+					*h_device_params_, *h_kernel_params_);
+		
+		return;
+	}
+
+        // false is for non emitting
+        expand_arcs_kernel<false><<<
+            KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_narcs, nlanes_used_),
+            KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
+                                                           *h_kernel_params_);
+        KALDI_DECODER_CUDA_CHECK_ERROR();
+
+        // false is for non emitting
+        post_expand_kernel<
+            false><<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
+                     KALDI_CUDA_DECODER_ONE_THREAD_BLOCK, 0, compute_st_>>>(
+            *h_device_params_, *h_kernel_params_);
+        KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
 void CudaDecoder::PruneAndPreprocess(bool *all_aux_queues_empty) {
   auto func_aux_q_end = [](const LaneCounters &c) {
     return c.post_expand_aux_q_end;
@@ -626,150 +669,28 @@ void CudaDecoder::PruneAndPreprocess(bool *all_aux_queues_empty) {
   KALDI_DECODER_CUDA_CHECK_ERROR();
 }
 
-void CudaDecoder::AdvanceDecoding(
-    const std::vector<ChannelId> &channels,
-    std::vector<CudaDecodableInterface *> &decodables, int32 max_num_frames) {
-  nvtxRangePushA("AdvanceDecoding");
-  if (channels.size() == 0) return;  // nothing to do
-  // Context switch : Loading the channels state in lanes
-  LoadChannelsStateToLanes(channels);
-  KALDI_ASSERT(nlanes_used_ > 0);
+void CudaDecoder::StartCopyAcousticCostsToHostAsync() {
+	auto func_main_q_end = [](const LaneCounters &c) {
+		return c.main_q_narcs_and_end.y;
+	};
+	PerformConcatenatedCopy(
+			func_main_q_end, h_device_params_->d_main_q_acoustic_cost,
+			d_acoustic_cost_concat_, h_acoustic_cost_concat_, compute_st_,
+			&h_emitting_main_q_end_lane_offsets_);
+	for (int32 ilane = 0; ilane < nlanes_used_; ++ilane)
+		main_q_emitting_end_[ilane] =
+			h_lanes_counters_[ilane].main_q_narcs_and_end.y;
+}
 
-  // We'll decode nframes_to_decode, such as all channels have at least that
-  // number
-  // of frames available
-  int32 nframes_to_decode =
-      NumFramesToDecode(channels, decodables, max_num_frames);
-
-  // Looping over the frames that we will compute
-  nvtxRangePushA("Decoding");
-  for (int32 iframe = 0; iframe < nframes_to_decode; ++iframe) {
-    // Loglikelihoods from the acoustic model
-    nvtxRangePop();  // Decoding
-    // Setting the loglikelihoods pointers for that frame
-    for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
-      ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
-      int32 frame = num_frames_decoded_[ichannel];
-      h_kernel_params_->loglikelihoods_ptrs[ilane] =
-          decodables[ilane]->GetLogLikelihoodsCudaPointer(frame);
-    }
-    cudaStreamSynchronize(cudaStreamPerThread);  // Nnet3 sync
-    nvtxRangePushA("Decoding");
-
-    // Processing emitting arcs. We've done the preprocess stage at the end of
-    // the previous frame
-    ExpandArcsEmitting();
-    bool first_nonemitting = true;
-    // We'll loop until we have a small enough number of non-emitting arcs
-    // in the token queue. We'll then break the loop
-    while (true) {
-      // Moving the lanes_params to host,
-      // we want to know the size of the aux queues after ExpandArcsEmitting
-      CopyLaneCountersToHostAsync(compute_st_);
-      // Waiting for the copy
-      cudaStreamSynchronize(compute_st_);
-
-      // If one of the aux_q contains more than max_active_ tokens,
-      // we'll reduce the beam to only keep max_active_ tokens
-      ApplyMaxActiveAndReduceBeam(true);  // true for aux_q TODO do a struct
-      bool all_aux_queues_empty;
-      // Prune the aux_q. Apply the latest beam (using the one from
-      // ApplyMaxActiveAndReduceBeam if triggered)
-      // move the survival tokens to the main queue
-      // and do the preprocessing necessary for the next ExpandArcs
-      PruneAndPreprocess(&all_aux_queues_empty);
-      if (all_aux_queues_empty) break;
-
-      // We want to know how many tokens were not pruned, and ended up in the
-      // main queue
-      // Because we've already done the preprocess stage on those tokens, we
-      // also know
-      // the number of non-emitting arcs out of those tokens
-      // Copy for main_q_narcs and main_q_end
-      CopyLaneCountersToHostAsync(compute_st_);
-      cudaStreamSynchronize(compute_st_);
-
-      // If we're the first iteration after the emitting stage,
-      // we need to copy the acoustic costs back to host.
-      // We'll concatenate the costs from the different lanes into in a single
-      // continuous array.
-      {
-        if (first_nonemitting) {
-          auto func_main_q_end = [](const LaneCounters &c) {
-            return c.main_q_narcs_and_end.y;
-          };
-          PerformConcatenatedCopy(
-              func_main_q_end, h_device_params_->d_main_q_acoustic_cost,
-              d_acoustic_cost_concat_, h_acoustic_cost_concat_, compute_st_,
-              &h_emitting_main_q_end_lane_offsets_);
-          for (int32 ilane = 0; ilane < nlanes_used_; ++ilane)
-            main_q_emitting_end_[ilane] =
-                h_lanes_counters_[ilane].main_q_narcs_and_end.y;
-          first_nonemitting = false;
-        }
-      }
-      {
-        // For next expand
-        auto func_main_q_narcs = [](const LaneCounters &c) {
-          return c.main_q_narcs_and_end.x;
-        };
-        int32 max_main_q_narcs = GetMaxForAllLanes(func_main_q_narcs);
-
-        // If == 0, we will never break out of that while(true) loop
-        KALDI_ASSERT(KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS > 0);
-        // If we have only a few arcs, jumping to the one-CTA per lane
-        // persistent version
-        if (max_main_q_narcs < KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS) {
-          break;
-        }
-
-        // false is for non emitting
-        expand_arcs_kernel<false><<<
-            KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_narcs, nlanes_used_),
-            KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                           *h_kernel_params_);
-        KALDI_DECODER_CUDA_CHECK_ERROR();
-
-        // false is for non emitting
-        post_expand_kernel<
-            false><<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
-                     KALDI_CUDA_DECODER_ONE_THREAD_BLOCK, 0, compute_st_>>>(
-            *h_device_params_, *h_kernel_params_);
-        KALDI_DECODER_CUDA_CHECK_ERROR();
-      }
-    }
-    // Finalizing process non emitting. Takes care of the long tail,
-    // the final iterations with a small numbers of arcs. Do the work inside a
-    // single CTA (per lane),
-    // using local __syncthreads()
-    finalize_process_non_emitting_kernel<<<
-        KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
-        KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 0, compute_st_>>>(
-        *h_device_params_, *h_kernel_params_);
-
-    cudaStreamSynchronize(compute_st_);  // TODO DEBUG REMOVE
-    KALDI_DECODER_CUDA_CHECK_ERROR();
-
-    // Moving back to host the final (for this frame) values of :
-    // - main_q_end
-    // - main_q_narcs
-    CopyLaneCountersToHostAsync(compute_st_);
-    // Waiting for the copy
-    cudaStreamSynchronize(compute_st_);
-
+void CudaDecoder::FinalizeCopyAcousticCostsToHost() {
     MoveConcatenatedCopyToVector(h_emitting_main_q_end_lane_offsets_,
                                  h_acoustic_cost_concat_,
                                  &h_all_tokens_acoustic_cost_);
+}
 
-    {
-      // Post processing the tokens for that frame
-      // - do the preprocess necessary for the next emitting expand (will happen
-      // with next frame)
-      // - if a state S has more than one token associated to it, generate the
-      // list of those tokens
-      // It allows to backtrack efficiently in GetRawLattice
-      // - compute the extra costs
-      auto func_main_q_end = [](const LaneCounters &c) {
+void CudaDecoder::PostProcessMainQueue() {
+
+	    auto func_main_q_end = [](const LaneCounters &c) {
         return c.main_q_narcs_and_end.y;
       };
       int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
@@ -808,15 +729,117 @@ void CudaDecoder::AdvanceDecoding(
                                                          *h_kernel_params_);
       KALDI_DECODER_CUDA_CHECK_ERROR();
 
-      // We need the main_q_narcs from preprocess_in_place
-      CopyLaneCountersToHostAsync(compute_st_);
+      // We need the infos about number of emitting arcs (for next frame),
+      // the number of extra_prev_tokens, etc.
+      CopyLaneCountersToHostAsync();
 
       clear_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
                                                            nlanes_used_),
                              KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
           *h_device_params_, *h_kernel_params_);
       KALDI_DECODER_CUDA_CHECK_ERROR();
+
+}
+
+void CudaDecoder::AdvanceDecoding(
+    const std::vector<ChannelId> &channels,
+    std::vector<CudaDecodableInterface *> &decodables, int32 max_num_frames) {
+  nvtxRangePushA("AdvanceDecoding");
+  if (channels.size() == 0) return;  // nothing to do
+  // Context switch : Loading the channels state in lanes
+  LoadChannelsStateToLanes(channels);
+  KALDI_ASSERT(nlanes_used_ > 0);
+
+  // We'll decode nframes_to_decode, such as all channels have at least that
+  // number
+  // of frames available
+  int32 nframes_to_decode =
+      NumFramesToDecode(channels, decodables, max_num_frames);
+
+  // Looping over the frames that we will compute
+  nvtxRangePushA("Decoding");
+  for (int32 iframe = 0; iframe < nframes_to_decode; ++iframe) {
+    // Loglikelihoods from the acoustic model
+    nvtxRangePop();  // Decoding
+    // Setting the loglikelihoods pointers for that frame
+    for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
+      ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
+      int32 frame = num_frames_decoded_[ichannel];
+      h_kernel_params_->loglikelihoods_ptrs[ilane] =
+          decodables[ilane]->GetLogLikelihoodsCudaPointer(frame);
     }
+    cudaStreamSynchronize(cudaStreamPerThread);  // Nnet3 sync
+    nvtxRangePushA("Decoding");
+
+    // Processing emitting arcs. We've done the preprocess stage at the end of
+    // the previous frame
+    ExpandArcsEmitting();
+    bool first_nonemitting = true;
+
+    // We'll loop until we have a small enough number of non-emitting arcs
+    // in the token queue. We'll then break the loop
+    while (true) {
+      // Moving the lanes_params to host,
+      // we want to know the size of the aux queues after ExpandArcsEmitting
+      CopyLaneCountersToHostSync();
+
+      // If one of the aux_q contains more than max_active_ tokens,
+      // we'll reduce the beam to only keep max_active_ tokens
+      ApplyMaxActiveAndReduceBeam(true);  // true for aux_q TODO do a struct
+      bool all_aux_queues_empty;
+      // Prune the aux_q. Apply the latest beam (using the one from
+      // ApplyMaxActiveAndReduceBeam if triggered)
+      // move the survival tokens to the main queue
+      // and do the preprocessing necessary for the next ExpandArcs
+      PruneAndPreprocess(&all_aux_queues_empty);
+      if (all_aux_queues_empty) break;
+
+      // We want to know how many tokens were not pruned, and ended up in the
+      // main queue
+      // Because we've already done the preprocess stage on those tokens, we
+      // also know
+      // the number of non-emitting arcs out of those tokens
+      // Copy for main_q_narcs and main_q_end
+      CopyLaneCountersToHostSync();
+
+      // If we're the first iteration after the emitting stage,
+      // we need to copy the acoustic costs back to host.
+      // We'll concatenate the costs from the different lanes into in a single
+      // continuous array.
+      if (first_nonemitting) {
+	      // Async: We'll need a sync before calling FinalizeCopyLaneCountersToHost
+	      StartCopyAcousticCostsToHostAsync();
+	      first_nonemitting = false;
+      }
+      
+      bool should_iterate;
+      ExpandArcsNonEmitting(&should_iterate);
+      if(!should_iterate)
+	      break;
+     }
+     // We now have our final token main queues for that frame    
+
+    // Moving back to host the final (for this frame) values of :
+    // - main_q_end
+    // - main_q_narcs
+    CopyLaneCountersToHostAsync();
+
+    // Sync for :
+    // - CopyLaneCountersToHostAsync
+    // - StartCopyAcousticCostsToHostAsync
+    cudaStreamSynchronize(compute_st_);
+
+    FinalizeCopyAcousticCostsToHost();
+
+    // Post processing the tokens for that frame
+    // - do the preprocess necessary for the next emitting expand (will happen
+    // with next frame)
+    // - if a state S has more than one token associated to it, generate the
+    // list of those tokens
+    // It allows to backtrack efficiently in GetRawLattice
+    // - compute the extra costs
+    PostProcessMainQueue();
+    
 
     // Copying InfoTokens back to host
     {
@@ -1628,6 +1651,7 @@ void CudaDecoder::CheckStaticAsserts() {
   // kernel
   // update_beam_using_histogram_kernel
   KALDI_ASSERT(KALDI_CUDA_DECODER_HISTO_NBINS < KALDI_CUDA_DECODER_1D_BLOCK);
+  KALDI_ASSERT(KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS > 0);
   // TODO
 }
 /*
