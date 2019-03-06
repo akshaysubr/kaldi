@@ -287,33 +287,10 @@ void CudaDecoder::ComputeInitialChannel() {
 
   const int32 main_q_end = h_lanes_counters_[0].main_q_narcs_and_end.y;
   KALDI_ASSERT(main_q_end > 0);
-
-  h_all_tokens_info_[init_channel_id_].resize(main_q_end);
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(
-      &h_all_tokens_info_[init_channel_id_][0], d_main_q_info_.lane(ilane),
-      main_q_end * sizeof(InfoToken), cudaMemcpyDeviceToHost, compute_st_));
-
+  // All arcs traversed until now are non-emitting
   h_all_tokens_acoustic_cost_[init_channel_id_].resize(main_q_end, 0.0f);
 
-  int32 main_q_n_extra_prev_tokens =
-      h_lanes_counters_[ilane].main_q_n_extra_prev_tokens;
-  h_all_tokens_extra_prev_tokens_[init_channel_id_].resize(
-      main_q_n_extra_prev_tokens);
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(
-      cudaMemcpyAsync(&h_all_tokens_extra_prev_tokens_[init_channel_id_][0],
-                      d_main_q_extra_prev_tokens_.lane(ilane),
-                      main_q_n_extra_prev_tokens *
-                          sizeof(*d_main_q_extra_prev_tokens_.lane(ilane)),
-                      cudaMemcpyDeviceToHost, compute_st_));
-
-  h_all_tokens_extra_prev_tokens_extra_cost_[init_channel_id_].resize(
-      main_q_n_extra_prev_tokens);
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(
-      &h_all_tokens_extra_prev_tokens_extra_cost_[init_channel_id_][0],
-      d_main_q_extra_cost_.lane(ilane),
-      main_q_n_extra_prev_tokens * sizeof(*d_main_q_extra_cost_.lane(ilane)),
-      cudaMemcpyDeviceToHost, compute_st_));
-
+  CopyMainQueueDataToHost();
   SaveChannelsStateFromLanes();
 
   KALDI_DECODER_CUDA_CHECK_ERROR();
@@ -724,28 +701,6 @@ void CudaDecoder::CopyMainQueueDataToHost() {
   MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
                                h_extra_cost_concat_,
                                &h_all_tokens_extra_prev_tokens_extra_cost_);
-
-  // Adding 0.0f acoustic_costs for non-emittings
-  for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
-    const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
-    KALDI_ASSERT(frame_offsets_[ichannel].back() ==
-                 h_lanes_counters_[ilane].main_q_global_offset);
-
-    KALDI_ASSERT(
-        h_all_tokens_extra_prev_tokens_[ichannel].size() ==
-        (h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset +
-         h_lanes_counters_[ilane].main_q_n_extra_prev_tokens));
-    KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() ==
-                 h_all_tokens_extra_prev_tokens_[ichannel].size());
-    ++num_frames_decoded_[ichannel];
-    const int32 main_q_end = h_lanes_counters_[ilane].main_q_narcs_and_end.y;
-    frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() +
-                                       main_q_end);
-    int32 ntokens_nonemitting = main_q_end - main_q_emitting_end_[ilane];
-    auto &vec = h_all_tokens_acoustic_cost_[ichannel];
-    vec.insert(vec.end(), ntokens_nonemitting, 0.0f);
-    KALDI_ASSERT(vec.size() == h_all_tokens_info_[ichannel].size());
-  }
 }
 
 void CudaDecoder::AdvanceDecoding(
@@ -850,6 +805,30 @@ void CudaDecoder::AdvanceDecoding(
     // Moving the data necessary for GetRawLattice/GetBestPath back to host for
     // storage
     CopyMainQueueDataToHost();
+    for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
+      const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
+      // Few sanity checks
+      KALDI_ASSERT(frame_offsets_[ichannel].back() ==
+                   h_lanes_counters_[ilane].main_q_global_offset);
+      KALDI_ASSERT(
+          h_all_tokens_extra_prev_tokens_[ichannel].size() ==
+          (h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset +
+           h_lanes_counters_[ilane].main_q_n_extra_prev_tokens));
+      KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() ==
+                   h_all_tokens_extra_prev_tokens_[ichannel].size());
+      // We're done processing that frame
+      ++num_frames_decoded_[ichannel];
+      const int32 main_q_end = h_lanes_counters_[ilane].main_q_narcs_and_end.y;
+      // Saving frame offsets for GetRawLattice
+      frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() +
+                                         main_q_end);
+
+      // Adding 0.0f acoustic_costs for non-emittings
+      int32 ntokens_nonemitting = main_q_end - main_q_emitting_end_[ilane];
+      auto &vec = h_all_tokens_acoustic_cost_[ichannel];
+      vec.insert(vec.end(), ntokens_nonemitting, 0.0f);
+      KALDI_ASSERT(vec.size() == h_all_tokens_info_[ichannel].size());
+    }
   }
   SaveChannelsStateFromLanes();
   nvtxRangePop();  // Decoding
