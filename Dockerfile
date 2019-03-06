@@ -54,6 +54,7 @@ RUN cd src/ \
 ENV PYTHONPATH $PYTHONPATH:/usr/local/python
 
 WORKDIR /workspace
+COPY NVREADME.md README.md
 RUN ln -s /opt/kaldi/egs /workspace/examples
 COPY nvidia-examples nvidia-examples
 RUN chmod -R a+w /workspace
