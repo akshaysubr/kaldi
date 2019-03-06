@@ -144,7 +144,7 @@ void CudaDecoder::AllocateHostData() {
       cudaMallocHost(&h_lanes_counters_, nlanes_ * sizeof(*h_lanes_counters_)));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(
       &h_channels_counters_, nchannels_ * sizeof(*h_channels_counters_)));
-  num_frames_decoded_.resize(nchannels_, 0);
+  num_frames_decoded_.resize(nchannels_, -1);
   main_q_emitting_end_.resize(nlanes_);
 }
 
