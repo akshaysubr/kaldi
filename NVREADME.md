@@ -35,7 +35,7 @@ Once the model is prepared you can run a speech to text benchmark as follows:
 
 ```
 cd /workspace/nvidia-examples/librispeech/
-./benchmark_decoder.sh
+./run_benchmark.sh
 ```
 
 
