@@ -34,13 +34,14 @@ WORKDIR /opt/kaldi
 COPY tools tools
 RUN cd tools/ \
  && make -j"$(nproc)" \
- && make clean
+ && make dockerclean
 
 # Copy remainder of source code
 COPY . .
 
 RUN cd src/ \
  && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ \
+    --cuda-arch="-gencode arch=compute_52,code=sm_52 -gencode arch=compute_60,code=sm_60 -gencode arch=compute_61,code=sm_61 -gencode arch=compute_70,code=sm_70 -gencode arch=compute_75,code=sm_75" \
  && make -j"$(nproc)" depend \
  && make -j"$(nproc)" \
  && make -j"$(nproc)" ext \
