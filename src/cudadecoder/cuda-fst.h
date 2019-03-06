@@ -54,7 +54,7 @@ class CudaFst {
   void ComputeOffsets(const fst::Fst<StdArc> &fst);
 
   // allocates memory to store FST
-  void AllocateData(const fst::Fst<StdArch> &fst);
+  void AllocateData(const fst::Fst<StdArc> &fst);
 
   // copies fst into the pre-allocated datastructures
   void CopyData(const fst::Fst<StdArc> &fst);
