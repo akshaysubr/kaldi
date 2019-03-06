@@ -1,26 +1,46 @@
 #!/bin/bash
 
-echo "Usage: $0 <model_path> <dataset_path> <result_path> [gpu_threads] [cpu_threads] [max_batch_size] [batch_drain_size] [iterations] [file_limit] [beam] [lattice_beam] [max_active]"
+echo "Usage: $0 <GPU_IDX> <data-sets> [gpu_threads] [cpu_threads] [max_batch_size] [batch_drain_size] [iterations] [file_limit] [beam] [lattice_beam] [max_active]"
 
+model_path=/workspace/models/LibriSpeech/
+dataset_path=/workspace/datasets/LibriSpeech/
+result_path=/tmp/ls-results
 DECODERS="batched-wav-nnet3-cuda"
-DATASETS="test_clean test_other"
 
 export KALDI_ROOT=${KALDI_ROOT:-/opt/kaldi}
 
-model_path=${1:-/workspace/models/LibriSpeech/}
-dataset_path=${2:-/workspace/datasets/LibriSpeech/}
-result_path=${3:-/tmp/ls-results}
-gpu_threads=${4:-2}
-cpu_threads=${5:-80}
-max_batch_size=${6:-100}
-batch_drain_size=${7:-20}
-iterations=${8:-10}
-file_limit=${9:--1}
-beam=${10:-10}
-lattice_beam=${11:-7}
-max_active=${12:-10000}
+#by default use device 0 unless told otherwise
+export CUDA_VISIBLE_DEVICES=${1:-0}
 
-generate_lattices=0
+data_sets=${2:-"test_clean test_other"}
+
+gpu_threads=${3:-2}
+
+#by default use all cores
+cpu_threads=${4:-`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`}
+
+#query GPU memory
+gpu_memory=`nvidia-smi -q -i 0 | grep -A1 "FB Memory" | grep Total | tr -s " " | cut -d " " -f 4`
+
+if [ $gpu_memory -ge 16000 ]; then
+  max_batch_size=${5:-100}
+  batch_drain_size=${6:-20}
+elif [ $gpu_memory -ge 8000 ]; then
+  max_batch_size=${5:-50}
+  batch_drain_size=${6:-10}
+elif [ $gpu_memory -ge 4000 ]; then
+  max_batch_size=${5:-25}
+  batch_drain_size=${6:-5}
+else
+  echo "ERROR not enough GPU memory to run benchmark."
+  exit 1;
+fi
+
+iterations=${7:-10}
+file_limit=${8:--1}
+beam=${9:-10}
+lattice_beam=${10:-7}
+max_active=${11:-10000}
 
 #NVPROF="nvprof -f -o profile.out"
 
@@ -29,7 +49,7 @@ if [ $worker_threads -lt 0 ]; then
   worker_threads=0
 fi
 
-echo "GPU Threads: $gpu_threads CPU Threads: $cpu_threads Worker Threads: $worker_threads Batch Size: $max_batch_size Batch Drain: $batch_drain_size Iterations: $iterations FileLimit: $file_limit beam=$beam lattice-beam=$lattice_beam max-active=$max_active"
+echo "GPU: $CUDA_VISIBLE_DEVICES GPU Threads: $gpu_threads CPU Threads: $cpu_threads Worker Threads: $worker_threads Batch Size: $max_batch_size Batch Drain: $batch_drain_size Iterations: $iterations FileLimit: $file_limit beam=$beam lattice-beam=$lattice_beam max-active=$max_active"
 
 wavscp="wav_conv.scp"
 
@@ -39,7 +59,7 @@ mkdir -p $result_path
 # copy vocabulary locally as lowercase (see below caveat for comment on this)
 cat $model_path/words.txt | tr '[:upper:]' '[:lower:]' > $result_path/words.txt
 
-for test_set in $DATASETS ; do
+for test_set in $data_sets ; do
   mkdir $result_path/$test_set
   echo "Generating new reference transcripts for model and dataset..."
   cat $dataset_path/$test_set/text | tr '[:upper:]' '[:lower:]' > $result_path/$test_set/text
@@ -50,14 +70,11 @@ done
 
 fail=0
 for decoder in $DECODERS ; do
-  for test_set in $DATASETS ; do
+  for test_set in $data_sets ; do
     log_file="$result_path/log.$decoder.$test_set.out"
 
     path="cudadecoderbin"
     cuda_flags="--cuda-use-tensor-cores=true --iterations=$iterations --max-tokens-per-frame=500000 --cuda-memory-proportion=.5 --max-batch-size=$max_batch_size --cuda-control-threads=$gpu_threads --batch-drain-size=$batch_drain_size --cuda-worker-threads=$worker_threads"
-    if [ "$generate_lattices" -eq "1" ]; then
-      cuda_flags="$cuda_flags --generate-lattices=true"
-    fi
 
     # run the target decoder with the current dataset
     echo "Running $decoder decoder on $test_set$trunc [$threads threads]..."
