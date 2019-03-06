@@ -59,11 +59,6 @@ private:
 
   int32 frame_offset_;
 
-  // raw_data and stride_ are a kind of fast look-aside for 'likes_', to be
-  // used when KALDI_PARANOID is false.
-  const BaseFloat *raw_data_;
-  int32 stride_;
-
   KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableCuMatrixMapped);
 };
 }

@@ -29,6 +29,12 @@ typedef fst::StdArc StdArc;
 typedef StdArc::Weight StdWeight;
 typedef StdArc::Label Label;
 typedef StdArc::StateId StateId;
+// FST in device memory
+// This class is based on the Compressed Sparse Row (CSR) Matrix format.
+// https://en.wikipedia.org/wiki/Sparse_matrix#Compressed_sparse_row_(CSR,_CRS_or_Yale_format)
+// Where states = rows and arcs = columns.
+// Emitting arcs and non-emitting arcs are stored as seperate matrices for
+// efficiency
 class CudaFst {
  public:
   CudaFst(){};
@@ -44,6 +50,15 @@ class CudaFst {
  private:
   friend class CudaDecoder;
 
+  // counts arcs and computes offsets of the fst passed in
+  void ComputeOffsets(const fst::Fst<StdArc> &fst);
+
+  // allocates memory to store FST
+  void AllocateData(const fst::Fst<StdArc> &fst);
+
+  // copies fst into the pre-allocated datastructures
+  void CopyData(const fst::Fst<StdArc> &fst,
+                const TransitionModel &trans_model);
   // Total number of states
   unsigned int num_states_;
 
