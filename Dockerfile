@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sox \
         subversion \
         unzip \
+        bc \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
