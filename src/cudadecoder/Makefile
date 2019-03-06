@@ -21,7 +21,7 @@ LDLIBS += $(CUDA_LDLIBS)
 
 LIBNAME = kaldi-cuda-decoder
 
-ADDLIBS = ../cudamatrix/kaldi-cudamatrix.a ../cudadecoder/kaldi-cudadecoder.a ../base/kaldi-base.a ../matrix/kaldi-matrix.a \
+ADDLIBS = ../cudamatrix/kaldi-cudamatrix.a ../cudadecoder/kaldi-cuda-decoder.a ../base/kaldi-base.a ../matrix/kaldi-matrix.a \
 					../lat/kaldi-lat.a ../util/kaldi-util.a ../matrix/kaldi-matrix.a ../gmm/kaldi-gmm.a \
 					../fstext/kaldi-fstext.a ../hmm/kaldi-hmm.a ../gmm/kaldi-gmm.a ../transform/kaldi-transform.a \
 					../tree/kaldi-tree.a ../online2/kaldi-online2.a ../nnet3/kaldi-nnet3.a  \
