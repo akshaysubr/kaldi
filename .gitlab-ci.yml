@@ -4,7 +4,7 @@
 
 variables:
     EXTRA_DOCKER_RUN_ARGS: "--shm-size=1G --ulimit memlock=-1 --ulimit stack=$$((1024*65536))"
-    DATADIR: /raid/dldata
+    DATADIR: /mnt/dldata
  
     # variables that may be overridden by the pipeline vars
     API_LOGGING: 0
@@ -255,21 +255,33 @@ gather:
     when: manual
     allow_failure: true
 
-"Run all L1 tests":
-    <<: *MANUAL_TEST_TRIGGER
-
-"Run all L2 tests":
-    <<: *MANUAL_TEST_TRIGGER
+#"Run all L1 tests":
+#    <<: *MANUAL_TEST_TRIGGER
+#
+#"Run all L2 tests":
+#    <<: *MANUAL_TEST_TRIGGER
 
 .P100_4GPU: &P100_4GPU
     tags:
     - P100
     - 4GPU
 
+.P40_R384_2GPU: &P40_R384_2GPU
+    tags:
+    - P40
+    - R384
+    - 2GPU
+
 .V100_4GPU: &V100_4GPU
     tags:
     - V100
     - 4GPU
+
+.T4_R410_2GPU: &T4_R410_2GPU
+    tags:
+    - T4
+    - R410
+    - 2GPU
 
 ######################################################
 ##
@@ -298,15 +310,27 @@ gather:
 ##
 ######################################################
 
-#### P100_4GPU ####
-
 L0_egs_voxforge--P100_4GPU:
     <<: *L0_TEST
     <<: *P100_4GPU
 
-#### V100_4GPU ####
-
 L0_egs_voxforge--V100_4GPU:
     <<: *L0_TEST
     <<: *V100_4GPU
+
+L0_librispeech--P100_4GPU:
+    <<: *L0_TEST
+    <<: *P100_4GPU
+
+L0_librispeech--P40_R384_2GPU:
+    <<: *L0_TEST
+    <<: *P40_R384_2GPU
+
+L0_librispeech--V100_4GPU:
+    <<: *L0_TEST
+    <<: *V100_4GPU
+
+L0_librispeech--T4_R410_2GPU:
+    <<: *L0_TEST
+    <<: *T4_R410_2GPU
 

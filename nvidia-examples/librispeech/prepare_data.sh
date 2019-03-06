@@ -2,7 +2,7 @@
 
 model=LibriSpeech
 
-data=/workspace/data/
+data=${1:-/workspace/data/}
 datasets=/workspace/datasets/
 models=/workspace/models/
 
@@ -15,7 +15,7 @@ mkdir -p $data/$model
 mkdir -p $models/$model
 mkdir -p $datasets/$model
 
-pushd /opt/kaldi/egs/librispeech/s5 >/dev/null
+pushd /opt/kaldi/egs/librispeech/s5
 
 . ./cmd.sh
 . ./path.sh
@@ -24,19 +24,20 @@ pushd /opt/kaldi/egs/librispeech/s5 >/dev/null
 # you might not want to do this for interactive shells.
 set -e
 
-echo ----------- Fetching dataset -----------
+if [[ "$SKIP_DOWNLOAD" -ne "1" ]]; then
+  echo ----------- Fetching dataset -----------
 
-# download the data.  Note: we're using the 100 hour setup for
-# now; later in the script we'll download more and use it to train neural
-# nets.
-for part in test-clean test-other; do
-  local/download_and_untar.sh $data $data_url $part
-done
-
-
-echo ----------- Preprocessing dataset -----------
+  # download the data.  Note: we're using the 100 hour setup for
+  # now; later in the script we'll download more and use it to train neural
+  # nets.
+  for part in test-clean test-other; do
+    local/download_and_untar.sh $data $data_url $part
+  done
+fi
 
 # format the data as Kaldi data directories
+echo ----------- Preprocessing dataset -----------
+
 for part in test-clean test-other; do
   # use underscore-separated names in data directories.
   local/data_prep.sh $data/$model/$part $datasets/$model/$(echo $part | sed s/-/_/g)
@@ -44,19 +45,20 @@ for part in test-clean test-other; do
   pushd $datasets/$model/$(echo $part | sed s/-/_/g); (cat wav.scp | awk '{print $1" "$6}' | sed 's/\.flac/\.wav/g' > wav_conv.scp); popd
 done
 
-# Convert flag files to wavs
-for flac in $(find $data/$model -name "*.flac"); do
-   wav=$(echo $flac | sed 's/flac/wav/g')
-   sox $flac -r 16000 -b 16 $wav
-done
+if [[ "$SKIP_FLAC2WAV" -ne "1" ]]; then
+  # Convert flac files to wavs
+  for flac in $(find $data/$model -name "*.flac"); do
+     wav=$(echo $flac | sed 's/flac/wav/g')
+     sox $flac -r 16000 -b 16 $wav
+  done
 
-echo "Converted flac to wav."
+  echo "Converted flac to wav."
+fi
 
-popd >/dev/null
+popd >&/dev/null
 
-#TODO get from model repository 
 echo ----------- Fetching trained model -----------
-pushd $models >/dev/null
-wget http://sqrl/dldata/speech/LibriSpeech-trained.tgz
-tar -xzf LibriSpeech-trained.tgz -C $model
-popd >/dev/null
+pushd $models >&/dev/null
+#TODO download trained model from model repository 
+tar -xzf $data/LibriSpeech-trained.tgz -C $model
+popd >&/dev/null
