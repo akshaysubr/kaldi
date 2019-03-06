@@ -65,16 +65,20 @@
 // When applying the max-active, we need to compute a topk
 // to perform that (soft) topk, we compute a histogram
 // here we define the number of bins in that histogram
-// it has to be less than the number of 1D threads 
+// it has to be less than the number of 1D threads
 #define KALDI_CUDA_DECODER_HISTO_NBINS 255
 
-// Adaptive beam parameters 
-// We will decrease the beam when we detect that we are generating too many tokens
-// for the first segment of the aux_q, we don't do anything (keep the original beam)
-// the first segment is made of (aux_q capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
+// Adaptive beam parameters
+// We will decrease the beam when we detect that we are generating too many
+// tokens
+// for the first segment of the aux_q, we don't do anything (keep the original
+// beam)
+// the first segment is made of (aux_q
+// capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
 // then we will decrease the beam step by step, until 0.
 // we will decrease the beam every m elements, with:
-// x = (aux_q capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT (static segment
+// x = (aux_q capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT (static
+// segment
 // y = (aux_q capacity) - x
 // m = y / KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT 4
@@ -88,10 +92,10 @@ enum OVERFLOW_TYPE {
   OVERFLOW_AUX_Q = 2
 };
 
-// Forward declaration 
+// Forward declaration
 class DeviceParams;
 class KernelParams;
-class HashmapValueT; // TODO why forward?
+class HashmapValueT;  // TODO why forward?
 
 class CudaDecoder;
 
@@ -195,11 +199,13 @@ class CudaDecoder {
   // AdvanceDecoding on a given batch
   // a batch is defined by the channels vector
   // We can compute N channels at the same time (in the same batch)
-  // where N = number of lanes, as defined in the constructor 
-  // AdvanceDecoding will compute as many frames as possible while running the full batch
-  // when at least one channel has no more frames ready to be computed, AdvanceDecoding returns
+  // where N = number of lanes, as defined in the constructor
+  // AdvanceDecoding will compute as many frames as possible while running the
+  // full batch
+  // when at least one channel has no more frames ready to be computed,
+  // AdvanceDecoding returns
   // The user then decides what to do, i.e.:
-  // 
+  //
   // 1) either remove the empty channel from the channels list
   // and call again AdvanceDecoding
   // 2) or swap the empty channel with another one that has frames ready
@@ -264,6 +270,7 @@ class CudaDecoder {
 
   // Updates *h_kernel_params using channels
   void SetChannelsInKernelParams(const std::vector<ChannelId> &channels);
+  void ResetChannelsInKernelParams();
 
   // Context-switch functions
   // Used to perform the context-switch of load/saving the state of a channels
@@ -271,7 +278,7 @@ class CudaDecoder {
   // channel
   // into that lane (same idea than when we load a software threads into a CPU
   // core registers)
-  void LoadChannelsStateToLanes();
+  void LoadChannelsStateToLanes(const std::vector<ChannelId> &channels);
   void SaveChannelsStateFromLanes();
 
   // If we have more than max_active_ tokens in the queue, we will compute a new
@@ -281,6 +288,7 @@ class CudaDecoder {
 
   // TODO comments
   void ExpandArcsEmitting();
+  void PruneAndPreprocess(bool *all_aux_queues_empty);
 
   // CheckOverflow
   // If a kernel sets the flag h_q_overflow, we send a warning to stderr
@@ -477,12 +485,12 @@ class CudaDecoder {
   // For instance which channel is executing on which lane
   DeviceParams *h_device_params_;
   KernelParams *h_kernel_params_;
+  int32 nlanes_used_;  // number of lanes used in h_kernel_params_
 
   // Initial lane
   // When starting a new utterance,
   // init_channel_id is used to initialize a channel
   int32 init_channel_id_;
-
   // CUDA streams used by the decoder
   cudaStream_t compute_st_;
 
