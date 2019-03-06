@@ -20,11 +20,11 @@ beam=${10:-10}
 lattice_beam=${11:-7}
 max_active=${12:-10000}
 
-generate_lattices=1
+generate_lattices=0
 
 #NVPROF="nvprof -f -o profile.out"
 
-worker_threads=`echo $cpu_threads-$gpu_threads | bc`
+let worker_threads="$cpu_threads - $gpu_threads"
 if [ $worker_threads -lt 0 ]; then
   worker_threads=0
 fi
