@@ -356,6 +356,8 @@ class CudaDecoder {
                                     T *h_concat,
                                     std::vector<std::vector<T>> *vecvec);
 
+  void CopyMainQueueDataToHost();
+
   // Computes a set of static asserts on the static values
   // such as the defines : KALDI_CUDA_DECODER_MAX_N_LANES for example
   // In theory we should do them at compile time

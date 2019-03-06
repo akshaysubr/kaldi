@@ -262,7 +262,8 @@ void CudaDecoder::ComputeInitialChannel() {
   KALDI_ASSERT(ilane == 0);
   // Following kernels working channel_id
   std::vector<ChannelId> channels = {init_channel_id_};
-  SetChannelsInKernelParams(channels);
+  SetChannelsInKernelParams(channels);  // not calling LoadChannelsStateToLanes,
+                                        // init_channel_id_ is a special case
 
   // Adding the start state to the initial token queue
   initialize_initial_lane_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, 1),
@@ -270,81 +271,29 @@ void CudaDecoder::ComputeInitialChannel() {
                                    compute_st_>>>(*h_device_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
-  // Initial ProcessNonEmitting
-  preprocess_and_contract_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, 1),
-                                   KALDI_CUDA_DECODER_1D_BLOCK, 0,
-                                   compute_st_>>>(*h_device_params_,
-                                                  *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
+  h_lanes_counters_[ilane].post_expand_aux_q_end = 1;
 
+  bool all_aux_q_empty;
+  PruneAndPreprocess(&all_aux_q_empty);
   finalize_process_non_emitting_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, 1),
                                          KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 0,
                                          compute_st_>>>(*h_device_params_,
                                                         *h_kernel_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
-  int32 main_q_end;
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(
-      &main_q_end, &d_lanes_counters_.lane(ilane)->main_q_narcs_and_end.y,
-      sizeof(int32), cudaMemcpyDeviceToHost, compute_st_));
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-  cudaStreamSynchronize(compute_st_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
+  CopyLaneCountersToHostSync();
+  PostProcessMainQueue();
+  CopyLaneCountersToHostSync();
 
+  const int32 main_q_end = h_lanes_counters_[0].main_q_narcs_and_end.y;
   KALDI_ASSERT(main_q_end > 0);
-
-  // Preparing for first frame + reverting back to init state (lookup table,
-  // etc.)
-  fill_best_int_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1),
-                              KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-      *h_device_params_, *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  preprocess_in_place_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1),
-                               KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-      *h_device_params_, *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  exclusive_sum_batched_step2_kernel<<<
-      KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1),
-      KALDI_CUDA_DECODER_ONE_THREAD_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                             *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  exclusive_sum_batched_step3_kernel<<<
-      KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1), KALDI_CUDA_DECODER_1D_BLOCK,
-      0, compute_st_>>>(*h_device_params_, *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  fill_extra_prev_tokens_list_kernel<<<
-      KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1), KALDI_CUDA_DECODER_1D_BLOCK,
-      0, compute_st_>>>(*h_device_params_, *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  clear_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(main_q_end, 1),
-                         KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-      *h_device_params_, *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  // Saving init params on host
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(
-      h_lanes_counters_, d_lanes_counters_.MutableData(),
-      1 * sizeof(*h_lanes_counters_), cudaMemcpyDeviceToHost, compute_st_));
-
-  // Waiting for compute to be done
-  cudaStreamSynchronize(compute_st_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
 
   h_all_tokens_info_[init_channel_id_].resize(main_q_end);
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(
       &h_all_tokens_info_[init_channel_id_][0], d_main_q_info_.lane(ilane),
       main_q_end * sizeof(InfoToken), cudaMemcpyDeviceToHost, compute_st_));
 
-  h_all_tokens_acoustic_cost_[init_channel_id_].resize(main_q_end);
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemcpyAsync(
-      &h_all_tokens_acoustic_cost_[init_channel_id_][0],
-      d_main_q_acoustic_cost_.lane(ilane), main_q_end * sizeof(CostType),
-      cudaMemcpyDeviceToHost, compute_st_));
+  h_all_tokens_acoustic_cost_[init_channel_id_].resize(main_q_end, 0.0f);
 
   int32 main_q_n_extra_prev_tokens =
       h_lanes_counters_[ilane].main_q_n_extra_prev_tokens;
@@ -365,14 +314,6 @@ void CudaDecoder::ComputeInitialChannel() {
       main_q_n_extra_prev_tokens * sizeof(*d_main_q_extra_cost_.lane(ilane)),
       cudaMemcpyDeviceToHost, compute_st_));
 
-  // Context switch : saving channel state
-  save_channels_state_from_lanes_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, 1),
-                                          KALDI_CUDA_DECODER_ONE_THREAD_BLOCK,
-                                          0, compute_st_>>>(*h_device_params_,
-                                                            *h_kernel_params_);
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  cudaStreamSynchronize(compute_st_);
   SaveChannelsStateFromLanes();
 
   KALDI_DECODER_CUDA_CHECK_ERROR();
@@ -472,8 +413,8 @@ void CudaDecoder::CopyLaneCountersToHostAsync() {
 }
 
 void CudaDecoder::CopyLaneCountersToHostSync() {
-	CopyLaneCountersToHostAsync();
-	cudaStreamSynchronize(compute_st_);
+  CopyLaneCountersToHostAsync();
+  cudaStreamSynchronize(compute_st_);
 }
 
 template <typename T>
@@ -615,41 +556,43 @@ void CudaDecoder::ExpandArcsEmitting() {
 }
 
 void CudaDecoder::ExpandArcsNonEmitting(bool *should_iterate) {
-        auto func_main_q_narcs = [](const LaneCounters &c) {
-          return c.main_q_narcs_and_end.x;
-        };
-        int32 max_main_q_narcs = GetMaxForAllLanes(func_main_q_narcs);
+  auto func_main_q_narcs = [](const LaneCounters &c) {
+    return c.main_q_narcs_and_end.x;
+  };
+  int32 max_main_q_narcs = GetMaxForAllLanes(func_main_q_narcs);
 
-        // If we have only a few arcs, jumping to the one-CTA per lane
-        // persistent version
-	bool launch_persistent_version = (max_main_q_narcs < KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS);
-	// If we cannot launch the persistent version, we will have to iterate on the heavy load kernels 
-	*should_iterate = !launch_persistent_version;
-        if(launch_persistent_version)  {
-		// Finalizing process non emitting. Takes care of the long tail,
-		// the final iterations with a small numbers of arcs. Do the work inside a
-		// single CTA (per lane),
-		finalize_process_non_emitting_kernel<<<
-			KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
-			KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 0, compute_st_>>>(
-					*h_device_params_, *h_kernel_params_);
-		
-		return;
-	}
+  // If we have only a few arcs, jumping to the one-CTA per lane
+  // persistent version
+  bool launch_persistent_version =
+      (max_main_q_narcs < KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS);
+  // If we cannot launch the persistent version, we will have to iterate on the
+  // heavy load kernels
+  *should_iterate = !launch_persistent_version;
+  if (launch_persistent_version) {
+    // Finalizing process non emitting. Takes care of the long tail,
+    // the final iterations with a small numbers of arcs. Do the work inside a
+    // single CTA (per lane),
+    finalize_process_non_emitting_kernel<<<
+        KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
+        KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 0, compute_st_>>>(
+        *h_device_params_, *h_kernel_params_);
 
-        // false is for non emitting
-        expand_arcs_kernel<false><<<
-            KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_narcs, nlanes_used_),
-            KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                           *h_kernel_params_);
-        KALDI_DECODER_CUDA_CHECK_ERROR();
+    return;
+  }
 
-        // false is for non emitting
-        post_expand_kernel<
-            false><<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
-                     KALDI_CUDA_DECODER_ONE_THREAD_BLOCK, 0, compute_st_>>>(
-            *h_device_params_, *h_kernel_params_);
-        KALDI_DECODER_CUDA_CHECK_ERROR();
+  // false is for non emitting
+  expand_arcs_kernel<
+      false><<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_narcs, nlanes_used_),
+               KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
+      *h_device_params_, *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+
+  // false is for non emitting
+  post_expand_kernel<
+      false><<<KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
+               KALDI_CUDA_DECODER_ONE_THREAD_BLOCK, 0, compute_st_>>>(
+      *h_device_params_, *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 }
 
 void CudaDecoder::PruneAndPreprocess(bool *all_aux_queues_empty) {
@@ -670,75 +613,139 @@ void CudaDecoder::PruneAndPreprocess(bool *all_aux_queues_empty) {
 }
 
 void CudaDecoder::StartCopyAcousticCostsToHostAsync() {
-	auto func_main_q_end = [](const LaneCounters &c) {
-		return c.main_q_narcs_and_end.y;
-	};
-	PerformConcatenatedCopy(
-			func_main_q_end, h_device_params_->d_main_q_acoustic_cost,
-			d_acoustic_cost_concat_, h_acoustic_cost_concat_, compute_st_,
-			&h_emitting_main_q_end_lane_offsets_);
-	for (int32 ilane = 0; ilane < nlanes_used_; ++ilane)
-		main_q_emitting_end_[ilane] =
-			h_lanes_counters_[ilane].main_q_narcs_and_end.y;
+  auto func_main_q_end = [](const LaneCounters &c) {
+    return c.main_q_narcs_and_end.y;
+  };
+  PerformConcatenatedCopy(func_main_q_end,
+                          h_device_params_->d_main_q_acoustic_cost,
+                          d_acoustic_cost_concat_, h_acoustic_cost_concat_,
+                          compute_st_, &h_emitting_main_q_end_lane_offsets_);
+  for (int32 ilane = 0; ilane < nlanes_used_; ++ilane)
+    main_q_emitting_end_[ilane] =
+        h_lanes_counters_[ilane].main_q_narcs_and_end.y;
 }
 
 void CudaDecoder::FinalizeCopyAcousticCostsToHost() {
-    MoveConcatenatedCopyToVector(h_emitting_main_q_end_lane_offsets_,
-                                 h_acoustic_cost_concat_,
-                                 &h_all_tokens_acoustic_cost_);
+  MoveConcatenatedCopyToVector(h_emitting_main_q_end_lane_offsets_,
+                               h_acoustic_cost_concat_,
+                               &h_all_tokens_acoustic_cost_);
 }
 
 void CudaDecoder::PostProcessMainQueue() {
+  auto func_main_q_end = [](const LaneCounters &c) {
+    return c.main_q_narcs_and_end.y;
+  };
+  int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
+  KALDI_ASSERT(max_main_q_end > 0);
 
-	    auto func_main_q_end = [](const LaneCounters &c) {
-        return c.main_q_narcs_and_end.y;
-      };
-      int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
-      for (int32 ilane = 0; ilane < nlanes_used_; ++ilane)
-        KALDI_ASSERT(h_lanes_counters_[ilane].main_q_narcs_and_end.y > 0);
+  ApplyMaxActiveAndReduceBeam(false);
 
-      ApplyMaxActiveAndReduceBeam(false);
+  fill_best_int_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
+                                                            nlanes_used_),
+                              KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
+      *h_device_params_, *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 
-      fill_best_int_cost_kernel<<<
-          KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used_),
-          KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                         *h_kernel_params_);
-      KALDI_DECODER_CUDA_CHECK_ERROR();
+  preprocess_in_place_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
+                                                             nlanes_used_),
+                               KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
+      *h_device_params_, *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 
-      preprocess_in_place_kernel<<<
-          KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used_),
-          KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                         *h_kernel_params_);
-      KALDI_DECODER_CUDA_CHECK_ERROR();
+  exclusive_sum_batched_step2_kernel<<<
+      KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
+      KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
+                                                     *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 
-      exclusive_sum_batched_step2_kernel<<<
-          KALDI_CUDA_DECODER_NUM_BLOCKS(1, nlanes_used_),
-          KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                         *h_kernel_params_);
-      KALDI_DECODER_CUDA_CHECK_ERROR();
+  exclusive_sum_batched_step3_kernel<<<
+      KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used_),
+      KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
+                                                     *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 
-      exclusive_sum_batched_step3_kernel<<<
-          KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used_),
-          KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                         *h_kernel_params_);
-      KALDI_DECODER_CUDA_CHECK_ERROR();
+  fill_extra_prev_tokens_list_kernel<<<
+      KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used_),
+      KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
+                                                     *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 
-      fill_extra_prev_tokens_list_kernel<<<
-          KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end, nlanes_used_),
-          KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
-                                                         *h_kernel_params_);
-      KALDI_DECODER_CUDA_CHECK_ERROR();
+  // We need the infos about number of emitting arcs (for next frame),
+  // the number of extra_prev_tokens, etc.
+  CopyLaneCountersToHostAsync();
 
-      // We need the infos about number of emitting arcs (for next frame),
-      // the number of extra_prev_tokens, etc.
-      CopyLaneCountersToHostAsync();
+  clear_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
+                                                       nlanes_used_),
+                         KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
+      *h_device_params_, *h_kernel_params_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
 
-      clear_hashmap_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
-                                                           nlanes_used_),
-                             KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-          *h_device_params_, *h_kernel_params_);
-      KALDI_DECODER_CUDA_CHECK_ERROR();
+void CudaDecoder::CopyMainQueueDataToHost() {
+  auto func_main_q_end = [](const LaneCounters &c) {
+    return c.main_q_narcs_and_end.y;
+  };
+  PerformConcatenatedCopy(func_main_q_end, h_device_params_->d_main_q_info,
+                          d_infotoken_concat_, h_infotoken_concat_, compute_st_,
+                          &h_main_q_end_lane_offsets_);
 
+  // Sync for :
+  // - h_infotoken_concat_ copy done
+  // - using lane_counters.main_q_n_extra_prev_tokens
+  cudaStreamSynchronize(compute_st_);
+  CheckOverflow();
+
+  // Starting the extra_prev_tokens copies
+  {
+    auto func_main_q_n_extra_prev_tokens = [](const LaneCounters &c) {
+      return c.main_q_n_extra_prev_tokens;
+    };
+    PerformConcatenatedCopy(func_main_q_n_extra_prev_tokens,
+                            h_device_params_->d_main_q_extra_prev_tokens,
+                            d_infotoken_concat_, h_extra_prev_tokens_concat_,
+                            compute_st_, &h_n_extra_prev_tokens_lane_offsets_);
+    PerformConcatenatedCopy(func_main_q_n_extra_prev_tokens,
+                            h_device_params_->d_main_q_extra_cost,
+                            d_extra_cost_concat_, h_extra_cost_concat_,
+                            compute_st_, &h_n_extra_prev_tokens_lane_offsets_);
+  }
+
+  // Moving infotokens to vecs
+  MoveConcatenatedCopyToVector(h_main_q_end_lane_offsets_, h_infotoken_concat_,
+                               &h_all_tokens_info_);
+
+  // Waiting for the copies
+  cudaStreamSynchronize(compute_st_);
+
+  // Moving the extra_prev_tokens to vecs
+  MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
+                               h_extra_prev_tokens_concat_,
+                               &h_all_tokens_extra_prev_tokens_);
+  MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
+                               h_extra_cost_concat_,
+                               &h_all_tokens_extra_prev_tokens_extra_cost_);
+
+  // Adding 0.0f acoustic_costs for non-emittings
+  for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
+    const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
+    KALDI_ASSERT(frame_offsets_[ichannel].back() ==
+                 h_lanes_counters_[ilane].main_q_global_offset);
+
+    KALDI_ASSERT(
+        h_all_tokens_extra_prev_tokens_[ichannel].size() ==
+        (h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset +
+         h_lanes_counters_[ilane].main_q_n_extra_prev_tokens));
+    KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() ==
+                 h_all_tokens_extra_prev_tokens_[ichannel].size());
+    ++num_frames_decoded_[ichannel];
+    const int32 main_q_end = h_lanes_counters_[ilane].main_q_narcs_and_end.y;
+    frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() +
+                                       main_q_end);
+    int32 ntokens_nonemitting = main_q_end - main_q_emitting_end_[ilane];
+    auto &vec = h_all_tokens_acoustic_cost_[ichannel];
+    vec.insert(vec.end(), ntokens_nonemitting, 0.0f);
+    KALDI_ASSERT(vec.size() == h_all_tokens_info_[ichannel].size());
+  }
 }
 
 void CudaDecoder::AdvanceDecoding(
@@ -807,17 +814,17 @@ void CudaDecoder::AdvanceDecoding(
       // We'll concatenate the costs from the different lanes into in a single
       // continuous array.
       if (first_nonemitting) {
-	      // Async: We'll need a sync before calling FinalizeCopyLaneCountersToHost
-	      StartCopyAcousticCostsToHostAsync();
-	      first_nonemitting = false;
+        // Async: We'll need a sync before calling
+        // FinalizeCopyLaneCountersToHost
+        StartCopyAcousticCostsToHostAsync();
+        first_nonemitting = false;
       }
-      
+
       bool should_iterate;
       ExpandArcsNonEmitting(&should_iterate);
-      if(!should_iterate)
-	      break;
-     }
-     // We now have our final token main queues for that frame    
+      if (!should_iterate) break;
+    }
+    // We now have our final token main queues for that frame
 
     // Moving back to host the final (for this frame) values of :
     // - main_q_end
@@ -839,101 +846,13 @@ void CudaDecoder::AdvanceDecoding(
     // It allows to backtrack efficiently in GetRawLattice
     // - compute the extra costs
     PostProcessMainQueue();
-    
 
-    // Copying InfoTokens back to host
-    {
-      auto func_main_q_end = [](const LaneCounters &c) {
-        return c.main_q_narcs_and_end.y;
-      };
-      PerformConcatenatedCopy(func_main_q_end, h_device_params_->d_main_q_info,
-                              d_infotoken_concat_, h_infotoken_concat_,
-                              compute_st_, &h_main_q_end_lane_offsets_);
-    }
-
-    // Sync for :
-    // - h_infotoken_concat_ copy done
-    // - using lane_counters.main_q_n_extra_prev_tokens
-    cudaStreamSynchronize(compute_st_);
-    CheckOverflow();
-
-    // Starting the extra_prev_tokens copies
-    {
-      auto func_main_q_n_extra_prev_tokens = [](const LaneCounters &c) {
-        return c.main_q_n_extra_prev_tokens;
-      };
-      PerformConcatenatedCopy(func_main_q_n_extra_prev_tokens,
-                              h_device_params_->d_main_q_extra_prev_tokens,
-                              d_infotoken_concat_,
-                              h_extra_prev_tokens_concat_, compute_st_,
-                              &h_n_extra_prev_tokens_lane_offsets_);
-      PerformConcatenatedCopy(func_main_q_n_extra_prev_tokens,
-                              h_device_params_->d_main_q_extra_cost,
-                              d_extra_cost_concat_, h_extra_cost_concat_,
-                              compute_st_,
-                              &h_n_extra_prev_tokens_lane_offsets_);
-    }
-
-    // Moving infotokens to vecs
-    MoveConcatenatedCopyToVector(h_main_q_end_lane_offsets_,
-                                 h_infotoken_concat_, &h_all_tokens_info_);
-
-    // Waiting for the copies
-    cudaStreamSynchronize(compute_st_);
-
-    // Moving the extra_prev_tokens to vecs
-    MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
-                                 h_extra_prev_tokens_concat_,
-                                 &h_all_tokens_extra_prev_tokens_);
-    MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
-                                 h_extra_cost_concat_,
-                                 &h_all_tokens_extra_prev_tokens_extra_cost_);
-
-    // Adding 0.0f acoustic_costs for non-emittings
-    for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
-      const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
-      KALDI_ASSERT(frame_offsets_[ichannel].back() ==
-                   h_lanes_counters_[ilane].main_q_global_offset);
-
-      KALDI_ASSERT(
-          h_all_tokens_extra_prev_tokens_[ichannel].size() ==
-          (h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset +
-           h_lanes_counters_[ilane].main_q_n_extra_prev_tokens));
-      KALDI_ASSERT(h_all_tokens_extra_prev_tokens_[ichannel].size() ==
-                   h_all_tokens_extra_prev_tokens_[ichannel].size());
-      ++num_frames_decoded_[ichannel];
-      const int32 main_q_end = h_lanes_counters_[ilane].main_q_narcs_and_end.y;
-      frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() +
-                                         main_q_end);
-      int32 ntokens_nonemitting = main_q_end - main_q_emitting_end_[ilane];
-      auto &vec = h_all_tokens_acoustic_cost_[ichannel];
-      vec.insert(vec.end(), ntokens_nonemitting, 0.0f);
-      KALDI_ASSERT(vec.size() == h_all_tokens_info_[ichannel].size());
-    }
-
-#if 0
-			// deep asserts
-			if(iframe > 0 ) {
-				for(LaneId ilane=0; ilane<nlanes_used; ++ilane) {
-					const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
-					int prev_offset = h_lanes_counters_[ilane].main_q_extra_prev_tokens_global_offset;
-					int count =  h_lanes_counters_[ilane].main_q_n_extra_prev_tokens;
-					int global_iframe =num_frames_decoded_[ichannel]-1;
-					int next_frame_offset = frame_offsets_[ichannel][global_iframe+1];
-					int prev_frame_offset = frame_offsets_[ichannel][global_iframe-1];
-					for(int i=prev_offset; i < prev_offset+count; ++i) {
-						int prev_token_idx = h_all_tokens_extra_prev_tokens_[ichannel][i].prev_token;
-						KALDI_ASSERT(prev_token_idx >= prev_frame_offset);
-						KALDI_ASSERT(prev_token_idx < next_frame_offset);
-					}
-				}
-			}
-#endif
-
-    KALDI_DECODER_CUDA_CHECK_ERROR();
+    // Moving the data necessary for GetRawLattice/GetBestPath back to host for
+    // storage
+    CopyMainQueueDataToHost();
   }
   SaveChannelsStateFromLanes();
-  nvtxRangePop();
+  nvtxRangePop();  // Decoding
   nvtxRangePop();  // End AdvanceDecoding
 }
 
