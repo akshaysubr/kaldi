@@ -2,15 +2,18 @@
 
 echo "Usage: $0 <GPU_IDX> <data-sets> [gpu_threads] [cpu_threads] [max_batch_size] [batch_drain_size] [iterations] [file_limit] [beam] [lattice_beam] [max_active]"
 
+#by default use device 0 unless told otherwise
+
+export gpu=${1:-0}
+
 model_path=/workspace/models/LibriSpeech/
 dataset_path=/workspace/datasets/LibriSpeech/
-result_path=/tmp/ls-results
+result_path=/tmp/ls-results.$gpu
+
 DECODERS="batched-wav-nnet3-cuda"
 
 export KALDI_ROOT=${KALDI_ROOT:-/opt/kaldi}
-
-#by default use device 0 unless told otherwise
-export CUDA_VISIBLE_DEVICES=${1:-0}
+export CUDA_VISIBLE_DEVICES=$gpu
 
 data_sets=${2:-"test_clean test_other"}
 
@@ -35,6 +38,7 @@ else
   echo "ERROR not enough GPU memory to run benchmark."
   exit 1;
 fi
+
 
 iterations=${7:-10}
 file_limit=${8:--1}
