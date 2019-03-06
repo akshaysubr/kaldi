@@ -1,21 +1,31 @@
+LibriSpeech Example
+===========
+
 This example is an english model trained on the LibriSpeech dataset.  
 
-To run this example you must first prepare the model:
 
-%> ./prepare.sh
+To run this example you will first have to prepare the model
 
+```
+cd /workspace/nvidia-examples/librispeech/
+./prepare.sh 
+```
 
-Once you have prepared the model you can run the model using our benchmark 
-script:
+Once the model is prepared you can run a speech to text benchmark as follows:
 
-%> ./benchmark_decoder.sh
+```
+cd /workspace/nvidia-examples/librispeech/
+./benchmark_decoder.sh
+```
+
+## Expected Results
 
 This will run across two test datasets: test-clean and test-other.
 
 Expected results on V100-SXM-16GB are the following:
 
 test-clean:
-
+```
 Iteration: 1 ~Aggregate Total Time: 10.2769 Total Audio: 19229.6 RealTimeX: 1871.14
 Iteration: 2 ~Aggregate Total Time: 15.9921 Total Audio: 38459.1 RealTimeX: 2404.89
 Iteration: 3 ~Aggregate Total Time: 22.6928 Total Audio: 57688.7 RealTimeX: 2542.16
@@ -32,9 +42,10 @@ Overall:  Aggregate Total Time: 66.9027 Total Audio: 192296 RealTimeX: 2874.26
   Scored 2939 sentences, 0 not present in hyp.
   Expected: 2939, Actual: 2939
   Decoding completed successfully.
+```
 
 test-other:
-
+```
 Iteration: 1 ~Aggregate Total Time: 10.2769 Total Audio: 19229.6 RealTimeX: 1871.14
 Iteration: 2 ~Aggregate Total Time: 15.9921 Total Audio: 38459.1 RealTimeX: 2404.89
 Iteration: 3 ~Aggregate Total Time: 22.6928 Total Audio: 57688.7 RealTimeX: 2542.16
@@ -51,4 +62,4 @@ Overall:  Aggregate Total Time: 66.9027 Total Audio: 192296 RealTimeX: 2874.26
   Scored 2939 sentences, 0 not present in hyp.
   Expected: 2939, Actual: 2939
   Decoding completed successfully.
-
+```
