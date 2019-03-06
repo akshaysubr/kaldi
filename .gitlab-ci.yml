@@ -70,9 +70,9 @@ before_script:
     except:
     - tags
 
-py2-base:
-    stage: build base
-    <<: *BASE
+#py2-base:
+#    stage: build base
+#    <<: *BASE
 
 py3-base:
     stage: build base
@@ -110,9 +110,9 @@ py3-base:
     except:
     - tags
 
-py2-devel:
-    stage: build devel
-    <<: *DEVEL
+#py2-devel:
+#    stage: build devel
+#    <<: *DEVEL
 
 py3-devel:
     stage: build devel
@@ -152,9 +152,9 @@ py3-devel:
     - web
     when: manual
 
-py2-stage:
-    stage: finalize
-    <<: *STAGE
+#py2-stage:
+#    stage: finalize
+#    <<: *STAGE
 
 py3-stage:
     stage: finalize
