@@ -292,7 +292,7 @@ class CudaDecoder {
   void PruneAndPreprocess(bool *all_aux_queues_empty);
   void StartCopyAcousticCostsToHostAsync();
   void FinalizeCopyAcousticCostsToHost();
-  void PostProcessMainQueue();
+  void PostProcessingMainQueue();
 
   // CheckOverflow
   // If a kernel sets the flag h_q_overflow, we send a warning to stderr
@@ -357,12 +357,16 @@ class CudaDecoder {
                                     std::vector<std::vector<T>> *vecvec);
 
   void CopyMainQueueDataToHost();
+  //
+  // Returns a unique id for each (iframe, fst_state) pair
+  // We need to be able to quickly identity a (iframe, fst_state) ID
+  int32 GetUniqueTokenID(int32 total_ntokens, int32 token_idx, InfoToken token);
 
   // Computes a set of static asserts on the static values
   // such as the defines : KALDI_CUDA_DECODER_MAX_N_LANES for example
   // In theory we should do them at compile time
   void CheckStaticAsserts();
-
+  void DebugValidateLattice();
   // Data members
 
   // The CudaFst data structure contains the FST graph
@@ -535,6 +539,44 @@ class CudaDecoder {
   std::vector<int32> h_main_q_end_lane_offsets_,
       h_emitting_main_q_end_lane_offsets_;
   std::vector<int32> h_n_extra_prev_tokens_lane_offsets_;
+
+  // Used when calling GetBestCost
+  std::vector<std::pair<int32, CostType>> argmins_;
+  std::vector<bool> has_reached_final_;
+  std::vector<std::vector<std::pair<int, float>>>
+      list_finals_token_idx_and_cost_;
+
+  // GetRawLattice helper
+  // Keeping track of a variety of info about states in the lattice
+  // - token_extra_cost. A path going from the current lattice_state to the
+  // end has an extra cost
+  // compared to the best path (which has an extra cost of 0).
+  // token_extra_cost is the minimum of the extra_cost of all paths going from
+  // the current lattice_state
+  // to the final frame.
+  // - fst_lattice_state is the StateId of the lattice_state in fst_out (in
+  // the output lattice)
+  // - is_state_closed is true if the token_extra_cost has been read by
+  // another token. It means that the
+  // token_extra_cost value has been used, and if we modify token_extra_cost
+  // again, we may need to recompute things
+  struct RawLatticeState {
+    CostType token_extra_cost;
+    StateId fst_lattice_state;
+    bool is_state_closed;
+  };
+
+  // Using one map per frame. We always know to which frame a token belongs.
+  // Using one big map slows everything down
+  std::unordered_map<int32, RawLatticeState> prev_f_raw_lattice_state_,
+      curr_f_raw_lattice_state_;
+  // We want the unicity of each arc_idx for one frame. Important because we
+  // can replay a frame (and possibly add multiple time the same arc)
+  std::unordered_set<int32> f_arc_idx_added_;
+  std::vector<std::pair<int32, InfoToken>> q_curr_frame_todo_;
+  std::vector<std::pair<int32, InfoToken>> q_prev_frame_todo_;
+  void AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
+                               Lattice *fst_out);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };

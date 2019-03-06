@@ -282,7 +282,7 @@ void CudaDecoder::ComputeInitialChannel() {
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
   CopyLaneCountersToHostSync();
-  PostProcessMainQueue();
+  PostProcessingMainQueue();
   CopyLaneCountersToHostSync();
 
   const int32 main_q_end = h_lanes_counters_[0].main_q_narcs_and_end.y;
@@ -290,13 +290,15 @@ void CudaDecoder::ComputeInitialChannel() {
   // All arcs traversed until now are non-emitting
   h_all_tokens_acoustic_cost_[init_channel_id_].resize(main_q_end, 0.0f);
 
+  // Moving all data linked to init_channel_id_ to host
+  // that data will be cloned to other channels when calling InitDecoding
   CopyMainQueueDataToHost();
   SaveChannelsStateFromLanes();
 
-  KALDI_DECODER_CUDA_CHECK_ERROR();
-
-  KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.x > 0);
-  KALDI_ASSERT(h_lanes_counters_[0].main_q_narcs_and_end.y > 0);
+  KALDI_ASSERT(
+      h_channels_counters_[init_channel_id_].prev_main_q_narcs_and_end.x > 0);
+  KALDI_ASSERT(
+      h_channels_counters_[init_channel_id_].prev_main_q_narcs_and_end.y > 0);
 }
 
 void CudaDecoder::InitDecoding(const std::vector<ChannelId> &channels) {
@@ -608,7 +610,7 @@ void CudaDecoder::FinalizeCopyAcousticCostsToHost() {
                                &h_all_tokens_acoustic_cost_);
 }
 
-void CudaDecoder::PostProcessMainQueue() {
+void CudaDecoder::PostProcessingMainQueue() {
   auto func_main_q_end = [](const LaneCounters &c) {
     return c.main_q_narcs_and_end.y;
   };
@@ -800,14 +802,15 @@ void CudaDecoder::AdvanceDecoding(
     // list of those tokens
     // It allows to backtrack efficiently in GetRawLattice
     // - compute the extra costs
-    PostProcessMainQueue();
+    PostProcessingMainQueue();
 
     // Moving the data necessary for GetRawLattice/GetBestPath back to host for
     // storage
     CopyMainQueueDataToHost();
+
+    // Few sanity checks + adding acoustic costs for non emitting arcs
     for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
       const ChannelId ichannel = h_kernel_params_->channel_to_compute[ilane];
-      // Few sanity checks
       KALDI_ASSERT(frame_offsets_[ichannel].back() ==
                    h_lanes_counters_[ilane].main_q_global_offset);
       KALDI_ASSERT(
@@ -891,8 +894,11 @@ void CudaDecoder::GetBestCost(const std::vector<ChannelId> &channels,
                               std::vector<bool> *has_reached_final) {
   const int nlanes_used = channels.size();
   if (nlanes_used <= 0) return;
-
+  list_finals_token_idx_and_cost->clear();
+  argmins->clear();
+  has_reached_final->clear();
   list_finals_token_idx_and_cost->resize(nlanes_used);
+
   // Getting *h_kernel_params ready to use
   SetChannelsInKernelParams(channels);
   KALDI_ASSERT(nlanes_used == h_kernel_params_->nlanes_used);
@@ -944,10 +950,8 @@ void CudaDecoder::GetBestCost(const std::vector<ChannelId> &channels,
     for (int i = 0; i < nfinals; ++i) {
       int global_idx = int2_buffer[i].x;
       float cost_with_final = orderedIntToFloatHost(int2_buffer[i].y);
-      // printf("cost with final = %f \n", cost_with_final);
       (*list_finals_token_idx_and_cost)[ilane][i].first = global_idx;
       (*list_finals_token_idx_and_cost)[ilane][i].second = cost_with_final;
-      // printf("final on host = %i , %f \n", global_idx, cost_with_final);
     }
   }
   cudaStreamSynchronize(compute_st_);
@@ -957,28 +961,21 @@ void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
                               std::vector<Lattice *> &fst_out_vec,
                               bool use_final_probs) {
   KALDI_ASSERT(channels.size() == fst_out_vec.size());
-  KALDI_ASSERT(channels.size() <= nchannels_);
   nvtxRangePushA("GetBestPath");
-  std::vector<std::pair<int32, CostType>> argmins;
-  std::vector<bool> has_reached_final;
-  std::vector<std::vector<std::pair<int, float>>>
-      list_finals_token_idx_and_cost;
-  GetBestCost(channels, use_final_probs, &argmins,
-              &list_finals_token_idx_and_cost, &has_reached_final);
-  // TODO handle if a final state was not found
+  GetBestCost(channels, use_final_probs, &argmins_,
+              &list_finals_token_idx_and_cost_, &has_reached_final_);
 
-  // We want the copy to host of the last tokens to be done
-  // we're going to read h_all_tokens_info
-  for (int32 i = 0; i < channels.size(); ++i) {
-    const ChannelId ichannel = channels[i];
-    const int32 token_with_best_cost = argmins[i].first;
-    const bool isfinal = has_reached_final[i];
+  std::vector<int32> reversed_path;
+  for (int32 ilane = 0; ilane < channels.size(); ++ilane) {
+    const ChannelId ichannel = channels[ilane];
+    const int32 token_with_best_cost = argmins_[ilane].first;
+    const bool isfinal = has_reached_final_[ilane];
     int32 token_idx = token_with_best_cost;
 
     // Backtracking
     // Going all the way from the token with best cost
     // to the beginning (StartState)
-    std::vector<int32> reversed_path;
+    reversed_path.clear();
 
     // The first token was inserted at the beginning of the queue
     // it always has index 0
@@ -1015,7 +1012,7 @@ void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
       token_idx = prev_token_idx;
     }
 
-    Lattice *fst_out = fst_out_vec[i];
+    Lattice *fst_out = fst_out_vec[ilane];
 
     // Reset the fst_out
     fst_out->DeleteStates();
@@ -1051,17 +1048,152 @@ void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
   nvtxRangePop();
 }
 
+void CudaDecoder::DebugValidateLattice() {
+#if 0
+	//validate lattice consistency
+	for(int frame=0;frame<nframes;frame++) {
+		int token_start=frame_offsets_[ichannel][frame];
+		int token_end=(frame+1<nframes) ? frame_offsets_[ichannel][frame+1] : total_ntokens;
+		int prev_frame_offset=(frame>0) ? frame_offsets_[ichannel][frame-1] : 0;
+		int cur_frame_offset=token_start;
+		int next_frame_offset=token_end;
+
+		bool found_zero = false;
+		//for each token in frame
+		for(int i=token_start;i<token_end;i++) {
+			if(i==0) continue;  //initial token skip this...
+			InfoToken token=h_all_tokens_info_[ichannel][i];
+			KALDI_ASSERT(token.prev_token>=0);
+
+			if(token.IsUniqueTokenForStateAndFrame()) {
+				//previous token must be lower than the next frame start
+				KALDI_ASSERT(token.prev_token<next_frame_offset);
+				//previous token must be larger then previous frame start
+				KALDI_ASSERT(token.prev_token>=prev_frame_offset);
+			} else {
+				int32 offset, size;
+				std::tie(offset,size) = token.GetNextStateTokensList();
+				KALDI_ASSERT(size>0);
+				KALDI_ASSERT(offset>=0 && offset<h_all_tokens_extra_prev_tokens_[ichannel].size());
+				for(auto j=0; j<size; ++j) {
+					KALDI_ASSERT(offset+j<h_all_tokens_extra_prev_tokens_[ichannel].size());
+					InfoToken extra_token=h_all_tokens_extra_prev_tokens_[ichannel][offset+j];
+					//previous token must be lower than the next frame start
+					KALDI_ASSERT(extra_token.prev_token<next_frame_offset);
+					//previous token must be larger then previous frame start
+					KALDI_ASSERT(extra_token.prev_token>=prev_frame_offset);
+				}
+			}
+		}
+	}
+#endif
+}
+
+int32 CudaDecoder::GetUniqueTokenID(int32 total_ntokens, int32 token_idx,
+                                    InfoToken token) {
+  // If we have a unique token for this (frame,fst_state)
+  // Then its ID is a unique ID for (frame,fst_state)
+  if (token.IsUniqueTokenForStateAndFrame()) return token_idx;
+
+  // If we have multiple tokens for this (frame,fst_state),
+  // let's use the "extra_prev_tokens" offset, which is unique for
+  // (frame,fst_state) in that case
+
+  // Adding the total_ntokens offset to avoid collisions with the previous
+  // case
+  return (total_ntokens + token.prev_token);
+}
+
+void CudaDecoder::AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
+                                          Lattice *fst_out) {
+  // Total number of tokens for that utterance
+  const int32 total_ntokens = h_all_tokens_info_[ichannel].size();
+  // Reading the overall best_cost for that utterance's last frame. Was set by
+  // GetBestCost (cf above)
+  const CostType best_cost = argmins_[ilane].second;
+  // Iterating through tokens associated with a final state in the last frame
+  for (auto &p : list_finals_token_idx_and_cost_[ilane]) {
+    // This final token has a final cost of final_token_cost
+    CostType final_token_cost = p.second;
+    // This token has possibly an extra cost compared to the best
+    CostType extra_cost = final_token_cost - best_cost;
+    // We only want to keep paths that have a cost within [best;
+    // best+lattice_beam]
+    if (extra_cost > lattice_beam_) {
+      continue;
+    }
+
+    const int32 final_token_idx = p.first;
+    InfoToken final_token = h_all_tokens_info_[ichannel][final_token_idx];
+
+    // Unique ID for our (iframe, fst_state) pair
+    int32 lattice_state =
+        GetUniqueTokenID(total_ntokens, final_token_idx, final_token);
+    decltype(curr_f_raw_lattice_state_.end()) map_it;
+    bool inserted;
+    // We need to create the lattice_state linked to (iframe, state) in the
+    // lattice if it doesn't already exists
+    // Inserts only if the key doesn't exist in the map
+    std::tie(map_it, inserted) =
+        curr_f_raw_lattice_state_.insert({lattice_state, {FLT_MAX, -1, false}});
+    // If we've inserted the element, it means that that state didn't exist in
+    // the map
+    // Because this is a final state, we need to do a bit of extra work to add
+    // the final_cost to it
+
+    if (inserted) {
+      // We want to figure out which FST state this token is associated to
+      // We don't have that info anymore, it wasn't transfered from the GPU
+      // We still need it for final tokens, because we need to know which
+      // final cost to add
+      // in the lattice. To find that state, we need the id of an arc going to
+      // that state,
+      // then we'll look in the graph and figure out next_state[arc_idx]
+      // we just need a valid arc_idx
+      int32 arc_idx;
+      if (final_token.IsUniqueTokenForStateAndFrame()) {
+        // If unique, we can directly use this arc_idx
+        arc_idx = final_token.arc_idx;
+      } else {
+        // If we have multiple tokens associated to that fst state, just pick
+        // the first one
+        // from the list
+        int32 offset, size;
+        std::tie(offset, size) = final_token.GetNextStateTokensList();
+        InfoToken prev_token =
+            h_all_tokens_extra_prev_tokens_[ichannel][offset];
+        arc_idx = prev_token.arc_idx;
+      }
+      // Creating the state associated with (iframe, fst_state) in the lattice
+      StateId fst_lattice_final_state = fst_out->AddState();
+      map_it->second.fst_lattice_state = fst_lattice_final_state;
+      q_curr_frame_todo_.push_back({final_token_idx, final_token});
+
+      if (has_reached_final_[ilane]) {
+        // If we have reached final states, adding the final cost
+        // We now have a valid arc_idx. We can read the FST state
+        StateId fst_next_state = fst_.h_arc_nextstates_[arc_idx];
+
+        fst_out->SetFinal(fst_lattice_final_state,
+                          LatticeWeight(fst_.h_final_[fst_next_state], 0.0));
+      } else {
+        fst_out->SetFinal(fst_lattice_final_state, LatticeWeight::One());
+      }
+    }
+
+    map_it->second.token_extra_cost =
+        std::min(map_it->second.token_extra_cost, extra_cost);
+  }
+}
+
 void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
                                 std::vector<Lattice *> &fst_out_vec,
                                 bool use_final_probs) {
   KALDI_ASSERT(channels.size() == fst_out_vec.size());
-  KALDI_ASSERT(channels.size() <= nchannels_);
-  std::vector<std::pair<int32, CostType>> argmins;
-  std::vector<bool> has_reached_final;
-  std::vector<std::vector<std::pair<int, float>>>
-      list_finals_token_idx_and_cost;
-  GetBestCost(channels, use_final_probs, &argmins,
-              &list_finals_token_idx_and_cost, &has_reached_final);
+  // Getting the list of the best costs in the lastest token queue.
+  // all costs within [best;best+lattice_beam]
+  GetBestCost(channels, use_final_probs, &argmins_,
+              &list_finals_token_idx_and_cost_, &has_reached_final_);
 
   // In some cases we can update an extra_cost that has already been used
   // For instance we process arcs in that order :
@@ -1073,108 +1205,30 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
   // However, we only re-run the step 1 if the value extra_cost[a] has changed
   // for more than min_delta
   const float min_delta = 0;
-  for (int32 i = 0; i < channels.size(); ++i) {
+  for (int32 ilane = 0; ilane < channels.size(); ++ilane) {
     nvtxRangePushA("GetRawLatticeOneChannel");
-    const ChannelId ichannel = channels[i];
+    const ChannelId ichannel = channels[ilane];
     const int32 nframes = NumFramesDecoded(ichannel);
 
     // Total number of tokens generated by the utterance on channel ichannel
     const int32 total_ntokens = h_all_tokens_info_[ichannel].size();
 
-#if 0
-      //validate lattice consistency
-      for(int frame=0;frame<nframes;frame++) {
-        int token_start=frame_offsets_[ichannel][frame];
-        int token_end=(frame+1<nframes) ? frame_offsets_[ichannel][frame+1] : total_ntokens;
-        int prev_frame_offset=(frame>0) ? frame_offsets_[ichannel][frame-1] : 0;
-        int cur_frame_offset=token_start;
-        int next_frame_offset=token_end;
-
-        bool found_zero = false;
-        //for each token in frame
-        for(int i=token_start;i<token_end;i++) {
-          if(i==0) continue;  //initial token skip this...
-          InfoToken token=h_all_tokens_info_[ichannel][i];
-          KALDI_ASSERT(token.prev_token>=0);
-
-          if(token.IsUniqueTokenForStateAndFrame()) {
-            //previous token must be lower than the next frame start
-            KALDI_ASSERT(token.prev_token<next_frame_offset);
-            //previous token must be larger then previous frame start
-            KALDI_ASSERT(token.prev_token>=prev_frame_offset);
-          } else {
-            int32 offset, size;
-            std::tie(offset,size) = token.GetNextStateTokensList();
-            KALDI_ASSERT(size>0);
-            KALDI_ASSERT(offset>=0 && offset<h_all_tokens_extra_prev_tokens_[ichannel].size());
-            for(auto j=0; j<size; ++j) {
-              KALDI_ASSERT(offset+j<h_all_tokens_extra_prev_tokens_[ichannel].size());
-              InfoToken extra_token=h_all_tokens_extra_prev_tokens_[ichannel][offset+j];
-              //previous token must be lower than the next frame start
-              KALDI_ASSERT(extra_token.prev_token<next_frame_offset);
-              //previous token must be larger then previous frame start
-              KALDI_ASSERT(extra_token.prev_token>=prev_frame_offset);
-            }
-          }
-        }
-      }
-#endif
-
-    // Returns a unique id for each (iframe, fst_state) pair
-    // we simply use the fact that token_idx < total_ntokens
-    // We need to be able to quickly identity a (iframe, fst_state) ID, without
-    // using the
-    // fst_state value, because we don't have it directly. In theory we could
-    // load it (using the arc_idx),
-    // but it leads to a lot of cache misses, slowing everything down
-    auto get_unique_id = [total_ntokens](int32 token_idx, InfoToken token) {
-      // If we have a unique token for this (frame,fst_state)
-      // Then its ID is a unique ID for (frame,fst_state)
-      if (token.IsUniqueTokenForStateAndFrame()) return token_idx;
-
-      // If we have multiple tokens for this (frame,fst_state),
-      // let's use the "extra_prev_tokens" offset, which is unique for
-      // (frame,fst_state) in that case
-
-      // Adding the total_ntokens offset to avoid collisions with the previous
-      // case
-      return (total_ntokens + token.prev_token);
-    };
-
     // Preparing output lattice
     // The start state has to be 0 (cf some asserts somewhere else in Kaldi)
     // Adding it now
-    Lattice *fst_out = fst_out_vec[i];
+    Lattice *fst_out = fst_out_vec[ilane];
     fst_out->DeleteStates();
     StateId fst_lattice_start = fst_out->AddState();
     fst_out->SetStart(fst_lattice_start);
 
-    // Keeping track of a variety of info about states in the lattice
-    // - token_extra_cost. A path going from the current lattice_state to the
-    // end has an extra cost
-    // compared to the best path (which has an extra cost of 0).
-    // token_extra_cost is the minimum of the extra_cost of all paths going from
-    // the current lattice_state
-    // to the final frame.
-    // - fst_lattice_state is the StateId of the lattice_state in fst_out (in
-    // the output lattice)
-    // - is_state_closed is true if the token_extra_cost has been read by
-    // another token. It means that the
-    // token_extra_cost value has been used, and if we modify token_extra_cost
-    // again, we may need to recompute things
-    struct RawLatticeState {
-      CostType token_extra_cost;
-      StateId fst_lattice_state;
-      bool is_state_closed;
-    };
-
     // Using one map per frame. We always know to which frame a token belongs.
     // Using one big map slows everything down
-    std::unordered_map<int32, RawLatticeState> prev_f_raw_lattice_state,
-        curr_f_raw_lattice_state;
+    prev_f_raw_lattice_state_.clear();
+    curr_f_raw_lattice_state_.clear();
     // We want the unicity of each arc_idx for one frame. Important because we
     // can replay a frame (and possibly add multiple time the same arc)
-    std::unordered_set<int32> f_arc_idx_added;
+    f_arc_idx_added_.clear();
+
     // Keeping track of which tokens need to be computed. Think of those as FIFO
     // queues,
     // except that we don't want to pop the front right away, because we may
@@ -1182,89 +1236,15 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
     // (and we need to remember what's in that frame)
     // We are also not using an iterator through the
     // [prev|curr]_f_raw_lattice_state because we are
-    // sometime adding stuff in q_curr_frame_todo while reading it. If using a
+    // sometime adding stuff in q_curr_frame_todo_ while reading it. If using a
     // map we can possibly add the new
     // element before the current iterator
-    std::vector<std::pair<int32, InfoToken>> q_curr_frame_todo;
-    std::vector<std::pair<int32, InfoToken>> q_prev_frame_todo;
+    q_curr_frame_todo_.clear();
+    q_prev_frame_todo_.clear();
 
-    int32 nclosed = 0;
-
-    // Reading the overall best_cost for that utterance's last frame. Was set by
-    // GetBestCost (cf above)
-    const CostType best_cost = argmins[i].second;
-    // Iterating through tokens associated with a final state in the last frame
-    for (auto &p : list_finals_token_idx_and_cost[i]) {
-      // This final token has a final cost of final_token_cost
-      CostType final_token_cost = p.second;
-      // This token has possibly an extra cost compared to the best
-      CostType extra_cost = final_token_cost - best_cost;
-      // We only want to keep paths that have a cost within [best;
-      // best+lattice_beam]
-      if (extra_cost > lattice_beam_) {
-        continue;
-      }
-
-      const int32 final_token_idx = p.first;
-      InfoToken final_token = h_all_tokens_info_[ichannel][final_token_idx];
-
-      // Unique ID for our (iframe, fst_state) pair
-      int32 lattice_state = get_unique_id(final_token_idx, final_token);
-      decltype(curr_f_raw_lattice_state.end()) map_it;
-      bool inserted;
-      // We need to create the lattice_state linked to (iframe, state) in the
-      // lattice if it doesn't already exists
-      // Inserts only if the key doesn't exist in the map
-      std::tie(map_it, inserted) = curr_f_raw_lattice_state.insert(
-          {lattice_state, {FLT_MAX, -1, false}});
-      // If we've inserted the element, it means that that state didn't exist in
-      // the map
-      // Because this is a final state, we need to do a bit of extra work to add
-      // the final_cost to it
-
-      if (inserted) {
-        // We want to figure out which FST state this token is associated to
-        // We don't have that info anymore, it wasn't transfered from the GPU
-        // We still need it for final tokens, because we need to know which
-        // final cost to add
-        // in the lattice. To find that state, we need the id of an arc going to
-        // that state,
-        // then we'll look in the graph and figure out next_state[arc_idx]
-        // we just need a valid arc_idx
-        int32 arc_idx;
-        if (final_token.IsUniqueTokenForStateAndFrame()) {
-          // If unique, we can directly use this arc_idx
-          arc_idx = final_token.arc_idx;
-        } else {
-          // If we have multiple tokens associated to that fst state, just pick
-          // the first one
-          // from the list
-          int32 offset, size;
-          std::tie(offset, size) = final_token.GetNextStateTokensList();
-          InfoToken prev_token =
-              h_all_tokens_extra_prev_tokens_[ichannel][offset];
-          arc_idx = prev_token.arc_idx;
-        }
-        // Creating the state associated with (iframe, fst_state) in the lattice
-        StateId fst_lattice_final_state = fst_out->AddState();
-        map_it->second.fst_lattice_state = fst_lattice_final_state;
-        q_curr_frame_todo.push_back({final_token_idx, final_token});
-
-        if (has_reached_final[i]) {
-          // If we have reached final states, adding the final cost
-          // We now have a valid arc_idx. We can read the FST state
-          StateId fst_next_state = fst_.h_arc_nextstates_[arc_idx];
-
-          fst_out->SetFinal(fst_lattice_final_state,
-                            LatticeWeight(fst_.h_final_[fst_next_state], 0.0));
-        } else {
-          fst_out->SetFinal(fst_lattice_final_state, LatticeWeight::One());
-        }
-      }
-
-      map_it->second.token_extra_cost =
-          std::min(map_it->second.token_extra_cost, extra_cost);
-    }
+    // Adding the best tokens returned by GetBestCost to the lattice
+    // We also add them to q_curr_frame_todo, and we'll backtrack from there
+    AddFinalTokensToLattice(ilane, ichannel, fst_out);
 
     // We're now going to backtrack frame by frame
     // For each frame we're going to process tokens that need to be inserted
@@ -1291,20 +1271,21 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
       do {
         must_replay_frame = false;
         // Reading something to do. We are pushing stuff back in
-        // q_curr_frame_todo while reading it,
-        // so it's important to always read q_curr_frame_todo.size() directly
-        for (int32 u = 0; u < q_curr_frame_todo.size(); ++u) {
+        // q_curr_frame_todo_ while reading it,
+        // so it's important to always read q_curr_frame_todo_.size() directly
+        for (int32 u = 0; u < q_curr_frame_todo_.size(); ++u) {
           int32 token_idx;
           InfoToken token;
-          std::tie(token_idx, token) = q_curr_frame_todo[u];
+          std::tie(token_idx, token) = q_curr_frame_todo_[u];
           // Making sure the token is in the current frame
           KALDI_ASSERT(token_idx >= curr_frame_offset);
-          StateId lattice_next_state = get_unique_id(token_idx, token);
+          StateId lattice_next_state =
+              GetUniqueTokenID(total_ntokens, token_idx, token);
 
-          auto to_map_it = curr_f_raw_lattice_state.find(lattice_next_state);
+          auto to_map_it = curr_f_raw_lattice_state_.find(lattice_next_state);
           // We know this token exists in the output lattice (because it's in
-          // q_curr_frame_todo)
-          KALDI_ASSERT(to_map_it != curr_f_raw_lattice_state.end());
+          // q_curr_frame_todo_)
+          KALDI_ASSERT(to_map_it != curr_f_raw_lattice_state_.end());
           CostType token_extra_cost = to_map_it->second.token_extra_cost;
           dbg_found_best_path |= (token_extra_cost == 0.0f);
           StateId to_fst_lattice_state = to_map_it->second.fst_lattice_state;
@@ -1389,7 +1370,8 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
             // Source of the arc currently considered
             StateId lattice_src_state =
                 (list_prev_token_idx != 0)
-                    ? get_unique_id(list_prev_token_idx, list_prev_token)
+                    ? GetUniqueTokenID(total_ntokens, list_prev_token_idx,
+                                       list_prev_token)
                     : fst_lattice_start;
             // bool keep_arc = (arc_extra_cost == 0.0f); for one best
             // We only keep the arc if, when using that arc, we can end up
@@ -1403,15 +1385,15 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
               // We will now add this arc to the output lattice
               // We now the destination state of the arc (lattice_next_state)
               // has already been added to the output lattice
-              // (because its in q_curr_frame_todo)
+              // (because its in q_curr_frame_todo_)
               // We may need to add the source of that arc to the output fst
               StateId from_fst_lattice_state;
               if (list_prev_token_idx != 0) {
                 // Selecting the right map
                 // - emitting arc -> previous frame map
                 // - non emitting arc -> same frame map
-                auto *extra_cost_map = emitting ? &prev_f_raw_lattice_state
-                                                : &curr_f_raw_lattice_state;
+                auto *extra_cost_map = emitting ? &prev_f_raw_lattice_state_
+                                                : &curr_f_raw_lattice_state_;
                 decltype(extra_cost_map->end()) from_map_it;
                 bool inserted;
                 // Attempting to insert the state in the map
@@ -1423,7 +1405,7 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
                 // next
                 if (inserted) {
                   auto *todo_list =
-                      emitting ? &q_prev_frame_todo : &q_curr_frame_todo;
+                      emitting ? &q_prev_frame_todo_ : &q_curr_frame_todo_;
                   todo_list->push_back({list_prev_token_idx, list_prev_token});
                   from_map_it->second.fst_lattice_state = fst_out->AddState();
                 }
@@ -1469,7 +1451,7 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
               // for that frame.
               // If we're replaying that frame, we don't want duplicates
               bool is_this_arc_new =
-                  f_arc_idx_added.insert(list_arc_idx).second;
+                  f_arc_idx_added_.insert(list_arc_idx).second;
               if (is_this_arc_new) {
                 // The following reads will most likely end up in cache misses
                 // we could load everything sooner
@@ -1493,8 +1475,8 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
           // We need to replay the frame. Because all states will be read again,
           // we can reopen them (and they will be closed again when being read
           // from again)
-          for (auto it = curr_f_raw_lattice_state.begin();
-               it != curr_f_raw_lattice_state.end(); ++it) {
+          for (auto it = curr_f_raw_lattice_state_.begin();
+               it != curr_f_raw_lattice_state_.end(); ++it) {
             // Reopening state, we're going to replay the frame
             // The reads that closed the state in the past will be done again
             it->second.is_state_closed = false;
@@ -1502,15 +1484,15 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
         }
       } while (must_replay_frame);
 
-      q_prev_frame_todo.swap(q_curr_frame_todo);
-      q_prev_frame_todo.clear();
-      prev_f_raw_lattice_state.swap(curr_f_raw_lattice_state);
-      prev_f_raw_lattice_state.clear();
-      f_arc_idx_added.clear();
+      q_prev_frame_todo_.swap(q_curr_frame_todo_);
+      q_prev_frame_todo_.clear();
+      prev_f_raw_lattice_state_.swap(curr_f_raw_lattice_state_);
+      prev_f_raw_lattice_state_.clear();
+      f_arc_idx_added_.clear();
 
-      KALDI_ASSERT(q_prev_frame_todo.empty());
+      KALDI_ASSERT(q_prev_frame_todo_.empty());
       if (iframe > 0) {
-        KALDI_ASSERT(!q_curr_frame_todo.empty());
+        KALDI_ASSERT(!q_curr_frame_todo_.empty());
         if (!dbg_found_best_path) {
           KALDI_WARN << "Warning didn't find exact best path";
         }
