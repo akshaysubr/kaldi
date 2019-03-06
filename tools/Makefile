@@ -40,20 +40,28 @@ openfst_cleaned:
 sclite_cleaned:
 	$(MAKE) -C sctk clean
 
-distclean:
+dockerclean: clean
+	rm -f sph2pipe_v2.5.tar.gz
+	rm -f openfst-$(OPENFST_VERSION).tar.gz
+	rm -f sctk-2.4.10-20151007-1312Z.tar.bz2
+	rm -f libsndfile-1.0.25.tar.gz
+	rm -f BeamformIt-3.51.tgz
+	rm -f pa_stable_v19_20111121.tgz
+	rm -f cub-$(CUB_VERSION).zip
+	find . -name "*.o" -exec rm {} \;
+	find . -name "*.a" -exec rm {} \;
+
+distclean: dockerclean
+	rm -f sctk
+	rm -f openfst
+	rm -f cub
 	rm -rf openfst-$(OPENFST_VERSION)/
 	rm -rf sctk-2.4.10/
-	rm -rf sctk
 	rm -rf sph2pipe_v2.5/
-	rm -rf sph2pipe_v2.5.tar.gz
-	rm -rf sctk-2.4.10-20151007-1312Z.tar.bz2
-	rm -rf openfst-$(OPENFST_VERSION).tar.gz
-	rm -f openfst
-	rm -rf libsndfile-1.0.25{,.tar.gz} BeamformIt-3.51{,.tgz}
-	rm -f cub-$(CUB_VERSION).zip
+	rm -rf libsndfile-1.0.25
+	rm -rf BeamformIt-3.51
 	rm -rf cub-$(CUB_VERSION)
-	rm -f cub
-
+	rm -rf portaudio
 
 .PHONY: openfst # so target will be made even though "openfst" exists.
 openfst: openfst_compiled openfst-$(OPENFST_VERSION)/lib

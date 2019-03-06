@@ -46,7 +46,9 @@ RUN cd src/ \
  && make -j"$(nproc)" ext \
  && ldconfig \
  && find . -name "*.o" -exec rm {} \; \
- && find . -name "*.a" -exec rm {} \;
+ && find . -name "*.a" -exec rm {} \; \
+ && cd ../tools/ \
+ && make dockerclean
 
 ENV PYTHONPATH $PYTHONPATH:/usr/local/python
 
