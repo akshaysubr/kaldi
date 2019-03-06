@@ -59,6 +59,6 @@ popd >&/dev/null
 
 echo ----------- Fetching trained model -----------
 pushd $models >&/dev/null
-wget https://github.com/ryanleary/kaldi-test/releases/download/v0.0/LibriSpeech-trained.tgz -O /work/LibriSpeech.tar.gz
+wget https://github.com/ryanleary/kaldi-test/releases/download/v0.0/LibriSpeech-trained.tgz -O $data/LibriSpeech-trained.tgz
 tar -xzf $data/LibriSpeech-trained.tgz -C $model
 popd >&/dev/null
