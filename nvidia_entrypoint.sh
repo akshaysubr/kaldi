@@ -50,38 +50,6 @@ if ! cat /proc/cpuinfo | grep flags | sort -u | grep avx >& /dev/null; then
   sleep 2
 fi
 
-DETECTED_MOFED=$(cat /sys/module/mlx5_core/version 2>/dev/null || true)
-case "${DETECTED_MOFED}" in
-  "${MOFED_VERSION}")
-    echo
-    echo "Detected MOFED ${DETECTED_MOFED}."
-    ;;
-  "")
-    echo
-    echo "NOTE: MOFED driver for multi-node communication was not detected."
-    echo "      Multi-node communication performance may be reduced."
-    ;;
-  *)
-    if test -d "/opt/mellanox/DEBS/${DETECTED_MOFED}/" && /opt/mellanox/change_mofed_version.sh "${DETECTED_MOFED}" >& /dev/null; then
-      echo
-      echo "NOTE: Detected MOFED driver ${DETECTED_MOFED}; version automatically upgraded."
-    else
-      echo
-      echo "ERROR: Detected MOFED driver ${DETECTED_MOFED}, but this container has version ${MOFED_VERSION}."
-      echo "       Unable to automatically upgrade this container."
-      echo "       Use of RDMA for multi-node communication will be unreliable."
-      sleep 2
-    fi
-    ;;
-esac
-
-DETECTED_NVPEERMEM=$(cat /sys/module/nv_peer_mem/version 2>/dev/null || true)
-if [[ "${DETECTED_MOFED} " != " " && "${DETECTED_NVPEERMEM} " == " " ]]; then
-  echo
-  echo "NOTE: MOFED driver was detected, but nv_peer_mem driver was not detected."
-  echo "      Multi-node communication performance may be reduced."
-fi
-
 if [[ "$(df -k /dev/shm |grep ^shm |awk '{print $2}') " == "65536 " ]]; then
   echo
   echo "NOTE: The SHMEM allocation limit is set to the default of 64MB.  This may be"
