@@ -82,7 +82,7 @@ inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
 #include "util/stl-utils.h"
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 typedef float CostType;
 // IntegerCostType is the type used in the lookup table d_state_best_cost
 // and the d_cutoff
@@ -370,7 +370,7 @@ class InfoTokenVector {
 // Hashmap
 //
 
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi
 
 #endif

@@ -81,7 +81,7 @@
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 enum OVERFLOW_TYPE {
   OVERFLOW_NONE = 0,
   OVERFLOW_MAIN_Q = 1,
@@ -265,21 +265,22 @@ class CudaDecoder {
   // Updates *h_kernel_params using channels
   void SetChannelsInKernelParams(const std::vector<ChannelId> &channels);
 
-  // Context-switch functions (CPU)
+  // Context-switch functions
   // Used to perform the context-switch of load/saving the state of a channels
   // into a lane. When a channel will be executed on a lane, we load that
   // channel
   // into that lane (same idea than when we load a software threads into a CPU
   // core registers)
-  // Those functions only take care of the CPU data. We also need to call their
-  // GPU equivalent (kernels)
-  void LoadChannelsStateToLanesCPU();
-  void SaveChannelsStateFromLanesCPU();
+  void LoadChannelsStateToLanes();
+  void SaveChannelsStateFromLanes();
 
   // If we have more than max_active_ tokens in the queue, we will compute a new
   // beam,
   // that will only keep max_active_ tokens
   void ApplyMaxActiveAndReduceBeam(bool use_aux_q);
+
+  // TODO comments
+  void ExpandArcsEmitting();
 
   // CheckOverflow
   // If a kernel sets the flag h_q_overflow, we send a warning to stderr
@@ -293,7 +294,9 @@ class CudaDecoder {
   // (func returns int32)
   // Used for instance to ge the max number of arcs for all lanes
   int32 GetMaxForAllLanes(std::function<int32(const LaneCounters &)> func);
-
+  int32 NumFramesToDecode(const std::vector<ChannelId> &channels,
+                          std::vector<CudaDecodableInterface *> &decodables,
+                          int32 max_num_frames);
   // Copy the lane counters back to host, async, using stream st
   // The lanes counters contain all the information such as main_q_end (number
   // of tokens in the main_q)
@@ -498,6 +501,7 @@ class CudaDecoder {
   // Offsets of each frame in h_all_tokens_info_
   // for instance, frame 4 of channel 2 has an offset of frame_offsets[2][4]
   std::vector<std::vector<int32>> frame_offsets_;
+  std::vector<int32> main_q_emitting_end_;
 
   // Data storage. We store on host what we will need in
   // GetRawLattice/GetBestPath
@@ -520,7 +524,7 @@ class CudaDecoder {
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
 
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi
 
 #endif

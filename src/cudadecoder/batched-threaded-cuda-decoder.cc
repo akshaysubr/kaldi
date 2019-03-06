@@ -22,7 +22,7 @@
 #include <nvToolsExt.h>
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 
 void BatchedThreadedCudaDecoder::Initialize(
     const fst::Fst<fst::StdArc> &decode_fst, const nnet3::AmNnetSimple &am_nnet,
@@ -627,7 +627,7 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
   }              // end while(!exit_)
 } // end ExecuteWorker
 
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 } // end namespace kaldi.
 
 #endif

@@ -24,7 +24,7 @@
 #include "util/stl-utils.h"
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 typedef fst::StdArc StdArc;
 typedef StdArc::Weight StdWeight;
 typedef StdArc::Label Label;
@@ -57,7 +57,8 @@ class CudaFst {
   void AllocateData(const fst::Fst<StdArc> &fst);
 
   // copies fst into the pre-allocated datastructures
-  void CopyData(const fst::Fst<StdArc> &fst);
+  void CopyData(const fst::Fst<StdArc> &fst,
+                const TransitionModel &trans_model);
   // Total number of states
   unsigned int num_states_;
 
@@ -100,6 +101,6 @@ class CudaFst {
   std::vector<float> h_final_;
   float *d_final_;
 };
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi
 #endif

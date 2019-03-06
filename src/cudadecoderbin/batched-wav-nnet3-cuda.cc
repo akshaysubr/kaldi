@@ -29,7 +29,7 @@
 #include <nvToolsExt.h>
 
 using namespace kaldi;
-using namespace CudaDecoder;
+using namespace CudaDecode;
 
 void GetDiagnosticsAndPrintOutput(const std::string &utt,
                                   const fst::SymbolTable *word_syms,

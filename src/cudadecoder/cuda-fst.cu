@@ -21,8 +21,7 @@
 #include "cudadecoder/cuda-fst.h"
 
 namespace kaldi {
-namespace CudaDecoder {
-
+namespace CudaDecode {
 void CudaFst::ComputeOffsets(const fst::Fst<StdArc> &fst) {
   // allocate and initialize offset arrays
   h_final_.resize(num_states_);
@@ -62,7 +61,7 @@ void CudaFst::ComputeOffsets(const fst::Fst<StdArc> &fst) {
   arc_count_ = e_count_ + ne_count_;
 }
 
-void CudaFst::AllocateData(const fst::Fst<StdArc> &fst {
+void CudaFst::AllocateData(const fst::Fst<StdArc> &fst) {
   d_e_offsets_ = static_cast<unsigned int *>(CuDevice::Instantiate().Malloc(
       (num_states_ + 1) * sizeof(*d_e_offsets_)));
   d_ne_offsets_ = static_cast<unsigned int *>(CuDevice::Instantiate().Malloc(
@@ -72,8 +71,6 @@ void CudaFst::AllocateData(const fst::Fst<StdArc> &fst {
 
   h_arc_weights_.resize(arc_count_);
   h_arc_nextstates_.resize(arc_count_);
-  // ilabels (nnet3 indexing)
-  std::vector<int32> h_arc_pdf_ilabels_(arc_count_);
   // ilabels (fst indexing)
   h_arc_id_ilabels_.resize(arc_count_);
   h_arc_olabels_.resize(arc_count_);
@@ -88,10 +85,13 @@ void CudaFst::AllocateData(const fst::Fst<StdArc> &fst {
       CuDevice::Instantiate().Malloc(e_count_ * sizeof(*d_arc_pdf_ilabels_)));
 }
 
-void CudaFst::CopyData(const fst::Fst<StdArc> &fst) {
+void CudaFst::CopyData(const fst::Fst<StdArc> &fst,
+                       const TransitionModel &trans_model) {
   // now populate arc data
   int e_idx = 0;
   int ne_idx = e_count_;  // starts where e_offsets_ ends
+  // ilabels (nnet3 indexing)
+  std::vector<int32> h_arc_pdf_ilabels_(arc_count_);
   for (int i = 0; i < num_states_; i++) {
     for (fst::ArcIterator<fst::Fst<StdArc> > aiter(fst, i); !aiter.Done();
          aiter.Next()) {
@@ -104,8 +104,6 @@ void CudaFst::CopyData(const fst::Fst<StdArc> &fst) {
       }
       h_arc_weights_[idx] = arc.weight.Value();
       h_arc_nextstates_[idx] = arc.nextstate;
-      if (arc.nextstate == 0)
-        printf("going to start: %i -> %i \n", i, arc.nextstate);
       // Converting ilabel here, to avoid reindexing when reading nnet3 output
       h_arc_id_ilabels_[idx] = arc.ilabel;
       int32 ilabel_pdf = trans_model.TransitionIdToPdf(arc.ilabel);
@@ -156,7 +154,7 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
   KALDI_ASSERT(d_arc_nextstates_);
   KALDI_ASSERT(d_arc_pdf_ilabels_);
 
-  CopyData(fst);
+  CopyData(fst, trans_model);
 
   // Making sure the graph is ready
   cudaDeviceSynchronize();
@@ -174,5 +172,5 @@ void CudaFst::Finalize() {
   CuDevice::Instantiate().Free(d_arc_pdf_ilabels_);
   nvtxRangePop();
 }
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi
