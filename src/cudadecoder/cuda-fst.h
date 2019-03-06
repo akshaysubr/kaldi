@@ -24,7 +24,7 @@
 #include "util/stl-utils.h"
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 typedef fst::StdArc StdArc;
 typedef StdArc::Weight StdWeight;
 typedef StdArc::Label Label;
@@ -86,6 +86,6 @@ class CudaFst {
   std::vector<float> h_final_;
   float *d_final_;
 };
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi
 #endif

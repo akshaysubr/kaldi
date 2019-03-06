@@ -21,7 +21,7 @@
 #include "cudadecoder/cuda-fst.h"
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 void CudaFst::Initialize(const fst::Fst<StdArc> &fst,
                          const TransitionModel &trans_model) {
   nvtxRangePushA("CudaFst constructor");
@@ -164,5 +164,5 @@ void CudaFst::Finalize() {
   CuDevice::Instantiate().Free(d_arc_pdf_ilabels_);
   nvtxRangePop();
 }
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi

@@ -23,7 +23,7 @@
 #include "cuda-decoder.h"
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 __global__ void get_best_cost_kernel(DeviceParams cst_dev_params,
                                      KernelParams params, bool isfinal,
                                      CostType fst_zero);
@@ -169,5 +169,5 @@ float orderedIntToFloatHost(int32 intVal);
 
 typedef unsigned char BinId;
 }  // namespace kaldi
-}  // namespace CudaDecoder
+}  // namespace CudaDecode
 #endif

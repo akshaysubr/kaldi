@@ -19,7 +19,7 @@
 #include "cuda-decoder-kernels.h"
 
 namespace kaldi {
-namespace CudaDecoder {
+namespace CudaDecode {
 
 // 1:1 Conversion float <---> sortable int
 // We convert floats to sortable ints in order
@@ -1756,5 +1756,5 @@ template __global__ void concatenate_lanes_data<float2>(
 template __global__ void concatenate_lanes_data<int32>(
     DeviceParams cst_dev_params, KernelParams params,
     LaneMatrixInterface<int32> src, int32 *concat);
-}  // end namespace CudaDecoder
+}  // end namespace CudaDecode
 }  // end namespace kaldi
