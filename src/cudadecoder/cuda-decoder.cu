@@ -37,7 +37,8 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
       max_tokens_per_frame_(config.max_tokens_per_frame),
       max_active_(config.max_active),
       nlanes_(nlanes),
-      nchannels_(nchannels) {
+      nchannels_(nchannels),
+      extra_cost_min_delta_(0.0f) {
   // Static asserts on constants
   CheckStaticAsserts();
 
@@ -1186,6 +1187,92 @@ void CudaDecoder::AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
   }
 }
 
+void CudaDecoder::AddArcToLattice(
+    int32 list_arc_idx, int32 list_prev_token_idx, InfoToken list_prev_token,
+    int32 curr_frame_offset, CostType acoustic_cost,
+    CostType this_arc_prev_token_extra_cost, StateId lattice_src_state,
+    StateId fst_lattice_start, StateId to_fst_lattice_state, Lattice *fst_out,
+    bool *must_replay_frame) {
+  // We will now add this arc to the output lattice
+  // We now the destination state of the arc (lattice_next_state)
+  // has already been added to the output lattice
+  // (because its in q_curr_frame_todo_)
+  // We may need to add the source of that arc to the output fst
+  StateId from_fst_lattice_state;
+  // Having the predecessor in the previous frame
+  // <=> that token is associated to an emiting arc
+  bool emitting = (list_prev_token_idx < curr_frame_offset);
+  if (list_prev_token_idx != 0) {
+    // Selecting the right map
+    // - emitting arc -> previous frame map
+    // - non emitting arc -> same frame map
+    auto *extra_cost_map =
+        emitting ? &prev_f_raw_lattice_state_ : &curr_f_raw_lattice_state_;
+    decltype(extra_cost_map->end()) from_map_it;
+    bool inserted;
+    // Attempting to insert the state in the map
+    std::tie(from_map_it, inserted) =
+        extra_cost_map->insert({lattice_src_state, {FLT_MAX, -1, false}});
+    // If it was inserted, its the first time we insert that key in
+    // the map
+    // we need to put that state in the todo list to be considered
+    // next
+    if (inserted) {
+      auto *todo_list = emitting ? &q_prev_frame_todo_ : &q_curr_frame_todo_;
+      todo_list->push_back({list_prev_token_idx, list_prev_token});
+      from_map_it->second.fst_lattice_state = fst_out->AddState();
+    }
+
+    // Updating the source extra cost using that arc
+    // for an arc a->b
+    // extra_cost(a) = min(extra_cost(a),
+    //		extra_cost(b) + arc_extra_cost(a->b))
+    CostType prev_token_extra_cost = from_map_it->second.token_extra_cost;
+    if (this_arc_prev_token_extra_cost < prev_token_extra_cost) {
+      // We found a new min
+      CostType diff = (prev_token_extra_cost - this_arc_prev_token_extra_cost);
+      // If the change is large enough,
+      // and if the state that we're writing to was already closed,
+      // then we need to replay that frame.
+      // if the source state is already closed it means we've
+      // read its extra_cost value. Now we're writing again to it.
+      // We have to do the first read again, to get the updated
+      // value
+      // that's why we're replaying that frame
+      // (between frames everything is in topological order)
+      if (diff > extra_cost_min_delta_ && from_map_it->second.is_state_closed) {
+        *must_replay_frame = true;
+      }
+      prev_token_extra_cost = this_arc_prev_token_extra_cost;
+    }
+
+    // TODO put in above if
+    from_map_it->second.token_extra_cost = prev_token_extra_cost;
+    // Reading the StateId of the source state in the output lattice
+    from_fst_lattice_state = from_map_it->second.fst_lattice_state;
+    // printf("%i [extra=%f] --- %f ---> %i [extra=%f] \n",
+    //	from_fst_lattice_state, this_arc_prev_token_extra_cost,
+    // arc_extra_cost, to_fst_lattice_state, token_extra_cost);
+  } else {
+    from_fst_lattice_state = fst_lattice_start;
+  }
+
+  // Checking if it's the first time we insert an arc with that
+  // arc_idx,
+  // for that frame.
+  // If we're replaying that frame, we don't want duplicates
+  bool is_this_arc_new = f_arc_idx_added_.insert(list_arc_idx).second;
+  if (is_this_arc_new) {
+    // The following reads will most likely end up in cache misses
+    // we could load everything sooner
+    LatticeArc arc(
+        fst_.h_arc_id_ilabels_[list_arc_idx], fst_.h_arc_olabels_[list_arc_idx],
+        LatticeWeight(fst_.h_arc_weights_[list_arc_idx], acoustic_cost),
+        to_fst_lattice_state);
+    fst_out->AddArc(from_fst_lattice_state, arc);
+  }
+}
+
 void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
                                 std::vector<Lattice *> &fst_out_vec,
                                 bool use_final_probs) {
@@ -1195,16 +1282,6 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
   GetBestCost(channels, use_final_probs, &argmins_,
               &list_finals_token_idx_and_cost_, &has_reached_final_);
 
-  // In some cases we can update an extra_cost that has already been used
-  // For instance we process arcs in that order :
-  // 1) a -> b, which updates extra_cost[b] using extra_cost[a]
-  // 2) c -> a, which updates extra-cost[a] (using extra_cost[c])
-  // because the arcs were not considered in topological order, we need to run
-  // again the step 1,
-  // to get the correct extra_cost[b] (using the latest extra_cost[a])
-  // However, we only re-run the step 1 if the value extra_cost[a] has changed
-  // for more than min_delta
-  const float min_delta = 0;
   for (int32 ilane = 0; ilane < channels.size(); ++ilane) {
     nvtxRangePushA("GetRawLatticeOneChannel");
     const ChannelId ichannel = channels[ilane];
@@ -1259,11 +1336,17 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
       const int32 curr_frame_offset =
           (iframe >= 0) ? frame_offsets_[ichannel][iframe] : 0;
 
-      // Tokens by themselves are in topological order. However, when creating
-      // the
-      // lattice, we merge tokens sharing the same (iframe, fst_state) pair.
-      // when merging those tokens, we break the topological order
-      // and we may have to replay that frame.
+      // In some cases we can update an extra_cost that has already been used
+      // For instance we process arcs in that order :
+      // 1) a -> b, which updates extra_cost[b] using extra_cost[a]
+      // 2) c -> a, which updates extra-cost[a] (using extra_cost[c])
+      // because the arcs were not considered in topological order, we need to
+      // run
+      // again the step 1,
+      // to get the correct extra_cost[b] (using the latest extra_cost[a])
+      // However, we only re-run the step 1 if the value extra_cost[a] has
+      // changed
+      // for more than min_delta
       bool must_replay_frame;
 
       // Useful assert, making sure the best path is still there for each frame
@@ -1362,9 +1445,6 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
             // this property will be verified out of luck
             dbg_found_zero |= (arc_extra_cost == 0.0f);
 
-            // Having the predecessor in the previous frame
-            // <=> that token is associated to an emiting arc
-            bool emitting = (list_prev_token_idx < curr_frame_offset);
             InfoToken list_prev_token =
                 h_all_tokens_info_[ichannel][list_prev_token_idx];
             // Source of the arc currently considered
@@ -1381,104 +1461,22 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
             // frame
             bool keep_arc = (this_arc_prev_token_extra_cost < lattice_beam_);
 
-            if (keep_arc) {
-              // We will now add this arc to the output lattice
-              // We now the destination state of the arc (lattice_next_state)
-              // has already been added to the output lattice
-              // (because its in q_curr_frame_todo_)
-              // We may need to add the source of that arc to the output fst
-              StateId from_fst_lattice_state;
-              if (list_prev_token_idx != 0) {
-                // Selecting the right map
-                // - emitting arc -> previous frame map
-                // - non emitting arc -> same frame map
-                auto *extra_cost_map = emitting ? &prev_f_raw_lattice_state_
-                                                : &curr_f_raw_lattice_state_;
-                decltype(extra_cost_map->end()) from_map_it;
-                bool inserted;
-                // Attempting to insert the state in the map
-                std::tie(from_map_it, inserted) = extra_cost_map->insert(
-                    {lattice_src_state, {FLT_MAX, -1, false}});
-                // If it was inserted, its the first time we insert that key in
-                // the map
-                // we need to put that state in the todo list to be considered
-                // next
-                if (inserted) {
-                  auto *todo_list =
-                      emitting ? &q_prev_frame_todo_ : &q_curr_frame_todo_;
-                  todo_list->push_back({list_prev_token_idx, list_prev_token});
-                  from_map_it->second.fst_lattice_state = fst_out->AddState();
-                }
-
-                // Updating the source extra cost using that arc
-                // for an arc a->b
-                // extra_cost(a) = min(extra_cost(a),
-                //		extra_cost(b) + arc_extra_cost(a->b))
-                CostType prev_token_extra_cost =
-                    from_map_it->second.token_extra_cost;
-                if (this_arc_prev_token_extra_cost < prev_token_extra_cost) {
-                  // We found a new min
-                  CostType diff =
-                      (prev_token_extra_cost - this_arc_prev_token_extra_cost);
-                  // If the change is large enough,
-                  // and if the state that we're writing to was already closed,
-                  // then we need to replay that frame.
-                  // if the source state is already closed it means we've
-                  // read its extra_cost value. Now we're writing again to it.
-                  // We have to do the first read again, to get the updated
-                  // value
-                  // that's why we're replaying that frame
-                  // (between frames everything is in topological order)
-                  if (diff > min_delta && from_map_it->second.is_state_closed) {
-                    must_replay_frame = true;
-                  }
-                  prev_token_extra_cost = this_arc_prev_token_extra_cost;
-                }
-
-                // TODO put in above if
-                from_map_it->second.token_extra_cost = prev_token_extra_cost;
-                // Reading the StateId of the source state in the output lattice
-                from_fst_lattice_state = from_map_it->second.fst_lattice_state;
-                // printf("%i [extra=%f] --- %f ---> %i [extra=%f] \n",
-                //	from_fst_lattice_state, this_arc_prev_token_extra_cost,
-                //arc_extra_cost, to_fst_lattice_state, token_extra_cost);
-              } else {
-                from_fst_lattice_state = fst_lattice_start;
-              }
-
-              // Checking if it's the first time we insert an arc with that
-              // arc_idx,
-              // for that frame.
-              // If we're replaying that frame, we don't want duplicates
-              bool is_this_arc_new =
-                  f_arc_idx_added_.insert(list_arc_idx).second;
-              if (is_this_arc_new) {
-                // The following reads will most likely end up in cache misses
-                // we could load everything sooner
-                LatticeArc arc(fst_.h_arc_id_ilabels_[list_arc_idx],
-                               fst_.h_arc_olabels_[list_arc_idx],
-                               LatticeWeight(fst_.h_arc_weights_[list_arc_idx],
-                                             acoustic_cost),
-                               to_fst_lattice_state);
-                fst_out->AddArc(from_fst_lattice_state, arc);
-              }
-            }
+            if (keep_arc)
+              AddArcToLattice(list_arc_idx, list_prev_token_idx,
+                              list_prev_token, curr_frame_offset, acoustic_cost,
+                              this_arc_prev_token_extra_cost, lattice_src_state,
+                              fst_lattice_start, to_fst_lattice_state, fst_out,
+                              &must_replay_frame);
           }
           KALDI_ASSERT(dbg_found_zero);
         }
 
         if (must_replay_frame) {
-          // The case described above
-          // (in the "if(this_arc_prev_token_extra_cost <
-          // prev_token_extra_cost)")
-          // was triggered
           // We need to replay the frame. Because all states will be read again,
           // we can reopen them (and they will be closed again when being read
           // from again)
           for (auto it = curr_f_raw_lattice_state_.begin();
                it != curr_f_raw_lattice_state_.end(); ++it) {
-            // Reopening state, we're going to replay the frame
-            // The reads that closed the state in the past will be done again
             it->second.is_state_closed = false;
           }
         }

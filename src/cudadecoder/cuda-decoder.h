@@ -575,8 +575,16 @@ class CudaDecoder {
   std::unordered_set<int32> f_arc_idx_added_;
   std::vector<std::pair<int32, InfoToken>> q_curr_frame_todo_;
   std::vector<std::pair<int32, InfoToken>> q_prev_frame_todo_;
+  CostType extra_cost_min_delta_;
   void AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
                                Lattice *fst_out);
+  void AddArcToLattice(int32 list_arc_idx, int32 list_prev_token_idx,
+                       InfoToken list_prev_token, int32 curr_frame_offset,
+                       CostType acoustic_cost,
+                       CostType this_arc_prev_token_extra_cost,
+                       StateId lattice_src_state, StateId fst_lattice_start,
+                       StateId to_fst_lattice_state, Lattice *fst_out,
+                       bool *must_replay_frame);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
