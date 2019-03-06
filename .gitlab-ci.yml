@@ -4,7 +4,7 @@
 
 variables:
     EXTRA_DOCKER_RUN_ARGS: "--shm-size=1G --ulimit memlock=-1 --ulimit stack=$$((1024*65536))"
-    DATADIR: /mnt/dldata
+    DATADIR: /mnt/data/dldata
  
     # variables that may be overridden by the pipeline vars
     API_LOGGING: 0
