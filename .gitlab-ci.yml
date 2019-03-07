@@ -143,7 +143,6 @@ py3-devel:
     only:
     - /^.*-devel$/
     except:
-    - api
     - external
     - pipelines
     - schedules
