@@ -11,22 +11,31 @@ fi
 total_gpus=`nvidia-smi -q | grep "Product Name" | wc -l`
 total_threads=`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`
 threads_per_gpu=`echo $total_threads/$num_gpus | bc`
-stride=`echo "($total_gpus+3)/4" | bc`
+half=`echo "($total_gpus+1)/2" | bc`
+fourth=`echo "($total_gpus+3)/4" | bc`
 
 for dataset in $datasets; do
   echo "Running $dataset on $num_gpus GPUs with $threads_per_gpu threads per GPU"
+  
   for (( d = 0 ; d < $num_gpus ; d++ )); do
     #swizzle GPUs to distributed across PCI-E lanes
-    #this assumes there are 4 sets of x16 lanes being used
-    f=`echo "($d%4)*$stride" | bc`
-    o=`echo $d/4 | bc`
-    gpu=`echo $f+$o | bc`
+    #socket=fastest changing dimension, then lanes, then final offset
+    s=`echo "($d%2)" | bc`
+    l=`echo "($d/2)%2" | bc`
+    o=`echo "$d/$half" | bc`
+
+    gpu=`echo $s*4+$l*2+$o | bc`
 
     numanode=`echo "$gpu/($total_gpus/2)" | bc` 
-    #echo "d=$d f=$f o=$o stride=$stride gpu=$gpu"
-    numactl --cpunodebind=$numanode ./run_benchmark.sh $gpu $dataset 2 $threads_per_gpu &> output.$d&
+    if [ $num_gpus -gt 1 ]; then
+      numacmd="numactl --cpunodebind=$numanode"
+    else
+      numacmd=""
+    fi
+    #echo "s=$s l=$l o=$o stride=$stride gpu=$gpu"
+    $numacmd ./run_benchmark.sh $gpu $dataset 2 $threads_per_gpu &> output.$d&
   done
-  
+  exit
   wait
 
   TOTAL_RTF=0
