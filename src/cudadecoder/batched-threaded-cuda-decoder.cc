@@ -16,6 +16,8 @@
  * limitations under the License.
  */
 
+#define SLEEP_BACKOFF_NS 500
+#define SLEEP_BACKOFF_S ((double)SLEEP_BACKOFF_NS/1e9)
 #if HAVE_CUDA == 1
 #include "cudadecoder/batched-threaded-cuda-decoder.h"
 #include "base/kaldi-utils.h"
@@ -64,7 +66,7 @@ void BatchedThreadedCudaDecoder::Initialize(
 
   // wait for threads to start to ensure allocation time isn't in the timings
   while (numStarted_ < config_.num_control_threads)
-    ;
+    kaldi::Sleep(SLEEP_BACKOFF_S);
 }
 void BatchedThreadedCudaDecoder::Finalize() {
 
@@ -102,7 +104,7 @@ void BatchedThreadedCudaDecoder::CloseDecodeHandle(const std::string &key) {
 
   // wait for task to finish processing
   while (task.finished != true)
-    ;
+    kaldi::Sleep(SLEEP_BACKOFF_S);
 
   tasks_lookup_mutex_.lock();
   tasks_lookup_.erase(it);
@@ -158,7 +160,7 @@ bool BatchedThreadedCudaDecoder::GetRawLattice(const std::string &key,
   // wait for task to finish.  This should happens automatically without
   // intervention from the master thread.
   while (task->finished == false)
-    ;
+    kaldi::Sleep(SLEEP_BACKOFF_S);
 
   // GetRawLattice on a determinized lattice is not supported (Per email from
   // DanP)
@@ -187,7 +189,7 @@ bool BatchedThreadedCudaDecoder::GetLattice(const std::string &key,
   // wait for task to finish.  This should happens automatically without
   // intervention from the master thread.
   while (task->finished == false)
-    ;
+    kaldi::Sleep(SLEEP_BACKOFF_S);
 
   if (task->error) {
     nvtxRangePop();
@@ -552,6 +554,8 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
       // check if there is no active work on this thread.
       // This can happen if another thread was assigned the work.
       if (tasks.size() == 0) {
+        //Thread is spinning waiting for work.  Backoff.
+        kaldi::Sleep(SLEEP_BACKOFF_S);
         break;
       }
 
@@ -598,6 +602,7 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
                     << "'\n";
           KALDI_LOG << "    Aborting batch for recovery.  Canceling the "
                        "following decodes:\n";
+          //Cancel all outstanding tasks
           for (int i = 0; i < tasks.size(); i++) {
             // move all channels to free channel queue
             ChannelId channel = channel_state.channels[i];
@@ -622,9 +627,8 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
           decodables.resize(0);
         }
       }
-    } while (tasks.size() >
-             0); // more work to process don't check exit condition
-  }              // end while(!exit_)
+    } while (tasks.size() > 0); // more work don't check exit condition
+  } // end while(!exit_)
 } // end ExecuteWorker
 
 }  // end namespace CudaDecode
