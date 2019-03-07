@@ -1,7 +1,6 @@
 #!/bin/bash
 
-datasets="test_clean"
-#datasets="test_clean test_other"
+datasets="test_clean test_other"
 if [ $# -ge 1 ]; then
   num_gpus=$1
 else
@@ -13,21 +12,20 @@ total_gpus=`nvidia-smi -q | grep "Product Name" | wc -l`
 total_threads=`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`
 
 threads_per_gpu=`echo $total_threads/$num_gpus | bc`
-half_gpus=`echo "($total_gpus+1)/2" | bc`
-
+stride=`echo "($total_gpus+3)/4" | bc`
 for dataset in $datasets; do
   echo "Running $dataset on $num_gpus GPUs with $threads_per_gpu threads per GPU"
   for (( d = 0 ; d < $num_gpus ; d++ )); do
     #swizzle GPUs to distributed across PCI-E lanes
-    #this assumes GPUs are distributed evenly across sockets
-    mod=`echo $d%$half_gpus*2 | bc`
-    half=`echo $d/$half_gpus | bc`
-    gpu=`echo $mod+$half | bc`
-    #echo "d=$d mod=$mod half=$half gpu=$gpu"
+    #this assumes there are 4 sets of x16 lanes being used
+    f=`echo "($d%4)*$stride" | bc`
+    o=`echo $d/4 | bc`
+    gpu=`echo $f+$o | bc`
+    #echo "d=$d f=$f o=$o stride=$stride gpu=$gpu"
     ./run_benchmark.sh $gpu $dataset 2 $threads_per_gpu &> output.$d&
   done
-
-  wait
+  
+wait
 
   TOTAL_RTF=0
   for (( d = 0 ; d < $num_gpus ; d++ )); do
