@@ -1232,8 +1232,8 @@ __global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params,
                                       cst_dev_params.q_capacity) &&
                inf_tok.prev_token <=
                    (lane_counters->main_q_global_offset + main_q_end));
-        cst_dev_params.d_main_q_extra_cost.lane(ilane)[list_idx] = {
-            extra_cost, acoustic_cost};
+        cst_dev_params.d_main_q_extra_and_acoustic_cost.lane(
+            ilane)[list_idx] = {extra_cost, acoustic_cost};
         // InfoToken inf2_tok =
         // cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] ;
       }

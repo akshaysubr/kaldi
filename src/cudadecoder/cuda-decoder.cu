@@ -41,16 +41,13 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
       extra_cost_min_delta_(0.0f) {
   // Static asserts on constants
   CheckStaticAsserts();
-
   // Runtime asserts
   KALDI_ASSERT(nlanes > 0);
   KALDI_ASSERT(nchannels > 0);
   KALDI_ASSERT(nlanes_ <= KALDI_CUDA_DECODER_MAX_N_LANES);
   KALDI_ASSERT(nlanes_ <= nchannels_);
-
   // All GPU work in decoder will be sent to compute_st_
   cudaStreamCreate(&compute_st_);
-
   // For all the allocating/initializing process
   // We create a special channel
   // containing the exact state a channel should have when starting a new decode
@@ -68,12 +65,11 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
   InitDeviceData();
 
   ComputeInitialChannel();
-  --nchannels_;  // remove the special initial channel from the count
-
-  KALDI_DECODER_CUDA_CHECK_ERROR();
+  --nchannels_;  // removing the special initial channel from the count
 
   // Making sure that everything is ready to use
   cudaStreamSynchronize(compute_st_);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
 }
 
 void CudaDecoder::AllocateDeviceData() {
@@ -98,7 +94,7 @@ void CudaDecoder::AllocateDeviceData() {
 
   d_main_q_representative_id_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_extra_prev_tokens_.Resize(nlanes_, max_tokens_per_frame_);
-  d_main_q_extra_cost_.Resize(nlanes_, max_tokens_per_frame_);
+  d_main_q_extra_and_acoustic_cost_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_block_sums_prefix_sum_.Resize(
       nlanes_, KALDI_CUDA_DECODER_DIV_ROUND_UP(max_tokens_per_frame_,
                                                KALDI_CUDA_DECODER_1D_BLOCK) +
@@ -184,7 +180,8 @@ void CudaDecoder::InitDeviceParams() {
   h_device_params_->d_main_q_info = d_main_q_info_.GetInterface();
   h_device_params_->d_aux_q_state_and_cost =
       d_aux_q_state_and_cost_.GetInterface();
-  h_device_params_->d_main_q_extra_cost = d_main_q_extra_cost_.GetInterface();
+  h_device_params_->d_main_q_extra_and_acoustic_cost =
+      d_main_q_extra_and_acoustic_cost_.GetInterface();
   h_device_params_->d_main_q_acoustic_cost =
       d_main_q_acoustic_cost_.GetInterface();
   h_device_params_->d_aux_q_acoustic_cost =
@@ -450,7 +447,7 @@ void CudaDecoder::MoveConcatenatedCopyToVector(
   }
 }
 
-void CudaDecoder::ApplyMaxActiveAndReduceBeam(bool use_aux_q) {
+void CudaDecoder::ApplyMaxActiveAndReduceBeam(enum QUEUE_ID queue_id) {
   // If at least one lane queue is bigger than max_active,
   // we'll apply a topk on that queue (k=max_active_)
   auto func_aux_q_end = [](const LaneCounters &c) {
@@ -459,8 +456,8 @@ void CudaDecoder::ApplyMaxActiveAndReduceBeam(bool use_aux_q) {
   auto func_main_q_end = [](const LaneCounters &c) {
     return c.main_q_narcs_and_end.y;
   };
-  int32 max_q_end = use_aux_q ? GetMaxForAllLanes(func_aux_q_end)
-                              : GetMaxForAllLanes(func_main_q_end);
+  int32 max_q_end = (queue_id == AUX_Q) ? GetMaxForAllLanes(func_aux_q_end)
+                                        : GetMaxForAllLanes(func_main_q_end);
 
   // Adding a tolerance on max_active_
   // This is because we will usually not be able to limit the number of tokens
@@ -474,6 +471,7 @@ void CudaDecoder::ApplyMaxActiveAndReduceBeam(bool use_aux_q) {
     return;
   }
 
+  bool use_aux_q = (queue_id == AUX_Q);
   compute_costs_histogram_kernel<<<
       KALDI_CUDA_DECODER_NUM_BLOCKS(max_q_end, nlanes_used_),
       KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
@@ -618,7 +616,7 @@ void CudaDecoder::PostProcessingMainQueue() {
   int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
   KALDI_ASSERT(max_main_q_end > 0);
 
-  ApplyMaxActiveAndReduceBeam(false);
+  ApplyMaxActiveAndReduceBeam(MAIN_Q);
 
   fill_best_int_cost_kernel<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
                                                             nlanes_used_),
@@ -685,7 +683,7 @@ void CudaDecoder::CopyMainQueueDataToHost() {
                             d_infotoken_concat_, h_extra_prev_tokens_concat_,
                             compute_st_, &h_n_extra_prev_tokens_lane_offsets_);
     PerformConcatenatedCopy(func_main_q_n_extra_prev_tokens,
-                            h_device_params_->d_main_q_extra_cost,
+                            h_device_params_->d_main_q_extra_and_acoustic_cost,
                             d_extra_cost_concat_, h_extra_cost_concat_,
                             compute_st_, &h_n_extra_prev_tokens_lane_offsets_);
   }
@@ -750,7 +748,7 @@ void CudaDecoder::AdvanceDecoding(
 
       // If one of the aux_q contains more than max_active_ tokens,
       // we'll reduce the beam to only keep max_active_ tokens
-      ApplyMaxActiveAndReduceBeam(true);  // true for aux_q TODO do a struct
+      ApplyMaxActiveAndReduceBeam(AUX_Q);
       bool all_aux_queues_empty;
       // Prune the aux_q. Apply the latest beam (using the one from
       // ApplyMaxActiveAndReduceBeam if triggered)
@@ -1089,7 +1087,7 @@ void CudaDecoder::DebugValidateLattice() {
 #endif
 }
 
-CudaDecoder::LatticeStateInternalId CudaDecoder::GetUniqueTokenID(
+CudaDecoder::LatticeStateInternalId CudaDecoder::GetLatticeStateInternalId(
     int32 total_ntokens, TokenId token_idx, InfoToken token) {
   // If we have a unique token for this (frame,fst_state)
   // Then its ID is a unique ID for (frame,fst_state)
@@ -1106,7 +1104,8 @@ CudaDecoder::LatticeStateInternalId CudaDecoder::GetUniqueTokenID(
 
 void CudaDecoder::AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
                                           Lattice *fst_out) {
-  // Total number of tokens for that utterance. Used in GetUniqueTokenID
+  // Total number of tokens for that utterance. Used in
+  // GetLatticeStateInternalId
   const int32 total_ntokens = h_all_tokens_info_[ichannel].size();
   // Reading the overall best_cost for that utterance's last frame. Was set by
   // GetBestCost
@@ -1128,7 +1127,7 @@ void CudaDecoder::AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
 
     // Internal ID for our lattice_state=(iframe, fst_state)
     LatticeStateInternalId state_internal_id =
-        GetUniqueTokenID(total_ntokens, final_token_idx, final_token);
+        GetLatticeStateInternalId(total_ntokens, final_token_idx, final_token);
     decltype(curr_f_raw_lattice_state_.end()) map_it;
     bool inserted;
 
@@ -1301,7 +1300,7 @@ void CudaDecoder::GetTokenRawLatticeData(
     TokenId token_idx, InfoToken token, int32 total_ntokens,
     CostType *token_extra_cost, OutputLatticeState *to_fst_lattice_state) {
   LatticeStateInternalId next_state_internal_id =
-      GetUniqueTokenID(total_ntokens, token_idx, token);
+      GetLatticeStateInternalId(total_ntokens, token_idx, token);
   auto to_map_it = curr_f_raw_lattice_state_.find(next_state_internal_id);
   // We know this token exists in the output lattice (because it's in
   // q_curr_frame_todo_)
@@ -1385,8 +1384,8 @@ void CudaDecoder::ConsiderTokenForLattice(
   // Source of the arc currently considered
   *lattice_src_state =
       (list_prev_token_idx != 0)
-          ? GetUniqueTokenID(total_ntokens, list_prev_token_idx,
-                             *list_prev_token)
+          ? GetLatticeStateInternalId(total_ntokens, list_prev_token_idx,
+                                      *list_prev_token)
           : fst_lattice_start;
 
   // We only keep the arc if, when using that arc, we can end up

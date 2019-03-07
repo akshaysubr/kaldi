@@ -121,7 +121,7 @@ struct DeviceParams {
 
   LaneMatrixInterface<int2> d_list_final_tokens_in_main_q;
 
-  LaneMatrixInterface<float2> d_main_q_extra_cost;
+  LaneMatrixInterface<float2> d_main_q_extra_and_acoustic_cost;
 
   LaneMatrixInterface<int32> d_histograms;
 

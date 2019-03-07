@@ -92,6 +92,8 @@ enum OVERFLOW_TYPE {
   OVERFLOW_AUX_Q = 2
 };
 
+enum QUEUE_ID { MAIN_Q = 0, AUX_Q = 1 };
+
 // Forward declaration
 class DeviceParams;
 class KernelParams;
@@ -256,59 +258,94 @@ class CudaDecoder {
       std::vector<bool> *has_reached_final);
 
  private:
+  // Data allocation. Called in constructor
   void AllocateDeviceData();
   void AllocateHostData();
   void AllocateDeviceKernelParams();
+  // Data initialization. Called in constructor
   void InitDeviceData();
   void InitHostData();
   void InitDeviceParams();
-
   // Computes the initial channel
   // The initial channel is used to initialize a channel
   // when a new utterance starts (we clone it into the given channel)
   void ComputeInitialChannel();
-
   // Updates *h_kernel_params using channels
   void SetChannelsInKernelParams(const std::vector<ChannelId> &channels);
   void ResetChannelsInKernelParams();
-
   // Context-switch functions
   // Used to perform the context-switch of load/saving the state of a channels
   // into a lane. When a channel will be executed on a lane, we load that
-  // channel
-  // into that lane (same idea than when we load a software threads into a CPU
-  // core registers)
+  // channel into that lane (same idea than when we load a software threads into
+  // the registers of a CPU)
   void LoadChannelsStateToLanes(const std::vector<ChannelId> &channels);
   void SaveChannelsStateFromLanes();
-
-  // If we have more than max_active_ tokens in the queue, we will compute a new
-  // beam,
-  // that will only keep max_active_ tokens
-  void ApplyMaxActiveAndReduceBeam(bool use_aux_q);
-
-  // TODO comments
+  // We compute the decodes by batch. Each decodable in the batch has a
+  // different number of frames ready
+  // We compute the min number of frames ready (so that the full batch is
+  // executing). If max_num_frames
+  // is > 0, we apply that ceiling to the NumFramesToDecode.
+  int32 NumFramesToDecode(const std::vector<ChannelId> &channels,
+                          std::vector<CudaDecodableInterface *> &decodables,
+                          int32 max_num_frames);
+  // Expand the arcs, emitting stage. Must be called after
+  // a preprocess_in_place, which happens in PostProcessingMainQueue.
+  // ExpandArcsEmitting is called first when decoding a frame,
+  // using the preprocessing that happened at the end of the previous frame,
+  // in PostProcessingMainQueue
   void ExpandArcsEmitting();
+  // ExpandArcs, non-emitting stage. Must be called after PruneAndPreprocess.
+  // if *should_iterate, we should do another iteration of the
+  // PruneAndPreprocess/ExpandArcsNonEmitting pair
   void ExpandArcsNonEmitting(bool *should_iterate);
+  // If we have more than max_active_ tokens in the queue (either after an
+  // expand, or at the end of the frame)
+  // we will compute a new beam that will only keep a number of tokens as close
+  // as possible to max_active_ tokens
+  // (that number is >= max_active_) (soft topk)
+  // All ApplyMaxActiveAndReduceBeam is find the right beam for that topk and
+  // set it.
+  // We need to then call PruneAndPreprocess (explicitly pruning tokens with
+  // cost > beam)
+  // Or PostProcessingMainQueue (ignoring tokens with cost > beam in the next
+  // frame)
+  void ApplyMaxActiveAndReduceBeam(enum QUEUE_ID queue_id);
+  // Called after an ExpandArcs. Prune the aux_q (output of the ExpandArcs),
+  // move the survival tokens to the main_q, do the preprocessing at the same
+  // time
+  // We don't need it after the last ExpandArcsNonEmitting.
   void PruneAndPreprocess(bool *all_aux_queues_empty);
-  void StartCopyAcousticCostsToHostAsync();
-  void FinalizeCopyAcousticCostsToHost();
+  // Moving the acoustic_costs to host in two stage.
+  // StartCopyAcousticCostsToHostAsync concatenate the data on device and start
+  // the device2host copy
+  // FinalizeCopyAcousticCostsToHost move the data that arrived on host into the
+  // right vectors for storage
+  // a sync on compute_st_ has to happen between those two stage
+  void StartCopyAcousticCostsToHostAsync();  // stage 1
+  void FinalizeCopyAcousticCostsToHost();    // stage 2. Need a sync on
+                                             // compute_st_ between 1 on 2
+  // Once the non-emitting is done, the main_q is final for that frame.
+  // We now generate all the data associated with that main_q, such as listing
+  // the different tokens sharing the same token.next_state
+  // we also preprocess for the ExpandArcsEmitting of the next frame
+  // Once PostProcessingMainQueue, all working data is back to its original
+  // state, to make sure we're ready for the next context switch
   void PostProcessingMainQueue();
-
+  // Moving the relevant data to host, ie the data that will be needed in
+  // GetBestPath/GetRawLattice.
+  // Happens when PostProcessingMainQueue is done generating that data
+  void CopyMainQueueDataToHost();
   // CheckOverflow
   // If a kernel sets the flag h_q_overflow, we send a warning to stderr
   // Overflows are detected and prevented on the device. It only means
   // that we've discarded the tokens that were created after the queue was full
   // That's why we only send a warning. It is not a fatal error
   void CheckOverflow();
-
   // Evaluates the function func for each lane, returning the max of all return
   // values
   // (func returns int32)
   // Used for instance to ge the max number of arcs for all lanes
   int32 GetMaxForAllLanes(std::function<int32(const LaneCounters &)> func);
-  int32 NumFramesToDecode(const std::vector<ChannelId> &channels,
-                          std::vector<CudaDecodableInterface *> &decodables,
-                          int32 max_num_frames);
   // Copy the lane counters back to host, async or sync
   // The lanes counters contain all the information such as main_q_end (number
   // of tokens in the main_q)
@@ -317,7 +354,6 @@ class CudaDecoder {
   // to know what to do next
   void CopyLaneCountersToHostAsync();
   void CopyLaneCountersToHostSync();
-
   // The selected tokens for each frame will be copied back to host. We will
   // store them
   // on host memory, and we wil use them to create the final lattice once we've
@@ -356,7 +392,6 @@ class CudaDecoder {
                                     T *h_concat,
                                     std::vector<std::vector<T>> *vecvec);
 
-  void CopyMainQueueDataToHost();
 
   // Computes a set of static asserts on the static values
   // such as the defines : KALDI_CUDA_DECODER_MAX_N_LANES for example
@@ -389,7 +424,6 @@ class CudaDecoder {
   // Number of lanes and channels, as defined in the constructor arguments
   int32 nlanes_, nchannels_;
 
-  //
   // We will now define the data used on the GPU
   // The data is mainly linked to two token queues
   // - the main queue
@@ -397,13 +431,11 @@ class CudaDecoder {
   //
   // The auxiliary queue is used to store the raw output of ExpandArcs.
   // We then prune that aux queue (and apply max-active) and move the survival
-  // tokens in the main
-  // queue.
+  // tokens in the main queue.
   // Tokens stored in the main q can then be used to generate new tokens (using
   // ExpandArcs)
   // We also generate more information about what's in the main_q at the end of
-  // a frame
-  // such as which tokens are associated to the same FST state
+  // a frame (in PostProcessingMainQueue)
   //
   // As a reminder, here's the data structure of a token :
   //
@@ -411,8 +443,7 @@ class CudaDecoder {
   //
   // Please keep in mind that this structure is also used in the context
   // of lattice decoding. We are not storing a list of forward links like in the
-  // CPU
-  // decoder. A token stays an instanciation of an single arc.
+  // CPU decoder. A token stays an instanciation of an single arc.
   //
   // For performance reasons, we split the tokens in three parts :
   // { state } , { cost }, { prev_token, arc_idx }
@@ -420,9 +451,8 @@ class CudaDecoder {
   // For instance, d_main_q_state[i], d_main_q_cost[i], d_main_q_info[i]
   // all refer to the same token (at index i)
   // The data structure InfoToken contains { prev_token, arc_idx }
-  //
-  // main_q
   DeviceChannelMatrix<int2> d_main_q_state_and_cost_;
+  // InfoToken
   // Usually contains {prev_token, arc_idx}
   // If more than one token is associated to a fst_state,
   // it will contain where to find the list of those tokens in
@@ -432,7 +462,9 @@ class CudaDecoder {
   DeviceLaneMatrix<InfoToken> d_main_q_info_;
   // Acoustic cost of a given token
   DeviceLaneMatrix<CostType> d_main_q_acoustic_cost_;
-  // Prefix sum of the arc's degrees in the main_q. Used by expand_arcs
+  // Prefix sum of the arc's degrees in the main_q. Used by ExpandArcs,
+  // set in the preprocess stages (either PruneAndPreprocess or
+  // preprocess_in_place in PostProcessingMainQueue)
   DeviceChannelMatrix<int32> d_main_q_degrees_prefix_sum_;
   // d_main_q_arc_offsets[i] = fst_.arc_offsets[d_main_q_state[i]]
   // we pay the price for the random memory accesses of fst_.arc_offsets in the
@@ -440,7 +472,6 @@ class CudaDecoder {
   // we cache the results in d_main_q_arc_offsets which will be read in a
   // coalesced fashion in expand
   DeviceChannelMatrix<int32> d_main_q_arc_offsets_;
-
   // At the end of a frame, we use a hashmap to detect the tokens that are
   // associated with the same FST state S
   // We do it that the very end, to only use the hashmap on post-prune, post-max
@@ -449,23 +480,18 @@ class CudaDecoder {
   // When more than one token is associated to a single FST state,
   // we will list those tokens into another list : d_main_q_extra_prev_tokens
   // we will also save data useful is such a case, such as the extra_cost of a
-  // token compared
-  // to the best for that state
+  // token compared to the best for that state
   DeviceLaneMatrix<InfoToken> d_main_q_extra_prev_tokens_;
-  DeviceLaneMatrix<float2> d_main_q_extra_cost_;  // TODO rename because it also
-                                                  // contains the acoustic_cost
-
+  DeviceLaneMatrix<float2> d_main_q_extra_and_acoustic_cost_;
   // Histogram. Used to perform the histogram of the token costs
   // in the main_q. Used to perform a soft topk of the main_q (max-active)
   DeviceLaneMatrix<int32> d_histograms_;
-
   // Used when generating d_main_q_extra_prev_tokens
   // This happens when we have multiple tokens for a given state S
   // The best token for S (always unique, even if multiple tokens have the best
-  // cost)
-  // will be the representative of that state S. d_main_q_representative_id_
-  // contains the id
-  // of their representative for each token.
+  // cost, we arbitraly pick one) will be the representative of that state S.
+  // d_main_q_representative_id_ contains the id of their representative for
+  // each token.
   // If only one token is associated with S, its representative will be itself
   DeviceLaneMatrix<int32> d_main_q_representative_id_;
   // local_idx of the extra cost list for a state
@@ -475,16 +501,14 @@ class CudaDecoder {
   // Where to write the extra_prev_tokens in the d_main_q_extra_prev_tokens_
   // queue
   DeviceLaneMatrix<int32> d_main_q_extra_prev_tokens_prefix_sum_;
-
   // Used when computing the prefix_sums in preprocess_in_place. Stores
   // the local_sums per CTA
   DeviceLaneMatrix<int2> d_main_q_block_sums_prefix_sum_;
-
-  // Defining the aux_q
+  // Defining the aux_q. Filled by ExpandArcs.
+  // The tokens are moved to the main_q by PruneAndPreprocess
   DeviceLaneMatrix<int2> d_aux_q_state_and_cost_;
   DeviceLaneMatrix<CostType> d_aux_q_acoustic_cost_;
   DeviceLaneMatrix<InfoToken> d_aux_q_info_;
-
   // Parameters used by the kernels
   // DeviceParams contains all the parameters that won't change
   // i.e. memory address of the main_q for instance
@@ -493,14 +517,12 @@ class CudaDecoder {
   DeviceParams *h_device_params_;
   KernelParams *h_kernel_params_;
   int32 nlanes_used_;  // number of lanes used in h_kernel_params_
-
   // Initial lane
   // When starting a new utterance,
   // init_channel_id is used to initialize a channel
   int32 init_channel_id_;
   // CUDA streams used by the decoder
   cudaStream_t compute_st_;
-
   // Parameters extracted from CudaDecoderConfig
   // Those are defined in CudaDecoderConfig
   CostType default_beam_;
@@ -511,32 +533,31 @@ class CudaDecoder {
   // Hashmap capacity. Multiple of max_tokens_per_frame
   int32 hashmap_capacity_;
 
+  // The first index of all the following vectors (or vector<vector>)
+  // is the ChannelId. To get the number of frames decoded in channel 2,
+  // look into num_frames_decoded_[2].
+
   // Keep track of the number of frames decoded in the current file.
   std::vector<int32> num_frames_decoded_;
   // Offsets of each frame in h_all_tokens_info_
-  // for instance, frame 4 of channel 2 has an offset of frame_offsets[2][4]
   std::vector<std::vector<int32>> frame_offsets_;
+  // Size of the main_q at the end of the emitting stage
   std::vector<int32> main_q_emitting_end_;
-
   // Data storage. We store on host what we will need in
   // GetRawLattice/GetBestPath
-  // 2D array[ichannel][element_idx]
   std::vector<std::vector<InfoToken>> h_all_tokens_info_;
   std::vector<std::vector<CostType>> h_all_tokens_acoustic_cost_;
   std::vector<std::vector<InfoToken>> h_all_tokens_extra_prev_tokens_;
   std::vector<std::vector<float2>> h_all_tokens_extra_prev_tokens_extra_cost_;
-
   // Pinned memory arrays. Used for the DeviceToHost copies
   float2 *h_extra_cost_concat_, *d_extra_cost_concat_;
   InfoToken *h_infotoken_concat_, *d_infotoken_concat_;
   CostType *h_acoustic_cost_concat_, *d_acoustic_cost_concat_;
   InfoToken *h_extra_prev_tokens_concat_;
-
   // Offsets used in MoveConcatenatedCopyToVector
   std::vector<int32> h_main_q_end_lane_offsets_,
       h_emitting_main_q_end_lane_offsets_;
   std::vector<int32> h_n_extra_prev_tokens_lane_offsets_;
-
   // Used when calling GetBestCost
   std::vector<std::pair<int32, CostType>> argmins_;
   std::vector<bool> has_reached_final_;
@@ -549,12 +570,27 @@ class CudaDecoder {
   // few typedef to make GetRawLattice easier to understand
   // Returns a unique id for each (iframe, fst_state) pair
   // We need to be able to quickly identity a (iframe, fst_state) ID
+  //
+  // A lattice state is defined by the pair (iframe, fst_state)
+  // A token is associated to a lattice state (iframe, token.next_state)
+  // Multiple token in the same frame can be associated to the same lattice
+  // state
+  // (they all go to the same token.next_state)
+  // We need to quickly identify what is the lattice state of a token.
+  // We are able to do that through GetLatticeStateInternalId(token),
+  // which returns the internal unique ID for each lattice state for a token
+  //
+  // When we build the output lattice, we a get new lattice state
+  // output_lattice_state = fst_out->AddState()
+  // We call this one OutputLatticeState
+  // The conversion between the two is done through maps
+  // [curr|prev]_f_raw_lattice_state_
   typedef int32 LatticeStateInternalId;
   typedef StateId OutputLatticeState;
   typedef int32 TokenId;
-  LatticeStateInternalId GetUniqueTokenID(int32 total_ntokens,
-                                          TokenId token_idx, InfoToken token);
-
+  LatticeStateInternalId GetLatticeStateInternalId(int32 total_ntokens,
+                                                   TokenId token_idx,
+                                                   InfoToken token);
   // Keeping track of a variety of info about states in the lattice
   // - token_extra_cost. A path going from the current lattice_state to the
   // end has an extra cost
@@ -576,7 +612,6 @@ class CudaDecoder {
     OutputLatticeState fst_lattice_state;
     bool is_state_closed;
   };
-
   // [prev|curr]_f_raw_lattice_state_
   // Used to get information about a lattice state (i.e. a (iframe, fst_state)
   // pair)
@@ -597,14 +632,13 @@ class CudaDecoder {
   // we backtrack the associated arc, and we add the predecessor either to
   // q_curr_frame_todo_ (non-emitting arc, same frame)
   // or q_prev_frame_todo_ (emitting arc, source in previous frame)
-  std::vector<std::pair<int32, InfoToken>> q_curr_frame_todo_;
-  std::vector<std::pair<int32, InfoToken>> q_prev_frame_todo_;
+  std::vector<std::pair<TokenId, InfoToken>> q_curr_frame_todo_;
+  std::vector<std::pair<TokenId, InfoToken>> q_prev_frame_todo_;
   // extra_cost_min_delta_ used in the must_replay_frame situation. Please read
   // comments
   // associated with must_replay_frame in GetRawLattice to understand what it
   // does
   CostType extra_cost_min_delta_;
-
   // Resets the GetRawLattice datastructures for a new lattice generation
   void ResetDataForGetRawLattice();
   // Using the output from GetBestPath, we add the best tokens (as selected in
