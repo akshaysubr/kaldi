@@ -1,4 +1,5 @@
 #!/bin/bash
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 echo "Usage: $0 <GPU_IDX> <data-sets> [gpu_threads] [cpu_threads] [max_batch_size] [batch_drain_size] [iterations] [file_limit] [beam] [lattice_beam] [max_active]"
 
