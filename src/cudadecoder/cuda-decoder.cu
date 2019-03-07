@@ -1194,7 +1194,7 @@ void CudaDecoder::AddArcToLattice(
     StateId fst_lattice_start, StateId to_fst_lattice_state, Lattice *fst_out,
     bool *must_replay_frame) {
   // We will now add this arc to the output lattice
-  // We now the destination state of the arc (lattice_next_state)
+  // We know the destination state of the arc (lattice_next_state)
   // has already been added to the output lattice
   // (because its in q_curr_frame_todo_)
   // We may need to add the source of that arc to the output fst
@@ -1273,6 +1273,85 @@ void CudaDecoder::AddArcToLattice(
   }
 }
 
+void CudaDecoder::ResetDataForGetRawLattice() {
+  // Using one map per frame. We always know to which frame a token belongs.
+  // Using one big map slows everything down
+  prev_f_raw_lattice_state_.clear();
+  curr_f_raw_lattice_state_.clear();
+  // We want the unicity of each arc_idx for one frame. Important because we
+  // can replay a frame (and possibly add multiple time the same arc)
+  f_arc_idx_added_.clear();
+
+  // Keeping track of which tokens need to be computed. Think of those as FIFO
+  // queues,
+  // except that we don't want to pop the front right away, because we may
+  // replay a frame
+  // (and we need to remember what's in that frame)
+  // We are also not using an iterator through the
+  // [prev|curr]_f_raw_lattice_state because we are
+  // sometime adding stuff in q_curr_frame_todo_ while reading it. If using a
+  // map we can possibly add the new
+  // element before the current iterator
+  q_curr_frame_todo_.clear();
+  q_prev_frame_todo_.clear();
+}
+
+void CudaDecoder::GetTokenRawLatticeData(int32 token_idx, InfoToken token,
+                                         int32 total_ntokens,
+                                         CostType *token_extra_cost,
+                                         StateId *to_fst_lattice_state) {
+  StateId lattice_next_state =
+      GetUniqueTokenID(total_ntokens, token_idx, token);
+
+  auto to_map_it = curr_f_raw_lattice_state_.find(lattice_next_state);
+  // We know this token exists in the output lattice (because it's in
+  // q_curr_frame_todo_)
+  KALDI_ASSERT(to_map_it != curr_f_raw_lattice_state_.end());
+
+  *token_extra_cost = to_map_it->second.token_extra_cost;
+  *to_fst_lattice_state = to_map_it->second.fst_lattice_state;
+
+  // We read the extra cost from lattice_next_state
+  // We are now closing the state. If we write to it again, we will have
+  // to replay that frame
+  // (so that the latest extra_cost value is read)
+  to_map_it->second.is_state_closed = true;
+}
+
+void CudaDecoder::GetSameFSTStateTokenList(ChannelId ichannel, InfoToken token,
+                                           InfoToken **tok_beg,
+                                           float2 **arc_extra_cost_beg,
+                                           int32 *nprevs) {
+  // We now need to consider all tokens related to that (iframe,
+  // fst_state)
+  // with fst_state being the state this current token is linked to
+  // There's two possibilies:
+  // a) only one token is associated with that fst_state in that frame.
+  // The necessary information
+  // is then stored directly in the token (arc_idx, prev_token)
+  // b) multiple tokens are associated with that fst_state in that
+  // frame. The token that we have right now
+  // only contains information on where to find the list of those
+  // tokens. It contains (offset, size)
+  //
+  // In any cases we consider the list of tokens to process as an array
+  // of InfoToken, which will
+  // be of size 1 in case a), of size > 1 in case b)
+  if (token.IsUniqueTokenForStateAndFrame()) {
+    *tok_beg = &token;
+    // if we've got only one, extra_cost == 0.0
+    *arc_extra_cost_beg = NULL;
+    *nprevs = 1;
+  } else {
+    int32 offset, size;
+    std::tie(offset, size) = token.GetNextStateTokensList();
+    *tok_beg = &h_all_tokens_extra_prev_tokens_[ichannel][offset];
+    *arc_extra_cost_beg =
+        &h_all_tokens_extra_prev_tokens_extra_cost_[ichannel][offset];
+    *nprevs = size;
+  }
+}
+
 void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
                                 std::vector<Lattice *> &fst_out_vec,
                                 bool use_final_probs) {
@@ -1298,27 +1377,7 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
     StateId fst_lattice_start = fst_out->AddState();
     fst_out->SetStart(fst_lattice_start);
 
-    // Using one map per frame. We always know to which frame a token belongs.
-    // Using one big map slows everything down
-    prev_f_raw_lattice_state_.clear();
-    curr_f_raw_lattice_state_.clear();
-    // We want the unicity of each arc_idx for one frame. Important because we
-    // can replay a frame (and possibly add multiple time the same arc)
-    f_arc_idx_added_.clear();
-
-    // Keeping track of which tokens need to be computed. Think of those as FIFO
-    // queues,
-    // except that we don't want to pop the front right away, because we may
-    // replay a frame
-    // (and we need to remember what's in that frame)
-    // We are also not using an iterator through the
-    // [prev|curr]_f_raw_lattice_state because we are
-    // sometime adding stuff in q_curr_frame_todo_ while reading it. If using a
-    // map we can possibly add the new
-    // element before the current iterator
-    q_curr_frame_todo_.clear();
-    q_prev_frame_todo_.clear();
-
+    ResetDataForGetRawLattice();
     // Adding the best tokens returned by GetBestCost to the lattice
     // We also add them to q_curr_frame_todo, and we'll backtrack from there
     AddFinalTokensToLattice(ilane, ichannel, fst_out);
@@ -1346,10 +1405,11 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
       // to get the correct extra_cost[b] (using the latest extra_cost[a])
       // However, we only re-run the step 1 if the value extra_cost[a] has
       // changed
-      // for more than min_delta
+      // for more than extra_cost_min_delta_
       bool must_replay_frame;
 
-      // Useful assert, making sure the best path is still there for each frame
+      // dbg_found_best_path is used in an useful assert, making sure the best
+      // path is still there for each frame
       bool dbg_found_best_path = false;
       do {
         must_replay_frame = false;
@@ -1360,62 +1420,36 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
           int32 token_idx;
           InfoToken token;
           std::tie(token_idx, token) = q_curr_frame_todo_[u];
-          // Making sure the token is in the current frame
           KALDI_ASSERT(token_idx >= curr_frame_offset);
-          StateId lattice_next_state =
-              GetUniqueTokenID(total_ntokens, token_idx, token);
-
-          auto to_map_it = curr_f_raw_lattice_state_.find(lattice_next_state);
-          // We know this token exists in the output lattice (because it's in
-          // q_curr_frame_todo_)
-          KALDI_ASSERT(to_map_it != curr_f_raw_lattice_state_.end());
-          CostType token_extra_cost = to_map_it->second.token_extra_cost;
+          CostType token_extra_cost;
+          StateId to_fst_lattice_state;
+          // Loading the current extra_cost of that token
+          // + its associated state in the lattice
+          GetTokenRawLatticeData(token_idx, token, total_ntokens,
+                                 &token_extra_cost, &to_fst_lattice_state);
           dbg_found_best_path |= (token_extra_cost == 0.0f);
-          StateId to_fst_lattice_state = to_map_it->second.fst_lattice_state;
 
-          // We read the extra cost from lattice_next_state
-          // We are now closing the state. If we write to it again, we will have
-          // to replay that frame
-          // (so that the latest extra_cost value is read)
-          to_map_it->second.is_state_closed = true;
-
-          // We now need to consider all tokens related to that (iframe,
-          // fst_state)
-          // with fst_state being the state this current token is linked to
-          // There's two possibilies:
-          // a) only one token is associated with that fst_state in that frame.
-          // The necessary information
-          // is then stored directly in the token (arc_idx, prev_token)
-          // b) multiple tokens are associated with that fst_state in that
-          // frame. The token that we have right now
-          // only contains information on where to find the list of those
-          // tokens. It contains (offset, size)
-          //
-          // In any cases we consider the list of tokens to process as an array
-          // of InfoToken, which will
-          // be of size 1 in case a), of size > 1 in case b)
           InfoToken *tok_beg;
           float2 *arc_extra_cost_beg;
-          int32 nprevs;
-          if (token.IsUniqueTokenForStateAndFrame()) {
-            tok_beg = &token;
-            // if we've got only one, extra_cost == 0.0
-            arc_extra_cost_beg = NULL;
-            nprevs = 1;
-          } else {
-            int32 offset, size;
-            std::tie(offset, size) = token.GetNextStateTokensList();
-            tok_beg = &h_all_tokens_extra_prev_tokens_[ichannel][offset];
-            arc_extra_cost_beg =
-                &h_all_tokens_extra_prev_tokens_extra_cost_[ichannel][offset];
-            nprevs = size;
-          }
+          int32 nsamestate;
+          // Getting the list of the tokens linked to the same FST state, in the
+          // same frame
+          // In the GPU decoder a token is linked to a single arc, but we can
+          // generate
+          // multiple token for a same fst_nextstate in the same frame.
+          // In the CPU decoder we would use the forward_links list to store
+          // everything in the same "metatoken"
+          // GetSameFSTStateTokenList returns the list of tokens linked to the
+          // same FST state than token
+          // (in the current frame)
+          GetSameFSTStateTokenList(ichannel, token, &tok_beg,
+                                   &arc_extra_cost_beg, &nsamestate);
 
-          // Used as a debugging tool. Each (iframe,fst_state) must have at
-          // least one token
-          // with arc_extra_cost == 0.0f
+          // Used for debugging. For each FST state, we have a token with the
+          // best cost for that FST state
+          // that token has an extra_cost of 0.0f. This is a sanity check
           bool dbg_found_zero = false;
-          for (int32 iprev = 0; iprev < nprevs; ++iprev) {
+          for (int32 iprev = 0; iprev < nsamestate; ++iprev) {
             InfoToken list_token = tok_beg[iprev];
             int32 list_prev_token_idx = list_token.prev_token;
             int32 list_arc_idx = list_token.arc_idx;
@@ -1459,6 +1493,9 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
             // this_arc_prev_token_extra_cost contains the accumulated sums
             // of extra costs (through the cheapest possible way) to the last
             // frame
+
+            // this_arc_prev_token_extra_cost, list_prev_token,
+            // list_prev_token_idx, lattice_src_state, list_arc_idx
             bool keep_arc = (this_arc_prev_token_extra_cost < lattice_beam_);
 
             if (keep_arc)
