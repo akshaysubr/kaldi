@@ -1351,68 +1351,49 @@ void CudaDecoder::GetSameFSTStateTokenList(ChannelId ichannel, InfoToken token, 
           }
 }
 
-void CudaDecoder::LoadAndConsiderTokenForLattice(ChannelId ichannel,
-			int32 iprev, 
-			int32 total_ntokens,
-			int32 token_idx, 
-			StateId fst_lattice_start,
-			InfoToken *tok_beg,
-			float2 *arc_extra_cost_beg, 
-			CostType token_extra_cost,
-			int32 *list_prev_token_idx,
-			InfoToken *list_prev_token,
-			CostType *this_arc_prev_token_extra_cost,
-			CostType *acoustic_cost,
-			int32 *list_arc_idx,
-			StateId *lattice_src_state,
-			bool *keep_arc,
-			bool *dbg_found_zero) {
-	InfoToken list_token = tok_beg[iprev];
-	printf("array=%p, index=%i, &array[index]=%p, value={%i,%i} \n", tok_beg, iprev, &tok_beg[iprev], tok_beg[iprev].arc_idx, tok_beg[iprev].prev_token);
-	*list_prev_token_idx = list_token.prev_token;
-	*list_arc_idx = list_token.arc_idx;
+void CudaDecoder::ConsiderTokenForLattice(
+    ChannelId ichannel, int32 iprev, int32 total_ntokens, int32 token_idx,
+    StateId fst_lattice_start, InfoToken *tok_beg, float2 *arc_extra_cost_beg,
+    CostType token_extra_cost, int32 list_prev_token_idx, int32 list_arc_idx,
+    InfoToken *list_prev_token, CostType *this_arc_prev_token_extra_cost,
+    CostType *acoustic_cost, StateId *lattice_src_state, bool *keep_arc,
+    bool *dbg_found_zero) {
+  CostType arc_extra_cost;
+  if (arc_extra_cost_beg) {
+    float2 both = arc_extra_cost_beg[iprev];
+    arc_extra_cost = both.x;
+    *acoustic_cost = both.y;
+  } else {
+    // If we have only one token for that (iframe,fst_state),
+    // Its arc has an extra_cost of zero (it's the only way to
+    // get to that state, so it's the best)
+    arc_extra_cost = 0.0f;
+    *acoustic_cost = h_all_tokens_acoustic_cost_[ichannel][token_idx];
+  }
+  // If we use that arc to go to prev_token, prev_token will have the
+  // following extra cost
+  *this_arc_prev_token_extra_cost = token_extra_cost + arc_extra_cost;
+  // We need at least one arc_extra_cost of zero for each (iframe,
+  // fst_state)
+  // The only use for that boolean is in a KALDI_ASSERT,
+  // because if something went wrong in the kernels it's not likely
+  // that
+  // this property will be verified out of luck
+  *dbg_found_zero |= (arc_extra_cost == 0.0f);
+  *list_prev_token = h_all_tokens_info_[ichannel][list_prev_token_idx];
+  // Source of the arc currently considered
+  *lattice_src_state =
+      (list_prev_token_idx != 0)
+          ? GetUniqueTokenID(total_ntokens, list_prev_token_idx,
+                             *list_prev_token)
+          : fst_lattice_start;
 
-	CostType arc_extra_cost;
-	if (arc_extra_cost_beg) {
-		float2 both = arc_extra_cost_beg[iprev];
-		arc_extra_cost = both.x;
-		*acoustic_cost = both.y;
-	} else {
-		// If we have only one token for that (iframe,fst_state),
-		// Its arc has an extra_cost of zero (it's the only way to
-		// get to that state, so it's the best)
-		arc_extra_cost = 0.0f;
-		*acoustic_cost = h_all_tokens_acoustic_cost_[ichannel][token_idx];
-	}
-	// If we use that arc to go to prev_token, prev_token will have the
-	// following extra cost
-	*this_arc_prev_token_extra_cost = token_extra_cost + arc_extra_cost;
-	printf("%f = %f + %f \n", *this_arc_prev_token_extra_cost, token_extra_cost, arc_extra_cost);
-	// We need at least one arc_extra_cost of zero for each (iframe,
-	// fst_state)
-	// The only use for that boolean is in a KALDI_ASSERT,
-	// because if something went wrong in the kernels it's not likely
-	// that
-	// this property will be verified out of luck
-	*dbg_found_zero |= (arc_extra_cost == 0.0f);
-
-	printf("ichannel=%i, previdx=%i \n", ichannel, *list_prev_token_idx);
-	*list_prev_token =
-		h_all_tokens_info_[ichannel][*list_prev_token_idx];
-	// Source of the arc currently considered
-	*lattice_src_state =
-		(*list_prev_token_idx != 0)
-		? GetUniqueTokenID(total_ntokens, *list_prev_token_idx,
-				*list_prev_token)
-		: fst_lattice_start;
-
-	// We only keep the arc if, when using that arc, we can end up
-	// at the last frame with a cost not worse than (best+lattice_beam)
-	// this_arc_prev_token_extra_cost contains the accumulated sums
-	// of extra costs (through the cheapest possible way) to the last
-	// frame
-	*keep_arc = (*this_arc_prev_token_extra_cost < lattice_beam_);
-	printf("keep_arc=%i \n", *keep_arc);
+  // We only keep the arc if, when using that arc, we can end up
+  // at the last frame with a cost not worse than (best+lattice_beam)
+  // this_arc_prev_token_extra_cost contains the accumulated sums
+  // of extra costs (through the cheapest possible way) to the last
+  // frame
+  *keep_arc = (*this_arc_prev_token_extra_cost < lattice_beam_);
 }
 
 void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
@@ -1514,27 +1495,19 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
 		  CostType acoustic_cost, this_arc_prev_token_extra_cost;
 		  bool keep_arc;
 		  StateId lattice_src_state;
-	InfoToken list_token = tok_beg[iprev];
-	printf("array=%p, index=%i, &array[index]=%p, value={%i,%i} \n", tok_beg, iprev, &tok_beg[iprev], tok_beg[iprev].arc_idx, tok_beg[iprev].prev_token);
-	
-		  LoadAndConsiderTokenForLattice(ichannel,
-			iprev, 
-			total_ntokens,
-			token_idx, 
-			fst_lattice_start,
-			tok_beg,
-			arc_extra_cost_beg, 
-			token_extra_cost,
-			&list_prev_token_idx,
-			&list_prev_token,
-			&this_arc_prev_token_extra_cost,
-			&acoustic_cost,
-			&list_arc_idx,
-			&lattice_src_state,
-			&keep_arc,
-			&dbg_found_zero);
+                  InfoToken list_token = tok_beg[iprev];
+                  list_prev_token_idx = list_token.prev_token;
+                  list_arc_idx = list_token.arc_idx;
 
-	    if (keep_arc)
+                  ConsiderTokenForLattice(
+                      ichannel, iprev, total_ntokens, token_idx,
+                      fst_lattice_start, tok_beg, arc_extra_cost_beg,
+                      token_extra_cost, list_prev_token_idx, list_arc_idx,
+                      &list_prev_token, &this_arc_prev_token_extra_cost,
+                      &acoustic_cost, &lattice_src_state, &keep_arc,
+                      &dbg_found_zero);
+
+                  if (keep_arc)
 		    AddArcToLattice(list_arc_idx, list_prev_token_idx,
 				    list_prev_token, curr_frame_offset, acoustic_cost,
                               this_arc_prev_token_extra_cost, lattice_src_state,

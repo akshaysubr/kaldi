@@ -595,13 +595,13 @@ class CudaDecoder {
   void GetSameFSTStateTokenList(ChannelId ichannel, InfoToken token,
                                 InfoToken **tok_beg,
                                 float2 **arc_extra_cost_beg, int32 *nprevs);
-  void LoadAndConsiderTokenForLattice(
+  void ConsiderTokenForLattice(
       ChannelId ichannel, int32 iprev, int32 total_ntokens, int32 token_idx,
       StateId fst_lattice_start, InfoToken *tok_beg, float2 *arc_extra_cost_beg,
-      CostType token_extra_cost, int32 *list_prev_token_idx,
+      CostType token_extra_cost, int32 list_prev_token_idx, int32 list_arc_idx,
       InfoToken *list_prev_token, CostType *this_arc_prev_token_extra_cost,
-      CostType *acoustic_cost, int32 *list_arc_idx, StateId *lattice_src_state,
-      bool *keep_arc, bool *dbg_found_zero);
+      CostType *acoustic_cost, StateId *lattice_src_state, bool *keep_arc,
+      bool *dbg_found_zero);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
