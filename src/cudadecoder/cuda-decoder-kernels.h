@@ -142,7 +142,6 @@ struct DeviceParams {
   CostType *d_fst_final_costs;
   int32 nstates;
   CostType default_beam;
-  bool generate_lattices;
   CostType lattice_beam;
   int32 init_channel_id;
   StateId init_state;
