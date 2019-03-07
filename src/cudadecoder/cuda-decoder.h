@@ -357,10 +357,6 @@ class CudaDecoder {
                                     std::vector<std::vector<T>> *vecvec);
 
   void CopyMainQueueDataToHost();
-  //
-  // Returns a unique id for each (iframe, fst_state) pair
-  // We need to be able to quickly identity a (iframe, fst_state) ID
-  int32 GetUniqueTokenID(int32 total_ntokens, int32 token_idx, InfoToken token);
 
   // Computes a set of static asserts on the static values
   // such as the defines : KALDI_CUDA_DECODER_MAX_N_LANES for example
@@ -524,6 +520,7 @@ class CudaDecoder {
 
   // Data storage. We store on host what we will need in
   // GetRawLattice/GetBestPath
+  // 2D array[ichannel][element_idx]
   std::vector<std::vector<InfoToken>> h_all_tokens_info_;
   std::vector<std::vector<CostType>> h_all_tokens_acoustic_cost_;
   std::vector<std::vector<InfoToken>> h_all_tokens_extra_prev_tokens_;
@@ -547,6 +544,17 @@ class CudaDecoder {
       list_finals_token_idx_and_cost_;
 
   // GetRawLattice helper
+  // Data used when building the lattice in GetRawLattice
+
+  // few typedef to make GetRawLattice easier to understand
+  // Returns a unique id for each (iframe, fst_state) pair
+  // We need to be able to quickly identity a (iframe, fst_state) ID
+  typedef int32 LatticeStateInternalId;
+  typedef StateId OutputLatticeState;
+  typedef int32 TokenId;
+  LatticeStateInternalId GetUniqueTokenID(int32 total_ntokens,
+                                          TokenId token_idx, InfoToken token);
+
   // Keeping track of a variety of info about states in the lattice
   // - token_extra_cost. A path going from the current lattice_state to the
   // end has an extra cost
@@ -555,53 +563,93 @@ class CudaDecoder {
   // the current lattice_state
   // to the final frame.
   // - fst_lattice_state is the StateId of the lattice_state in fst_out (in
-  // the output lattice)
+  // the output lattice). lattice_state is an internal state used in
+  // GetRawLattice.
   // - is_state_closed is true if the token_extra_cost has been read by
   // another token. It means that the
   // token_extra_cost value has been used, and if we modify token_extra_cost
-  // again, we may need to recompute things
+  // again, we may need to recompute the current frame (so that everyone uses
+  // the latest
+  // token_extra_cost value)
   struct RawLatticeState {
     CostType token_extra_cost;
-    StateId fst_lattice_state;
+    OutputLatticeState fst_lattice_state;
     bool is_state_closed;
   };
 
+  // [prev|curr]_f_raw_lattice_state_
+  // Used to get information about a lattice state (i.e. a (iframe, fst_state)
+  // pair)
+  // using its LatticeStateInternalId (its ID inside of the decoder)
+  // It gives us the OutputLatticeState (its ID in the output lattice)
+  // alongside with the extra_cost of that state in the lattice
+  // Those maps are used to build the external lattice using what we know
+  // internally
   // Using one map per frame. We always know to which frame a token belongs.
   // Using one big map slows everything down
-  std::unordered_map<int32, RawLatticeState> prev_f_raw_lattice_state_,
-      curr_f_raw_lattice_state_;
+  std::unordered_map<LatticeStateInternalId, RawLatticeState>
+      prev_f_raw_lattice_state_, curr_f_raw_lattice_state_;
   // We want the unicity of each arc_idx for one frame. Important because we
   // can replay a frame (and possibly add multiple time the same arc)
   std::unordered_set<int32> f_arc_idx_added_;
+  // When backtracking, we read tokens in the current frame (in
+  // q_curr_frame_todo_),
+  // we backtrack the associated arc, and we add the predecessor either to
+  // q_curr_frame_todo_ (non-emitting arc, same frame)
+  // or q_prev_frame_todo_ (emitting arc, source in previous frame)
   std::vector<std::pair<int32, InfoToken>> q_curr_frame_todo_;
   std::vector<std::pair<int32, InfoToken>> q_prev_frame_todo_;
+  // extra_cost_min_delta_ used in the must_replay_frame situation. Please read
+  // comments
+  // associated with must_replay_frame in GetRawLattice to understand what it
+  // does
   CostType extra_cost_min_delta_;
+
+  // Resets the GetRawLattice datastructures for a new lattice generation
+  void ResetDataForGetRawLattice();
+  // Using the output from GetBestPath, we add the best tokens (as selected in
+  // GetBestCost)
+  // from the final frame to the output lattice. We also fill the data
+  // structures
+  // (such as q_curr_frame_todo_, or curr_f_raw_lattice_state_) accordingly
   void AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
                                Lattice *fst_out);
-  void AddArcToLattice(int32 list_arc_idx, int32 list_prev_token_idx,
+  // Check if a token should be added to the lattice. If it should, then
+  // keep_arc will be true
+  void ConsiderTokenForLattice(
+      ChannelId ichannel, int32 iprev, int32 total_ntokens, TokenId token_idx,
+      OutputLatticeState fst_lattice_start, InfoToken *tok_beg,
+      float2 *arc_extra_cost_beg, CostType token_extra_cost,
+      TokenId list_prev_token_idx, int32 list_arc_idx,
+      InfoToken *list_prev_token, CostType *this_arc_prev_token_extra_cost,
+      CostType *acoustic_cost, OutputLatticeState *lattice_src_state,
+      bool *keep_arc, bool *dbg_found_zero);
+  // Add the arc to the lattice. Also updates what needs to be updated in the
+  // GetRawLattice datastructures.
+  void AddArcToLattice(int32 list_arc_idx, TokenId list_prev_token_idx,
                        InfoToken list_prev_token, int32 curr_frame_offset,
                        CostType acoustic_cost,
                        CostType this_arc_prev_token_extra_cost,
-                       StateId lattice_src_state, StateId fst_lattice_start,
-                       StateId to_fst_lattice_state, Lattice *fst_out,
-                       bool *must_replay_frame);
-
-  void ResetDataForGetRawLattice();
-
-  void GetTokenRawLatticeData(int32 token_idx, InfoToken token,
+                       LatticeStateInternalId src_state_internal_id,
+                       OutputLatticeState fst_lattice_start,
+                       OutputLatticeState to_fst_lattice_state,
+                       Lattice *fst_out, bool *must_replay_frame);
+  // Read a token information
+  void GetTokenRawLatticeData(TokenId token_idx, InfoToken token,
                               int32 total_ntokens, CostType *token_extra_cost,
-                              StateId *to_fst_lattice_state);
+                              OutputLatticeState *to_fst_lattice_state);
 
+  // A token is an instance of an arc. It goes to a FST state (token.next_state)
+  // Multiple token in the same frame can go to the same FST state.
+  // GetSameFSTStateTokenList
+  // returns that list
   void GetSameFSTStateTokenList(ChannelId ichannel, InfoToken token,
                                 InfoToken **tok_beg,
                                 float2 **arc_extra_cost_beg, int32 *nprevs);
-  void ConsiderTokenForLattice(
-      ChannelId ichannel, int32 iprev, int32 total_ntokens, int32 token_idx,
-      StateId fst_lattice_start, InfoToken *tok_beg, float2 *arc_extra_cost_beg,
-      CostType token_extra_cost, int32 list_prev_token_idx, int32 list_arc_idx,
-      InfoToken *list_prev_token, CostType *this_arc_prev_token_extra_cost,
-      CostType *acoustic_cost, StateId *lattice_src_state, bool *keep_arc,
-      bool *dbg_found_zero);
+
+  // Swap datastructures at the end of a frame. prev becomes curr (we go
+  // backward)
+  void SwapPrevAndCurrLatticeMap(int32 iframe, bool dbg_found_best_path);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
