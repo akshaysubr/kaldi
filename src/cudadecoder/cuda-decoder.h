@@ -85,9 +85,11 @@
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
 // When applying max_active we don't keep exactly max_active_ tokens,
 // but a bit more. And we can call ApplyMaxActiveAndReduceBeam multiple times
-// in the first frame (the first times as a pre-filter, the last time at the very end of the frame)
-// Because keeping a bit more than max_active_ is expected, we add the tolerance 
-// so that we can avoid triggering ApplyMaxActiveAndReduceBeam for just a few tokens above the limit
+// in the first frame (the first times as a pre-filter, the last time at the
+// very end of the frame)
+// Because keeping a bit more than max_active_ is expected, we add the tolerance
+// so that we can avoid triggering ApplyMaxActiveAndReduceBeam for just a few
+// tokens above the limit
 // at the end of the frame
 #define KALDI_CUDA_DECODER_MAX_ACTIVE_TOLERANCE 0.2
 
@@ -251,6 +253,7 @@ class CudaDecoder {
       std::vector<std::pair<int32, CostType>> *argmins,
       std::vector<std::vector<std::pair<int, float>>> *list_lattice_tokens,
       std::vector<bool> *has_reached_final);
+
  private:
   // Data allocation. Called in constructor
   void AllocateDeviceData();
@@ -396,7 +399,7 @@ class CudaDecoder {
   //
   // Data members
   //
-  
+
   // The CudaFst data structure contains the FST graph
   // in the CSR format, on both the GPU and CPU memory
   const CudaFst fst_;
@@ -526,8 +529,8 @@ class CudaDecoder {
   CostType default_beam_;
   CostType lattice_beam_;
   int32 max_tokens_;
-  int32 max_active_; // Target value for the params
-  int32 max_active_thresh_; // target value + tolerance
+  int32 max_active_;         // Target value for the params
+  int32 max_active_thresh_;  // target value + tolerance
   int32 max_tokens_per_frame_;
   // Hashmap capacity. Multiple of max_tokens_per_frame
   int32 hashmap_capacity_;
@@ -547,9 +550,11 @@ class CudaDecoder {
   std::vector<std::vector<InfoToken>> h_all_tokens_info_;
   std::vector<std::vector<CostType>> h_all_tokens_acoustic_cost_;
   std::vector<std::vector<InfoToken>> h_all_tokens_extra_prev_tokens_;
-  std::vector<std::vector<float2>> h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_;
+  std::vector<std::vector<float2>>
+      h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_;
   // Pinned memory arrays. Used for the DeviceToHost copies
-  float2 *h_extra_and_acoustic_cost_concat__, *d_extra_and_acoustic_cost_concat__;
+  float2 *h_extra_and_acoustic_cost_concat__,
+      *d_extra_and_acoustic_cost_concat__;
   InfoToken *h_infotoken_concat_, *d_infotoken_concat_;
   CostType *h_acoustic_cost_concat_, *d_acoustic_cost_concat_;
   InfoToken *h_extra_prev_tokens_concat_;

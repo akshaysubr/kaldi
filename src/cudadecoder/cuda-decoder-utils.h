@@ -19,8 +19,8 @@
 #define KALDI_DECODER_CUDA_DECODER_UTILS_H_
 #include <cuda_runtime_api.h>
 #include <string>
-#include "util/stl-utils.h"
 #include "cudamatrix/cu-device.h"
+#include "util/stl-utils.h"
 
 #define KALDI_CUDA_DECODER_DIV_ROUND_UP(a, b) ((a + b - 1) / b)
 
@@ -111,7 +111,7 @@ class DeviceMatrix {
   }
 
  protected:
- int32 ld_;     // leading dimension
+  int32 ld_;     // leading dimension
   int32 nrows_;  // leading dimension
  public:
   DeviceMatrix() : data_(NULL), ld_(0), nrows_(0) {}
@@ -355,9 +355,9 @@ struct __align__(16) HashmapValueT {
   int2 min_and_argmin_int_cost;
 };
 enum OVERFLOW_TYPE {
-	OVERFLOW_NONE = 0,
-	OVERFLOW_MAIN_Q = 1,
-	OVERFLOW_AUX_Q = 2
+  OVERFLOW_NONE = 0,
+  OVERFLOW_MAIN_Q = 1,
+  OVERFLOW_AUX_Q = 2
 };
 
 enum QUEUE_ID { MAIN_Q = 0, AUX_Q = 1 };

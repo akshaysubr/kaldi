@@ -55,7 +55,7 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
   // and all the data used by the decoder.
   // When calling InitDecoding() on a new channel, we simply clone this special
   // channel into that new channel
-  ++nchannels_;  // adding the special initial channel
+  ++nchannels_;                       // adding the special initial channel
   init_channel_id_ = nchannels_ - 1;  // Using last one as init_channel_params
   AllocateHostData();
   AllocateDeviceData();
@@ -74,7 +74,8 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
 }
 
 void CudaDecoder::AllocateDeviceData() {
-  hashmap_capacity_ = KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR * max_tokens_per_frame_;
+  hashmap_capacity_ =
+      KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR * max_tokens_per_frame_;
   d_channels_counters_.Resize(nchannels_, 1);
   d_lanes_counters_.Resize(nlanes_, 1);
   d_main_q_state_and_cost_.Resize(nchannels_, max_tokens_per_frame_);
@@ -98,23 +99,28 @@ void CudaDecoder::AllocateDeviceData() {
   d_hashmap_values_.Resize(nlanes_, hashmap_capacity_);
   d_main_q_acoustic_cost_.Resize(nlanes_, max_tokens_per_frame_);
   d_aux_q_acoustic_cost_.Resize(nlanes_, max_tokens_per_frame_);
-  d_extra_and_acoustic_cost_concat_matrix.Resize(nlanes_, max_tokens_per_frame_);
-  d_extra_and_acoustic_cost_concat__ = d_extra_and_acoustic_cost_concat_matrix.lane(0);
+  d_extra_and_acoustic_cost_concat_matrix.Resize(nlanes_,
+                                                 max_tokens_per_frame_);
+  d_extra_and_acoustic_cost_concat__ =
+      d_extra_and_acoustic_cost_concat_matrix.lane(0);
   d_acoustic_cost_concat_ = d_aux_q_acoustic_cost_.lane(0);
   d_infotoken_concat_ = d_aux_q_info_.lane(0);
 }
 
 void CudaDecoder::AllocateHostData() {
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_extra_and_acoustic_cost_concat__, nlanes_ * max_tokens_per_frame_ *
-                                            sizeof(*h_extra_and_acoustic_cost_concat__)));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(
+      cudaMallocHost(&h_extra_and_acoustic_cost_concat__,
+                     nlanes_ * max_tokens_per_frame_ *
+                         sizeof(*h_extra_and_acoustic_cost_concat__)));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(
       &h_acoustic_cost_concat_,
       nlanes_ * max_tokens_per_frame_ * sizeof(*h_acoustic_cost_concat_)));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(
       &h_extra_prev_tokens_concat_,
       nlanes_ * max_tokens_per_frame_ * sizeof(*h_extra_prev_tokens_concat_)));
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(&h_infotoken_concat_, nlanes_ * max_tokens_per_frame_ *
-                                           sizeof(*h_infotoken_concat_)));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(
+      &h_infotoken_concat_,
+      nlanes_ * max_tokens_per_frame_ * sizeof(*h_infotoken_concat_)));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(
       cudaMallocHost(&h_lanes_counters_, nlanes_ * sizeof(*h_lanes_counters_)));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMallocHost(
@@ -124,7 +130,8 @@ void CudaDecoder::AllocateHostData() {
   h_all_tokens_extra_prev_tokens_.resize(nchannels_);
   h_all_tokens_info_.resize(nchannels_);
   for (int32 ichannel = 0; ichannel < nchannels_; ++ichannel) {
-    h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel].reserve(max_tokens_);
+    h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel].reserve(
+        max_tokens_);
     h_all_tokens_acoustic_cost_[ichannel].reserve(max_tokens_);
     h_all_tokens_info_[ichannel].reserve(max_tokens_);
   }
@@ -137,9 +144,9 @@ void CudaDecoder::AllocateHostData() {
 }
 
 void CudaDecoder::InitDeviceData() {
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(d_histograms_.lane(0), 0,
-                  sizeof(int32) * KALDI_CUDA_DECODER_HISTO_NBINS * nlanes_,
-                  compute_st_));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(
+      d_histograms_.lane(0), 0,
+      sizeof(int32) * KALDI_CUDA_DECODER_HISTO_NBINS * nlanes_, compute_st_));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaMemsetAsync(
       d_channels_counters_.MutableData(), 0,
       nchannels_ * sizeof(*d_channels_counters_.MutableData()), compute_st_));
@@ -160,11 +167,10 @@ void CudaDecoder::InitHostData() {
   // We will set it as close as possible to max_active, and we don't want to
   // keep calling the histograms kernels for a few tokens above the limit
   int32 tolerance = max_active_ * KALDI_CUDA_DECODER_MAX_ACTIVE_TOLERANCE;
-  //Checking for overflow
+  // Checking for overflow
   int32 overflow_limit = INT_MAX - tolerance;
-  max_active_thresh_ = (max_active_ < overflow_limit) 
-	  ? (max_active_ + tolerance)
-	  : INT_MAX;
+  max_active_thresh_ =
+      (max_active_ < overflow_limit) ? (max_active_ + tolerance) : INT_MAX;
 }
 
 void CudaDecoder::AllocateDeviceKernelParams() {
@@ -248,7 +254,8 @@ CudaDecoder::~CudaDecoder() {
 
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_lanes_counters_));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_channels_counters_));
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_extra_and_acoustic_cost_concat__));
+  KALDI_DECODER_CUDA_API_CHECK_ERROR(
+      cudaFreeHost(h_extra_and_acoustic_cost_concat__));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_acoustic_cost_concat_));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_extra_prev_tokens_concat_));
   KALDI_DECODER_CUDA_API_CHECK_ERROR(cudaFreeHost(h_infotoken_concat_));
@@ -334,7 +341,8 @@ void CudaDecoder::InitDecoding(const std::vector<ChannelId> &channels) {
     h_all_tokens_extra_prev_tokens_[ichannel] =
         h_all_tokens_extra_prev_tokens_[init_channel_id_];
     h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel] =
-        h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[init_channel_id_];
+        h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_
+            [init_channel_id_];
 
     int32 n_initial_tokens = h_all_tokens_info_[init_channel_id_].size();
 
@@ -464,7 +472,6 @@ void CudaDecoder::ApplyMaxActiveAndReduceBeam(enum QUEUE_ID queue_id) {
   };
   int32 max_q_end = (queue_id == AUX_Q) ? GetMaxForAllLanes(func_aux_q_end)
                                         : GetMaxForAllLanes(func_main_q_end);
-
 
   if (max_q_end <= max_active_thresh_) {
     // The queues are already smaller than max_active_thresh_
@@ -685,8 +692,9 @@ void CudaDecoder::CopyMainQueueDataToHost() {
                             compute_st_, &h_n_extra_prev_tokens_lane_offsets_);
     PerformConcatenatedCopy(func_main_q_n_extra_prev_tokens,
                             h_device_params_->d_main_q_extra_and_acoustic_cost,
-                            d_extra_and_acoustic_cost_concat__, h_extra_and_acoustic_cost_concat__,
-                            compute_st_, &h_n_extra_prev_tokens_lane_offsets_);
+                            d_extra_and_acoustic_cost_concat__,
+                            h_extra_and_acoustic_cost_concat__, compute_st_,
+                            &h_n_extra_prev_tokens_lane_offsets_);
   }
 
   // Moving infotokens to vecs
@@ -700,9 +708,9 @@ void CudaDecoder::CopyMainQueueDataToHost() {
   MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
                                h_extra_prev_tokens_concat_,
                                &h_all_tokens_extra_prev_tokens_);
-  MoveConcatenatedCopyToVector(h_n_extra_prev_tokens_lane_offsets_,
-                               h_extra_and_acoustic_cost_concat__,
-                               &h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_);
+  MoveConcatenatedCopyToVector(
+      h_n_extra_prev_tokens_lane_offsets_, h_extra_and_acoustic_cost_concat__,
+      &h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_);
 }
 
 void CudaDecoder::AdvanceDecoding(
@@ -996,8 +1004,9 @@ void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
         bool found_best = false;
         for (auto i = 0; i < size; ++i) {
           CostType arc_extra_cost =
-              h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel][offset + i]
-                  .x;
+              h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel]
+                                                                     [offset +
+                                                                      i].x;
           // Picking one arc on the best path (extra_cost == 0)
           if (arc_extra_cost == 0.0f) {
             InfoToken list_token =
@@ -1276,25 +1285,25 @@ void CudaDecoder::AddArcToLattice(int32 list_arc_idx,
 }
 
 void CudaDecoder::ResetDataForGetRawLattice() {
-    // Using one map per frame. We always know to which frame a token belongs.
-    // Using one big map slows everything down
-    prev_f_raw_lattice_state_.clear();
-    curr_f_raw_lattice_state_.clear();
-    // We want the unicity of each arc_idx for one frame. Important because we
-    // can replay a frame (and possibly add multiple time the same arc)
-    f_arc_idx_added_.clear();
+  // Using one map per frame. We always know to which frame a token belongs.
+  // Using one big map slows everything down
+  prev_f_raw_lattice_state_.clear();
+  curr_f_raw_lattice_state_.clear();
+  // We want the unicity of each arc_idx for one frame. Important because we
+  // can replay a frame (and possibly add multiple time the same arc)
+  f_arc_idx_added_.clear();
 
-    // Keeping track of which tokens need to be computed. Think of those as FIFO
-    // queues, except that we don't want to pop the front right away, because we
-    // may replay a frame
-    // (and we need to remember what's in that frame)
-    // We are also not using an iterator through the
-    // [prev|curr]_f_raw_lattice_state because we are
-    // sometimes adding stuff in q_curr_frame_todo_ while reading it.
-    // We can possibly add the new element before the current map iterator
-    // (and we wouldn't read it)
-    q_curr_frame_todo_.clear();
-    q_prev_frame_todo_.clear();
+  // Keeping track of which tokens need to be computed. Think of those as FIFO
+  // queues, except that we don't want to pop the front right away, because we
+  // may replay a frame
+  // (and we need to remember what's in that frame)
+  // We are also not using an iterator through the
+  // [prev|curr]_f_raw_lattice_state because we are
+  // sometimes adding stuff in q_curr_frame_todo_ while reading it.
+  // We can possibly add the new element before the current map iterator
+  // (and we wouldn't read it)
+  q_curr_frame_todo_.clear();
+  q_prev_frame_todo_.clear();
 }
 
 void CudaDecoder::GetTokenRawLatticeData(
@@ -1317,10 +1326,9 @@ void CudaDecoder::GetTokenRawLatticeData(
   to_map_it->second.is_state_closed = true;
 }
 
-void CudaDecoder::GetSameFSTStateTokenList(ChannelId ichannel, InfoToken token,
-                                           InfoToken **tok_beg,
-                                           float2 **extra_extra_and_acoustic_cost_beg,
-                                           int32 *nsame) {
+void CudaDecoder::GetSameFSTStateTokenList(
+    ChannelId ichannel, InfoToken token, InfoToken **tok_beg,
+    float2 **extra_extra_and_acoustic_cost_beg, int32 *nsame) {
   // We now need to consider all tokens related to that (iframe,
   // fst_state)
   // with fst_state being the state this current token is linked to
@@ -1346,7 +1354,8 @@ void CudaDecoder::GetSameFSTStateTokenList(ChannelId ichannel, InfoToken token,
     std::tie(offset, size) = token.GetNextStateTokensList();
     *tok_beg = &h_all_tokens_extra_prev_tokens_[ichannel][offset];
     *extra_extra_and_acoustic_cost_beg =
-        &h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel][offset];
+        &h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel]
+                                                                [offset];
     *nsame = size;
   }
 }
@@ -1468,7 +1477,8 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
       // changed more than extra_cost_min_delta_
       bool must_replay_frame;
 
-      // dbg_found_best_path is used in an useful assert, making sure the best path is still there for each frame
+      // dbg_found_best_path is used in an useful assert, making sure the best
+      // path is still there for each frame
       // if something went wrong in the kernels, it's not likely we respect that
       // property out of luck
       bool dbg_found_best_path = false;
@@ -1484,56 +1494,59 @@ void CudaDecoder::GetRawLattice(const std::vector<ChannelId> &channels,
           InfoToken token;
           std::tie(token_idx, token) = q_curr_frame_todo_[u];
           KALDI_ASSERT(token_idx >= curr_frame_offset);
-	  CostType token_extra_cost;
-	  StateId to_fst_lattice_state;
-	  // Loading the current extra_cost of that token
-	  // + its associated state in the lattice
-	  GetTokenRawLatticeData(token_idx,
-		token,
-		total_ntokens,
-		&token_extra_cost,
-		&to_fst_lattice_state);
+          CostType token_extra_cost;
+          StateId to_fst_lattice_state;
+          // Loading the current extra_cost of that token
+          // + its associated state in the lattice
+          GetTokenRawLatticeData(token_idx, token, total_ntokens,
+                                 &token_extra_cost, &to_fst_lattice_state);
           dbg_found_best_path |= (token_extra_cost == 0.0f);
 
-	  InfoToken *tok_beg;
-	  float2 *extra_extra_and_acoustic_cost_beg;
-	  int32 nsamestate;
-	  // Getting the list of the tokens linked to the same FST state, in the same frame
-	  // In the GPU decoder a token is linked to a single arc, but we can generate 
-	  // multiple token for a same fst_nextstate in the same frame.
-	  // In the CPU decoder we would use the forward_links list to store everything in the same metatoken
-	  // GetSameFSTStateTokenList returns the list of tokens linked to the same FST state than token
-	  // (in the current frame)
-	  GetSameFSTStateTokenList(ichannel, token, &tok_beg, &extra_extra_and_acoustic_cost_beg, &nsamestate); 
+          InfoToken *tok_beg;
+          float2 *extra_extra_and_acoustic_cost_beg;
+          int32 nsamestate;
+          // Getting the list of the tokens linked to the same FST state, in the
+          // same frame
+          // In the GPU decoder a token is linked to a single arc, but we can
+          // generate
+          // multiple token for a same fst_nextstate in the same frame.
+          // In the CPU decoder we would use the forward_links list to store
+          // everything in the same metatoken
+          // GetSameFSTStateTokenList returns the list of tokens linked to the
+          // same FST state than token
+          // (in the current frame)
+          GetSameFSTStateTokenList(ichannel, token, &tok_beg,
+                                   &extra_extra_and_acoustic_cost_beg,
+                                   &nsamestate);
 
-	  // Used for debugging. For each FST state, we have a token with the best cost for that FST state
-	  // that token has an extra_cost of 0.0f. This is a sanity check
+          // Used for debugging. For each FST state, we have a token with the
+          // best cost for that FST state
+          // that token has an extra_cost of 0.0f. This is a sanity check
           bool dbg_found_zero = false;
           for (int32 iprev = 0; iprev < nsamestate; ++iprev) {
-		  int32 list_prev_token_idx, list_arc_idx;
-		  InfoToken list_prev_token;
-		  CostType acoustic_cost, this_arc_prev_token_extra_cost;
-		  bool keep_arc;
-                  LatticeStateInternalId src_state_internal_id;
-                  InfoToken list_token = tok_beg[iprev];
-                  list_prev_token_idx = list_token.prev_token;
-                  list_arc_idx = list_token.arc_idx;
+            int32 list_prev_token_idx, list_arc_idx;
+            InfoToken list_prev_token;
+            CostType acoustic_cost, this_arc_prev_token_extra_cost;
+            bool keep_arc;
+            LatticeStateInternalId src_state_internal_id;
+            InfoToken list_token = tok_beg[iprev];
+            list_prev_token_idx = list_token.prev_token;
+            list_arc_idx = list_token.arc_idx;
 
-                  ConsiderTokenForLattice(
-                      ichannel, iprev, total_ntokens, token_idx,
-                      fst_lattice_start, tok_beg, extra_extra_and_acoustic_cost_beg,
-                      token_extra_cost, list_prev_token_idx, list_arc_idx,
-                      &list_prev_token, &this_arc_prev_token_extra_cost,
-                      &acoustic_cost, &src_state_internal_id, &keep_arc,
-                      &dbg_found_zero);
+            ConsiderTokenForLattice(
+                ichannel, iprev, total_ntokens, token_idx, fst_lattice_start,
+                tok_beg, extra_extra_and_acoustic_cost_beg, token_extra_cost,
+                list_prev_token_idx, list_arc_idx, &list_prev_token,
+                &this_arc_prev_token_extra_cost, &acoustic_cost,
+                &src_state_internal_id, &keep_arc, &dbg_found_zero);
 
-                  if (keep_arc)
-                    AddArcToLattice(
-                        list_arc_idx, list_prev_token_idx, list_prev_token,
-                        curr_frame_offset, acoustic_cost,
-                        this_arc_prev_token_extra_cost, src_state_internal_id,
-                        fst_lattice_start, to_fst_lattice_state, fst_out,
-                        &must_replay_frame);
+            if (keep_arc)
+              AddArcToLattice(list_arc_idx, list_prev_token_idx,
+                              list_prev_token, curr_frame_offset, acoustic_cost,
+                              this_arc_prev_token_extra_cost,
+                              src_state_internal_id, fst_lattice_start,
+                              to_fst_lattice_state, fst_out,
+                              &must_replay_frame);
           }
           KALDI_ASSERT(dbg_found_zero);
         }

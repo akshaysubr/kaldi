@@ -55,8 +55,6 @@ __global__ void concatenate_lanes_data(DeviceParams cst_dev_params,
                                        KernelParams params,
                                        LaneMatrixInterface<T> src, T *concat);
 
-
-
 __global__ void init_hashmap_kernel(DeviceParams cst_dev_params);
 __global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,
                                           KernelParams params);

@@ -1674,7 +1674,8 @@ __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
     }
 
     // Not using the macros 1D_LOOP because that loop is only within a CTA
-    for (int32 bin_id_w = threadIdx.x; bin_id_w < KALDI_CUDA_DECODER_HISTO_NBINS;
+    for (int32 bin_id_w = threadIdx.x;
+         bin_id_w < KALDI_CUDA_DECODER_HISTO_NBINS;
          bin_id_w += KALDI_CUDA_DECODER_1D_BLOCK) {
       // Writing the local histo to global
       // We don't care about the last bin (cf above)
@@ -1723,7 +1724,8 @@ __global__ void update_beam_using_histogram_kernel(DeviceParams cst_dev_params,
       if (val != 0 && prefix_sum < max_active &&
           (prefix_sum + val) >= max_active) {
         // We found our new beam
-        CostType new_beam = (beam / KALDI_CUDA_DECODER_HISTO_NBINS) * (bin_id + 1);
+        CostType new_beam =
+            (beam / KALDI_CUDA_DECODER_HISTO_NBINS) * (bin_id + 1);
         IntegerCostType new_int_beam = floatToOrderedInt(new_beam);
         lane_counters->int_beam = new_int_beam;
         lane_counters->adaptive_int_beam_with_validity_index.x = new_int_beam;
