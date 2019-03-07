@@ -341,34 +341,26 @@ struct __align__(8) InfoToken {
     return {prev_token, -arc_idx};
   }
 };
-
 //
-// InfoTokenVector
-// Vector for InfoToken that uses CPU pinned memory
-// We use it to transfer the relevant parts of the tokens
-// back to the CPU memory
-//
-class InfoTokenVector {
-  int32 capacity_, size_;
-  // Stream used for the async copies device->host
-  cudaStream_t copy_st_;
-  InfoToken *h_data_;
-
- public:
-  InfoTokenVector(int32 initial_capacity, cudaStream_t copy_st_);
-  InfoTokenVector(const InfoTokenVector &other);  // TODO refactor
-  void Clone(const InfoTokenVector &other);
-  void Reset();
-  void CopyFromDevice(InfoToken *d_ptr, int32 count);
-  int32 Size() const { return size_; }
-  void Reserve(int32 min_capacity);
-  InfoToken *GetRawPointer() const;
-  virtual ~InfoTokenVector();
-};
-
 //
 // Hashmap
 //
+
+struct __align__(16) HashmapValueT {
+  // Map key : fst state
+  int key;
+  // Number of tokens associated to that state
+  int count;
+  // minimum cost for that state + argmin
+  int2 min_and_argmin_int_cost;
+};
+enum OVERFLOW_TYPE {
+	OVERFLOW_NONE = 0,
+	OVERFLOW_MAIN_Q = 1,
+	OVERFLOW_AUX_Q = 2
+};
+
+enum QUEUE_ID { MAIN_Q = 0, AUX_Q = 1 };
 
 }  // end namespace CudaDecode
 }  // end namespace kaldi

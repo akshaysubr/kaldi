@@ -55,14 +55,7 @@ __global__ void concatenate_lanes_data(DeviceParams cst_dev_params,
                                        KernelParams params,
                                        LaneMatrixInterface<T> src, T *concat);
 
-struct __align__(16) HashmapValueT {
-  // Map key : fst state
-  int key;
-  // Number of tokens associated to that state
-  int count;
-  // minimum cost for that state + argmin
-  int2 min_and_argmin_int_cost;
-};
+
 
 __global__ void init_hashmap_kernel(DeviceParams cst_dev_params);
 __global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,

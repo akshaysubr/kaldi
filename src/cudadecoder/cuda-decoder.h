@@ -83,24 +83,16 @@
 // m = y / KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT 4
 #define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
+// When applying max_active we don't keep exactly max_active_ tokens,
+// but a bit more. And we can call ApplyMaxActiveAndReduceBeam multiple times
+// in the first frame (the first times as a pre-filter, the last time at the very end of the frame)
+// Because keeping a bit more than max_active_ is expected, we add the tolerance 
+// so that we can avoid triggering ApplyMaxActiveAndReduceBeam for just a few tokens above the limit
+// at the end of the frame
+#define KALDI_CUDA_DECODER_MAX_ACTIVE_TOLERANCE 0.2
 
 namespace kaldi {
 namespace CudaDecode {
-enum OVERFLOW_TYPE {
-  OVERFLOW_NONE = 0,
-  OVERFLOW_MAIN_Q = 1,
-  OVERFLOW_AUX_Q = 2
-};
-
-enum QUEUE_ID { MAIN_Q = 0, AUX_Q = 1 };
-
-// Forward declaration
-class DeviceParams;
-class KernelParams;
-class HashmapValueT;  // TODO why forward?
-
-class CudaDecoder;
-
 struct CudaDecoderConfig {
   BaseFloat default_beam;
   BaseFloat lattice_beam;
@@ -140,6 +132,12 @@ struct CudaDecoderConfig {
                  max_active > 1);
   }
 };
+
+// Forward declaration.
+// Those contains CUDA code. We don't want to include their definition
+// in this header
+class DeviceParams;
+class KernelParams;
 
 class CudaDecoder {
  public:
@@ -197,7 +195,6 @@ class CudaDecoder {
   // InitDecoding initializes the decoding, and should only be used if you
   // intend to call AdvanceDecoding() on the channels listed in channels
   void InitDecoding(const std::vector<ChannelId> &channels);
-
   // AdvanceDecoding on a given batch
   // a batch is defined by the channels vector
   // We can compute N channels at the same time (in the same batch)
@@ -224,7 +221,6 @@ class CudaDecoder {
 
   // Returns the number of frames already decoded in a given channel
   int32 NumFramesDecoded(ChannelId ichannel) const;
-
   // GetBestPath gets the one-best decoding traceback. If "use_final_probs" is
   // true
   // AND we reached a final state, it limits itself to final states;
@@ -241,7 +237,6 @@ class CudaDecoder {
   // final-probs.
   void GetRawLattice(const std::vector<ChannelId> &channels,
                      std::vector<Lattice *> &fst_out_vec, bool use_final_probs);
-
   // GetBestCost finds the best cost in the last tokens queue
   // for each channel in channels. If isfinal is true,
   // we also add the final cost to the token costs before
@@ -256,7 +251,6 @@ class CudaDecoder {
       std::vector<std::pair<int32, CostType>> *argmins,
       std::vector<std::vector<std::pair<int, float>>> *list_lattice_tokens,
       std::vector<bool> *has_reached_final);
-
  private:
   // Data allocation. Called in constructor
   void AllocateDeviceData();
@@ -391,19 +385,21 @@ class CudaDecoder {
   void MoveConcatenatedCopyToVector(const std::vector<int32> &lanes_offsets,
                                     T *h_concat,
                                     std::vector<std::vector<T>> *vecvec);
-
-
   // Computes a set of static asserts on the static values
   // such as the defines : KALDI_CUDA_DECODER_MAX_N_LANES for example
   // In theory we should do them at compile time
   void CheckStaticAsserts();
+  // Can be called in GetRawLattice to do a bunch of deep asserts on the data
+  // Slow, so disabled by default
   void DebugValidateLattice();
+
+  //
   // Data members
-
+  //
+  
   // The CudaFst data structure contains the FST graph
-  // in the CSR format
+  // in the CSR format, on both the GPU and CPU memory
   const CudaFst fst_;
-
   // Counters used by a decoder lane
   // Contains all the single values generated during computation,
   // such as the current size of the main_q, the number of arcs currently in
@@ -509,6 +505,8 @@ class CudaDecoder {
   DeviceLaneMatrix<int2> d_aux_q_state_and_cost_;
   DeviceLaneMatrix<CostType> d_aux_q_acoustic_cost_;
   DeviceLaneMatrix<InfoToken> d_aux_q_info_;
+  // Dedicated space for the concat of extra_cost. We should reuse memory
+  DeviceLaneMatrix<float2> d_extra_and_acoustic_cost_concat_matrix;
   // Parameters used by the kernels
   // DeviceParams contains all the parameters that won't change
   // i.e. memory address of the main_q for instance
@@ -528,7 +526,8 @@ class CudaDecoder {
   CostType default_beam_;
   CostType lattice_beam_;
   int32 max_tokens_;
-  int32 max_active_;
+  int32 max_active_; // Target value for the params
+  int32 max_active_thresh_; // target value + tolerance
   int32 max_tokens_per_frame_;
   // Hashmap capacity. Multiple of max_tokens_per_frame
   int32 hashmap_capacity_;
@@ -548,9 +547,9 @@ class CudaDecoder {
   std::vector<std::vector<InfoToken>> h_all_tokens_info_;
   std::vector<std::vector<CostType>> h_all_tokens_acoustic_cost_;
   std::vector<std::vector<InfoToken>> h_all_tokens_extra_prev_tokens_;
-  std::vector<std::vector<float2>> h_all_tokens_extra_prev_tokens_extra_cost_;
+  std::vector<std::vector<float2>> h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_;
   // Pinned memory arrays. Used for the DeviceToHost copies
-  float2 *h_extra_cost_concat_, *d_extra_cost_concat_;
+  float2 *h_extra_and_acoustic_cost_concat__, *d_extra_and_acoustic_cost_concat__;
   InfoToken *h_infotoken_concat_, *d_infotoken_concat_;
   CostType *h_acoustic_cost_concat_, *d_acoustic_cost_concat_;
   InfoToken *h_extra_prev_tokens_concat_;
