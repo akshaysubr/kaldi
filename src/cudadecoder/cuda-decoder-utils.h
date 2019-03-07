@@ -17,19 +17,17 @@
 
 #ifndef KALDI_DECODER_CUDA_DECODER_UTILS_H_
 #define KALDI_DECODER_CUDA_DECODER_UTILS_H_
-#include <cuda_runtime_api.h>
-#include <string>
 #include "cudamatrix/cu-device.h"
 #include "util/stl-utils.h"
 
 #define KALDI_CUDA_DECODER_DIV_ROUND_UP(a, b) ((a + b - 1) / b)
 
-#define CUDA_DECODER_ASSERT(val, recoverable)                               \
-  {                                                                         \
-    if ((val) != true) {                                                    \
-      throw CudaDecoderException("CUDA_DECODER_ASSERT", __FILE__, __LINE__, \
-                                 recoverable)                               \
-    }                                                                       \
+#define KALDI_CUDA_DECODER_ASSERT(val, recoverable)                     \
+  {                                                                     \
+    if ((val) != true) {                                                \
+      throw CudaDecoderException("KALDI_CUDA_DECODER_ASSERT", __FILE__, \
+                                 __LINE__, recoverable)                 \
+    }                                                                   \
   }
 // Macro for checking cuda errors following a cuda launch or api call
 #define KALDI_DECODER_CUDA_CHECK_ERROR()                                  \
@@ -68,21 +66,19 @@
 #define KALDI_CUDA_DECODER_LARGEST_1D_BLOCK 1024
 #define KALDI_CUDA_DECODER_ONE_THREAD_BLOCK 1
 
+namespace kaldi {
+namespace CudaDecode {
+
+// Returning the number of CTAs to launch for (N,M) elements to compute
+// M is usually the batch size
 inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
   dim3 grid;
-  // TODO MAX_NUM_BLOCKS
+  // TODO MAX_NUM_BLOCKS.
   grid.x = KALDI_CUDA_DECODER_DIV_ROUND_UP(N, KALDI_CUDA_DECODER_1D_BLOCK);
   grid.y = M;
   return grid;
 }
 
-#include <cuda.h>
-#include "fst/fstlib.h"
-#include "nnet3/nnet-utils.h"
-#include "util/stl-utils.h"
-
-namespace kaldi {
-namespace CudaDecode {
 typedef float CostType;
 // IntegerCostType is the type used in the lookup table d_state_best_cost
 // and the d_cutoff
@@ -93,6 +89,18 @@ typedef int32 IntegerCostType;
 typedef int32 LaneId;
 typedef int32 ChannelId;
 
+// On the device we compute everything by batch
+// Data is stored as 2D matrices (BatchSize, 1D_Size)
+// For example, for the token queue, (BatchSize, max_tokens_per_frame_)
+// DeviceMatrix owns the data but is not used to access it.
+// DeviceMatrix is inherited in DeviceLaneMatrix and DeviceChannelMatrix
+// those two classes do the same thing, except that they belong either to a
+// channel or lane
+// that inheritance is done to clarify the code and help debugging
+//
+// To actually access the data, we should request an interface through
+// GetInterface
+// That interface contains both host and cuda code to access the data.
 template <typename T>
 // if necessary, make a version that always use ld_ as the next power of 2
 class DeviceMatrix {
@@ -136,6 +144,7 @@ class DeviceMatrix {
 
 // The interfaces contains CUDA code
 // We will declare them in a .cu file
+// Only doing a forward declaration for now
 template <typename T>
 class LaneMatrixInterface;
 template <typename T>
@@ -162,135 +171,99 @@ class DeviceChannelMatrix : public DeviceMatrix<T> {
   }
 };
 
+// LaneCounters/ChannelCounters
+// The counters are all the singular values associated to a lane/channel
+// For instance  the main queue size. Or the min_cost of all tokens in that
+// queue
+// LaneCounters are used during computation
 struct LaneCounters {
   // Contains both main_q_end and narcs
   // End index of the main queue
   // only tokens at index i with i < main_q_end
   // are valid tokens
-  // Each valid token the subqueue main_q[main_q_offset, main_q_end[ has
+  // Each valid token the subqueue main_q[main_q_local_offset, main_q_end[ has
   // a number of outgoing arcs (out-degree)
   // main_q_narcs is the sum of those numbers
-  //
-  // We sometime need to update both end and narcs at the same time,
+  // We sometime need to update both end and narcs at the same time using a
+  // single atomic,
   // which is why they're packed together
   int2 main_q_narcs_and_end;
   // contains the requested queue length which can
   // be larger then the actual queue length in the case of overflow
   int32 main_q_requested;
   int32 aux_q_requested;
-
-  // Some kernels need to perform some operations before exiting
-  // n_CTA_done is a counter that we increment when a CTA (CUDA blocks)
-  // is done
-  // Each CTA then tests the value for n_CTA_done to detect if it's the last to
-  // exit
-  // If that's the cast, it does what it has to do, and sets n_CTA_done back to
-  // 0
   int32 aux_q_end;
   int32 post_expand_aux_q_end;  // used for double buffering
+  // Some tokens in the same frame share the same token.next_state
+  // main_q_n_extra_prev_tokens is the count of those tokens
   int32 main_q_n_extra_prev_tokens;
-
   // Depending on the value of the parameter "max_tokens_per_frame"
   // we can end up with an overflow when generating the tokens for a frame
   // We try to prevent this from happening using an adaptive beam
-  // if an overflow happens, then the kernels no longer insert any data into
+  // If an overflow happens, then the kernels no longer insert any data into
   // the queues and set overflow flag to true.
   // queue length.
   // Even if that flag is set, we can continue the execution (quality
   // of the output can be lowered)
-  // We use that flag to display a warning to stderr
+  // We use that flag to display a warning to the user
   int32 q_overflow;
-
-  // ExpandArcs does not use at its input the complete main queue
-  // It only reads from the index range [main_q_local_offset, end[
+  // ExpandArcs reads the tokens in the index range [main_q_local_offset, end[
   int32 main_q_local_offset;
+  // We transfer the tokens back to the host at the end of each frame.
+  // Which means that tokens at a frame  n > 0 have an offset compared to to
+  // those
+  // in frame n-1. main_q_global_offset is the overall offset of the current
+  // main_q,
+  // since frame 0
+  // It is used to set the prev_token index.
   int32 main_q_global_offset;
+  // Same thing, but for main_q_n_extra_prev_tokens (those are also transfered
+  // back to host)
   int32 main_q_extra_prev_tokens_global_offset;
 
+  // Minimum token for that frame
   IntegerCostType min_int_cost;
+  // Current beam. Can be different from default_beam,
+  // because of the AdaptiveBeam process, or because of
+  // ApplyMaxActiveAndReduceBeam
   IntegerCostType int_beam;
+  // Adaptive beam. The validity says until which index this adaptive beam is
+  // valid.
+  // After that index, we need to lower the adaptive beam
   int2 adaptive_int_beam_with_validity_index;
 
-  IntegerCostType
-      int_cutoff;  // min_cost + beam (if min_cost < INF, otherwise INF)
+  // min_cost + beam
+  IntegerCostType int_cutoff;
 
-  // Only valid after calling GetBestCost
+  // --- Only valid after calling GetBestCost
+  // min_cost and its arg. Can be different than min_cost, because we may
+  // include final costs
   int2 min_int_cost_and_arg;
+  // Number of final tokens with cost < best + lattice_beam
   int32 nfinals;
-  int32 has_reached_final;
+  int32 has_reached_final;  // if there's at least one final token in the queue
 };
 
-//
-// Parameters used by a decoder channel
-// Their job is to save the state of the decoding
-// channel between frames
-//
+// Channel counters
+// Their job is to save the state of a channel, when this channel is idle
+// The channel counters are loaded into the lane counters during the context
+// switches
 struct ChannelCounters {
-  // Cutoff for the current frame
-  // Contains both the global min cost (min cost for that frame)
-  // And the current beam
-  // We use an adaptive beam, so the beam might change during computation
-  CostType prev_beam;
-
-  // main_q_end and main_q_narcs at the end of the previous frame
+  // All the following values are just saved values from LaneCounters
+  // from the latest context-switch
   int2 prev_main_q_narcs_and_end;
   int32 prev_main_q_n_extra_prev_tokens;
-
-  // The token at index i in the main queue has in reality
-  // a global index of (i + main_q_global_offset)
-  // This global index is unique and takes into account that
-  // we've flushed the main_q back to the host. We need unique indexes
-  // for each token in order to have valid token.prev_token data members
-  // and be able to backtrack at the end
   int32 prev_main_q_global_offset;
   int32 prev_main_q_extra_prev_tokens_global_offset;
+  CostType prev_beam;
 
   // Only valid after calling GetBestCost
   // different than min_int_cost : we include the "final" cost
   int2 min_int_cost_and_arg_with_final;
   int2 min_int_cost_and_arg_without_final;
-};
-//
-// Data structures used by the kernels
-//
-
-// Count of tokens and arcs in a queue
-// narcs = sum(number of arcs going out of token i next state) for each token
-// in the queue
-// We use this struct to keep the two int32s adjacent in memory
-// we need this in order to update both using an atomic64 operation
-struct TokenAndArcCount {
-  int32 ntokens;
-  int32 narcs;
+  //
 };
 
-// Union structure of the TokenAndArcCount
-// We use split to access the int32s
-// We use both to update both using an atomic64
-union TokenAndArcCountUnion {
-  TokenAndArcCount split;
-  unsigned long long both;
-};
-
-//
-// Used for the cutoff
-// cutoff = min_cost + beam
-// We store both separatly because we have an adaptive beam
-// We may change the beam after discovering min_cost
-// we need to keep track of min_cost to apply the new beam
-// (we don't know what the old beam was)
-//
-// Native float and Integers version
-//
-struct MinCostAndBeam {
-  CostType min_cost;
-  CostType beam;
-};
-
-struct MinCostAndBeamIntegers {
-  IntegerCostType min_cost;
-  IntegerCostType beam;
-};
 class CudaDecoderException : public std::exception {
  public:
   CudaDecoderException(const char *str_, const char *file_, int line_,
@@ -311,15 +284,15 @@ class CudaDecoderException : public std::exception {
 };
 
 // InfoToken contains data that needs to be saved for the backtrack
-// in GetBestPath
-// It will be moved back to CPU memory using a InfoTokenVector
+// in GetBestPath/GetRawLattice
+// We don't need the token.cost or token.next_state.
 struct __align__(8) InfoToken {
   int32 prev_token;
   int32 arc_idx;
   __host__ bool IsUniqueTokenForStateAndFrame() {
     // This is a trick used to save space and PCI-E bandwidth (cf
     // preprocess_in_place kernel)
-    // This token is associated with a (next) state s, created during the
+    // This token is associated with a next_state s, created during the
     // processing of frame f.
     // If we have multiple tokens associated with the state s in the frame f,
     // arc_idx < 0 and -arc_idx is the
@@ -341,11 +314,8 @@ struct __align__(8) InfoToken {
     return {prev_token, -arc_idx};
   }
 };
-//
-//
-// Hashmap
-//
 
+// Hashmap value. Used when computing the hashmap in PostProcessingMainQueue
 struct __align__(16) HashmapValueT {
   // Map key : fst state
   int key;
@@ -354,6 +324,7 @@ struct __align__(16) HashmapValueT {
   // minimum cost for that state + argmin
   int2 min_and_argmin_int_cost;
 };
+
 enum OVERFLOW_TYPE {
   OVERFLOW_NONE = 0,
   OVERFLOW_MAIN_Q = 1,
