@@ -26,13 +26,12 @@ for dataset in $datasets; do
 
     gpu=`echo $s*4+$l*2+$o | bc`
 
-    numanode=`echo "$gpu/($total_gpus/2)" | bc` 
     if [ $num_gpus -gt 1 ]; then
-      numacmd="numactl --cpunodebind=$numanode"
+      numacmd="numactl --cpunodebind=$s"
     else
       numacmd=""
     fi
-    #echo "s=$s l=$l o=$o stride=$stride gpu=$gpu"
+    #echo "s=$s l=$l o=$o gpu=$gpu"
     $numacmd ./run_benchmark.sh $gpu $dataset 2 $threads_per_gpu &> output.$d&
   done
   exit
