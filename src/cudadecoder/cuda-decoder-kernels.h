@@ -55,15 +55,6 @@ __global__ void concatenate_lanes_data(DeviceParams cst_dev_params,
                                        KernelParams params,
                                        LaneMatrixInterface<T> src, T *concat);
 
-struct __align__(16) HashmapValueT {
-  // Map key : fst state
-  int key;
-  // Number of tokens associated to that state
-  int count;
-  // minimum cost for that state + argmin
-  int2 min_and_argmin_int_cost;
-};
-
 __global__ void init_hashmap_kernel(DeviceParams cst_dev_params);
 __global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,
                                           KernelParams params);
@@ -121,7 +112,7 @@ struct DeviceParams {
 
   LaneMatrixInterface<int2> d_list_final_tokens_in_main_q;
 
-  LaneMatrixInterface<float2> d_main_q_extra_cost;
+  LaneMatrixInterface<float2> d_main_q_extra_and_acoustic_cost;
 
   LaneMatrixInterface<int32> d_histograms;
 
@@ -163,10 +154,8 @@ struct KernelParams {
   int32 nlanes_used;
 };
 
-int32 floatToOrderedIntHost(float floatVal);
-float orderedIntToFloatHost(int32 intVal);
-
 typedef unsigned char BinId;
 }  // namespace kaldi
 }  // namespace CudaDecode
+
 #endif
