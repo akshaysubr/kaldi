@@ -13,7 +13,7 @@ TESTFILES =
 
 OBJFILES += batched-threaded-cuda-decoder.o decodable-cumatrix.o
 ifeq ($(CUDA), true)
-  OBJFILES += cuda-decoder.o cuda-decoder-kernels.o cuda-decoder-utils.o cuda-fst.o
+  OBJFILES += cuda-decoder.o cuda-decoder-kernels.o cuda-fst.o
 endif
 
 LDFLAGS += $(CUDA_LDFLAGS)

@@ -154,10 +154,8 @@ struct KernelParams {
   int32 nlanes_used;
 };
 
-int32 floatToOrderedIntHost(float floatVal);
-float orderedIntToFloatHost(int32 intVal);
-
 typedef unsigned char BinId;
 }  // namespace kaldi
 }  // namespace CudaDecode
+
 #endif

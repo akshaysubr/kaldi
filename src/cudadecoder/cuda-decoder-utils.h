@@ -289,7 +289,7 @@ class CudaDecoderException : public std::exception {
 struct __align__(8) InfoToken {
   int32 prev_token;
   int32 arc_idx;
-  __host__ bool IsUniqueTokenForStateAndFrame() {
+  bool IsUniqueTokenForStateAndFrame() {
     // This is a trick used to save space and PCI-E bandwidth (cf
     // preprocess_in_place kernel)
     // This token is associated with a next_state s, created during the
@@ -308,12 +308,27 @@ struct __align__(8) InfoToken {
   // return the {offset,size} pair necessary to list those tokens in the
   // extra_prev_tokens list
   // They are stored at offset "offset", and we have "size" of those
-  __host__ std::pair<int32, int32> GetNextStateTokensList() {
+  std::pair<int32, int32> GetNextStateTokensList() {
     KALDI_ASSERT(!IsUniqueTokenForStateAndFrame());
 
     return {prev_token, -arc_idx};
   }
 };
+
+__inline__ int32 floatToOrderedIntHost(float floatVal) {
+  int32 intVal;
+  // Should be optimized away by compiler
+  memcpy(&intVal, &floatVal, sizeof(float));
+  return (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
+}
+
+__inline__ float orderedIntToFloatHost(int32 intVal) {
+  intVal = (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF;
+  float floatVal;
+  // Should be optimized away by compiler
+  memcpy(&floatVal, &intVal, sizeof(float));
+  return floatVal;
+}
 
 // Hashmap value. Used when computing the hashmap in PostProcessingMainQueue
 struct __align__(16) HashmapValueT {
