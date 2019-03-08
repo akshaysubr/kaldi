@@ -18,6 +18,8 @@
 #ifndef KALDI_DECODER_CUDA_DECODER_KERNELS_UTILS_H_
 #define KALDI_DECODER_CUDA_DECODER_KERNELS_UTILS_H_
 
+#include "util/stl-utils.h"
+
 namespace kaldi {
 namespace CudaDecode {
 
