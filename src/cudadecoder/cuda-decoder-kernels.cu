@@ -16,7 +16,7 @@
 // limitations under the License.
 
 #include <cub/cub.cuh>
-#include "cuda-decoder-kernels-utils.h"
+#include "cuda-decoder-kernels-utils.inc"  // TODO this is temporary. We'll switch back to a .h asap.
 #include "cuda-decoder-kernels.h"
 
 namespace kaldi {
