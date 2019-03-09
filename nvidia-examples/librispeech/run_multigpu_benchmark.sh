@@ -34,7 +34,7 @@ for dataset in $datasets; do
     #echo "s=$s l=$l o=$o gpu=$gpu"
     $numacmd ./run_benchmark.sh $gpu $dataset 2 $threads_per_gpu &> output.$d&
   done
-  exit
+  
   wait
 
   TOTAL_RTF=0
