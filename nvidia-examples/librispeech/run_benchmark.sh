@@ -132,4 +132,16 @@ for decoder in $DECODERS ; do
   done
 done
 
+echo "BENCHMARK SUMMARY:"
+for decoder in $DECODERS ; do
+  for test_set in $data_sets ; do
+    log_file="$result_path/log.$decoder.$test_set.out"
+    echo "    test_set: $test_set"
+    echo "        `cat $log_file | grep 'Overall:  Aggregate Total Time'` | cut -d ":" -f 1 | awk '{$1=$1};1'"
+    echo "        `cat $log_file | grep 'WER'`"
+    echo "        `cat $log_file | grep 'SER'`"
+    echo "        `cat $log_file | grep 'Scored'`"
+  done
+done
+
 exit $fail
