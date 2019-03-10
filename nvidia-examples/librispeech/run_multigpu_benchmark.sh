@@ -11,28 +11,12 @@ fi
 total_gpus=`nvidia-smi -q | grep "Product Name" | wc -l`
 total_threads=`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`
 threads_per_gpu=`echo $total_threads/$num_gpus | bc`
-half=`echo "($total_gpus+1)/2" | bc`
-fourth=`echo "($total_gpus+3)/4" | bc`
 
 for dataset in $datasets; do
   echo "Running $dataset on $num_gpus GPUs with $threads_per_gpu threads per GPU"
   
   for (( d = 0 ; d < $num_gpus ; d++ )); do
-    #swizzle GPUs to distributed across PCI-E lanes
-    #socket=fastest changing dimension, then lanes, then final offset
-    s=`echo "($d%2)" | bc`
-    l=`echo "($d/2)%2" | bc`
-    o=`echo "$d/$half" | bc`
-
-    gpu=`echo $s*4+$l*2+$o | bc`
-
-    if [ $num_gpus -gt 1 ]; then
-      numacmd="numactl --cpunodebind=$s"
-    else
-      numacmd=""
-    fi
-    #echo "s=$s l=$l o=$o gpu=$gpu"
-    $numacmd ./run_benchmark.sh $gpu $dataset 2 $threads_per_gpu &> output.$d&
+    ./run_benchmark.sh $d $dataset 2 $threads_per_gpu &> output.$d&
   done
   
   wait
