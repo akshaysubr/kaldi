@@ -39,10 +39,10 @@ for dataset in $datasets; do
 
   TOTAL_RTF=0
   for (( d = 0 ; d < $num_gpus ; d++ )); do
-    RTF=`cat output.$d | grep Aggregate | tail -n 1 | cut -d " " -f 11`
-    TOTAL_RTF=`echo $RTF + $TOTAL_RTF | bc`
+    RTF=`cat output.$d | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 11`
+    TOTAL_RTF=`echo "$RTF + ${TOTAL_RTF}" | bc`
     echo "GPU: $d RTF: $RTF"
   done
-  AVERAGE_RTF=`echo "scale=4; $TOTAL_RTF / $num_gpus" | bc -l`
-  echo "Total RTF: $TOTAL_RTF Average RTF: $AVERAGE_RTF"
+  AVERAGE_RTF=`echo "scale=4; ${TOTAL_RTF} / $num_gpus" | bc -l`
+  echo "Total RTF: ${TOTAL_RTF} Average RTF: $AVERAGE_RTF"
 done
