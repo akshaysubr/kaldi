@@ -100,7 +100,7 @@ typedef int32 ChannelId;
 //
 // To actually access the data, we should request an interface through
 // GetInterface
-// That interface contains both host and cuda code to access the data.
+// That interface contains cuda code to access the data.
 template <typename T>
 // if necessary, make a version that always use ld_ as the next power of 2
 class DeviceMatrix {
@@ -240,7 +240,7 @@ struct LaneCounters {
   // include final costs
   int2 min_int_cost_and_arg;
   // Number of final tokens with cost < best + lattice_beam
-  int32 nfinals;
+  int32 n_within_lattice_beam;
   int32 has_reached_final;  // if there's at least one final token in the queue
 };
 

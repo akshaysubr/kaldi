@@ -607,8 +607,7 @@ void CudaDecoder::StartCopyAcousticCostsToHostAsync() {
                           d_acoustic_cost_concat_, h_acoustic_cost_concat_,
                           compute_st_, &h_emitting_main_q_end_lane_offsets_);
   for (int32 ilane = 0; ilane < nlanes_used_; ++ilane)
-    main_q_emitting_end_[ilane] =
-        h_lanes_counters_[ilane].main_q_narcs_and_end.y;
+    main_q_emitting_end_[ilane] = func_main_q_end(h_lanes_counters_[ilane]);
 }
 
 void CudaDecoder::FinalizeCopyAcousticCostsToHost() {
@@ -900,69 +899,83 @@ void CudaDecoder::GetBestCost(const std::vector<ChannelId> &channels,
                               std::vector<std::vector<std::pair<int, float>>>
                                   *list_finals_token_idx_and_cost,
                               std::vector<bool> *has_reached_final) {
-  const int nlanes_used = channels.size();
-  if (nlanes_used <= 0) return;
-  list_finals_token_idx_and_cost->clear();
-  argmins->clear();
-  has_reached_final->clear();
-  list_finals_token_idx_and_cost->resize(nlanes_used);
+  if (channels.size() == 0) return;
+  // Getting the lanes ready to be used with those channels
+  LoadChannelsStateToLanes(channels);
 
-  // Getting *h_kernel_params ready to use
-  SetChannelsInKernelParams(channels);
-  KALDI_ASSERT(nlanes_used == h_kernel_params_->nlanes_used);
-  int32 max_main_q_end = 0;
-  for (ChannelId ichannel : channels)
-    max_main_q_end =
-        std::max(max_main_q_end,
-                 h_channels_counters_[ichannel].prev_main_q_narcs_and_end.y);
+  auto func_main_q_end = [](const LaneCounters &c) {
+    return c.main_q_narcs_and_end.y;
+  };
+  int32 max_main_q_end = GetMaxForAllLanes(func_main_q_end);
 
-  // We already know what's the best cost, because we needed it for the cutoff
-  // it was saved in channel_counters.prev_min_cost
-  // we just need to find its index
+  // Step1 : Finding the best cost in the last token queue, with and without
+  // final costs.
+  // Also saving the indexes of those min.
   get_best_cost_kernel_step1<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
-                                                             nlanes_used),
+                                                             nlanes_used_),
                                KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
       *h_device_params_, *h_kernel_params_, use_final_costs,
       StdWeight::Zero().Value());
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
+  // Step2: Now that we now what the minimum cost is, we list all tokens within
+  // [min_cost; min_cost+lattice_beam]
+  // min_cost takes into account the final costs if use_final_costs is true,
+  // AND if a final state is is present in the last token queue
   get_best_cost_kernel_step2<<<KALDI_CUDA_DECODER_NUM_BLOCKS(max_main_q_end,
-                                                             nlanes_used),
+                                                             nlanes_used_),
                                KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
       *h_device_params_, *h_kernel_params_, use_final_costs,
       StdWeight::Zero().Value());
-
   KALDI_DECODER_CUDA_CHECK_ERROR();
-  KALDI_DECODER_CUDA_API_CHECK_ERROR(
-      cudaMemcpyAsync(h_lanes_counters_, d_lanes_counters_.MutableData(),
-                      nlanes_used * sizeof(*h_lanes_counters_),
-                      cudaMemcpyDeviceToHost, compute_st_));
+  // Moving the min_costs and their arguments to cost.
+  // get_best_cost_kernel_step2 also set the number of tokens in [min_cost;
+  // min_cost_lattice_beam]
+  // moving that number as well
+  CopyLaneCountersToHostSync();  // sync copy
 
+  // Resetting the datastructures
   argmins->clear();
   has_reached_final->clear();
-  cudaStreamSynchronize(compute_st_);
+  list_finals_token_idx_and_cost->clear();
+  // list_finals_token_idx_and_cost is a vector<vector<>>
+  // Each channel will have its own list of tokens within [best;
+  // best+lattice_beam]
+  list_finals_token_idx_and_cost->resize(nlanes_used_);
   std::vector<int2> int2_buffer;
-  for (int32 ilane = 0; ilane < nlanes_used; ++ilane) {
+  for (int32 ilane = 0; ilane < nlanes_used_; ++ilane) {
     int2 minarg = h_lanes_counters_[ilane].min_int_cost_and_arg;
+    // Min cost in that channel last token queue
     CostType min_cost = orderedIntToFloatHost(minarg.x);
+    // index of that min cost
     int32 arg = minarg.y;
+    // Saving both in output
     argmins->push_back({arg, min_cost});
-    int nfinals = h_lanes_counters_[ilane].nfinals;
+    // Whether or not the last token queue contains at least one token
+    // associated with a final FST state
     has_reached_final->push_back(h_lanes_counters_[ilane].has_reached_final);
-    (*list_finals_token_idx_and_cost)[ilane].resize(nfinals);
-    int2_buffer.resize(nfinals);
+    // Number of tokens within [min_cost; min_cost+lattice_beam]
+    int n_within_lattice_beam = h_lanes_counters_[ilane].n_within_lattice_beam;
+    // Loading those tokens
+    (*list_finals_token_idx_and_cost)[ilane].resize(n_within_lattice_beam);
+    int2_buffer.resize(n_within_lattice_beam);
+    // Copying that list. The aux_q was used as a buffer, we are not copying the
+    // aux_q.
+    // get_best_cost_step2 used it as a buffer to store the tokens list
+    // We should host a dedicated host interface instead.
     cudaMemcpyAsync(&int2_buffer[0], d_aux_q_state_and_cost_.lane(ilane),
-                    nfinals * sizeof(int2), cudaMemcpyDeviceToHost,
-                    compute_st_);
-
-    for (int i = 0; i < nfinals; ++i) {
+                    n_within_lattice_beam * sizeof(int2),
+                    cudaMemcpyDeviceToHost, compute_st_);
+    // Waiting for the copy
+    cudaStreamSynchronize(compute_st_);
+    // Moving to output + int2float conversion
+    for (int i = 0; i < n_within_lattice_beam; ++i) {
       int global_idx = int2_buffer[i].x;
       float cost_with_final = orderedIntToFloatHost(int2_buffer[i].y);
       (*list_finals_token_idx_and_cost)[ilane][i].first = global_idx;
       (*list_finals_token_idx_and_cost)[ilane][i].second = cost_with_final;
     }
   }
-  cudaStreamSynchronize(compute_st_);
 }
 
 void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,

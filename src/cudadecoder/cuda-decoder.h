@@ -192,6 +192,13 @@ class CudaDecoder {
   // you should not increase that number
   CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config, int32 nlanes,
               int32 nchannels);
+  // Special constructor for nlanes = nchannels. Here for the non-advanced user
+  // Here we can consider nchannels = batch size. If we want to decode 10
+  // utterances at a time,
+  // we can use nchannels = 10
+  CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
+              int32 nchannels)
+      : CudaDecoder(fst, config, nchannels, nchannels) {}
   ~CudaDecoder();
 
   // InitDecoding initializes the decoding, and should only be used if you
@@ -292,7 +299,7 @@ class CudaDecoder {
   // in PostProcessingMainQueue
   void ExpandArcsEmitting();
   // ExpandArcs, non-emitting stage. Must be called after PruneAndPreprocess.
-  // if *should_iterate, we should do another iteration of the
+  // if *should_iterate is true, we should do another iteration of the
   // PruneAndPreprocess/ExpandArcsNonEmitting pair
   void ExpandArcsNonEmitting(bool *should_iterate);
   // If we have more than max_active_ tokens in the queue (either after an
@@ -312,7 +319,7 @@ class CudaDecoder {
   // time
   // We don't need it after the last ExpandArcsNonEmitting.
   void PruneAndPreprocess(bool *all_aux_queues_empty);
-  // Moving the acoustic_costs to host in two stage.
+  // Moving the acoustic_costs of emitting tokens to host in two stage.
   // StartCopyAcousticCostsToHostAsync concatenate the data on device and start
   // the device2host copy
   // FinalizeCopyAcousticCostsToHost move the data that arrived on host into the
@@ -450,17 +457,61 @@ class CudaDecoder {
   // For instance, d_main_q_state[i], d_main_q_cost[i], d_main_q_info[i]
   // all refer to the same token (at index i)
   // The data structure InfoToken contains { prev_token, arc_idx }
+  // We also store the acoustic costs independently in d_main_q_acoustic_cost_
+  //
+  // The data is eiher linked to a channel, or to a lane.
+  //
+  // Channel data (DeviceChannelMatrix):
+  //
+  // The data linked with a channel contains the data of frame i we need to
+  // remember
+  // to compute frame i+1. It is the list of tokens from frame i, with some
+  // additional info
+  // (ie the prefix sum of the emitting arcs degrees from those tokens).
+  // We are only storing d_main_q_state_and_cost_ as channel data because that's
+  // all we need in a token to compute
+  // frame i+1. We don't need token.arc_idx or token.prev_token.
+  // The reason why we also store that prefix sum is because we do the emitting
+  // preprocessing
+  // at the end of frame i. The reason for that is that we need infos from the
+  // hashmap to do that preprocessing.
+  // The hashmap is always cleared at the end of a frame. So we need to do the
+  // preprocessing at the end of frame i,
+  // and then save d_main_q_degrees_prefix_sum_. d_main_q_arc_offsets is
+  // generated also during preprocessing.
+  //
+  // Lane data (DeviceLaneMatrix):
+  //
+  // The lane data is everything we use during computation, but which we reset
+  // at the end of each frame.
+  // For instance we use a hashmap at some point during the computation, but at
+  // the end of each frame we reset it. That
+  // way that hashmap is able to compute whichever channel the next time
+  // AdvanceDecoding is called. The reasons why we do that is :
+  //
+  // - We use context switching. Before and after every frames, we can do a
+  // context switching. Which means that a lane cannot save a channel's state
+  // in any way once AdvanceDecoding returns. e.g., during a call of
+  // AdvanceDecoding, ilane=2 may compute 5 frames from channel=57 (as defined
+  // in the std::vector<ChannelId> channels).
+  // In the next call, the same ilane=2 may compute 10 frames from channel=231.
+  // A lane data has to be reset to its original state at the end of each
+  // AdvanceDecoding call.
+  // If somehow some data has to be saved, it needs to be declared as channel
+  // data.
+  //
+  // - The reason why we make the distinction between lane and channel data (in
+  // theory everything could be consider channel data), is because
+  // a lane uses more memory than a channel. In the context of online decoding,
+  // we need to create a lot channels, and we need them to be as small as
+  // possible in memory.
+  // Everything that can be reused between channels is stored as lane data.
+
+  //
+  // Channel data members:
+  //
+
   DeviceChannelMatrix<int2> d_main_q_state_and_cost_;
-  // InfoToken
-  // Usually contains {prev_token, arc_idx}
-  // If more than one token is associated to a fst_state,
-  // it will contain where to find the list of those tokens in
-  // d_main_q_extra_prev_tokens
-  // ie {offset,size} in that list. We differentiate the two situations by
-  // calling InfoToken.IsUniqueTokenForStateAndFrame()
-  DeviceLaneMatrix<InfoToken> d_main_q_info_;
-  // Acoustic cost of a given token
-  DeviceLaneMatrix<CostType> d_main_q_acoustic_cost_;
   // Prefix sum of the arc's degrees in the main_q. Used by ExpandArcs,
   // set in the preprocess stages (either PruneAndPreprocess or
   // preprocess_in_place in PostProcessingMainQueue)
@@ -471,14 +522,36 @@ class CudaDecoder {
   // we cache the results in d_main_q_arc_offsets which will be read in a
   // coalesced fashion in expand
   DeviceChannelMatrix<int32> d_main_q_arc_offsets_;
+
+  //
+  // Lane data members:
+  //
+
+  // InfoToken
+  // Usually contains {prev_token, arc_idx}
+  // If more than one token is associated to a fst_state,
+  // it will contain where to find the list of those tokens in
+  // d_main_q_extra_prev_tokens
+  // ie {offset,size} in that list. We differentiate the two situations by
+  // calling InfoToken.IsUniqueTokenForStateAndFrame()
+  DeviceLaneMatrix<InfoToken> d_main_q_info_;
+  // Acoustic cost of a given token
+  DeviceLaneMatrix<CostType> d_main_q_acoustic_cost_;
   // At the end of a frame, we use a hashmap to detect the tokens that are
   // associated with the same FST state S
   // We do it that the very end, to only use the hashmap on post-prune, post-max
   // active tokens
   DeviceLaneMatrix<HashmapValueT> d_hashmap_values_;
+  // Reminder: in the GPU lattice decoder, a token is always associated
+  // to a single arc. Which means that multiple tokens in the same frame
+  // can be associated with the same FST state.
+  //
+  // We are NOT listing those duplicates as ForwardLinks in an unique meta-token
+  // like in the CPU lattice decoder
+  //
   // When more than one token is associated to a single FST state,
   // we will list those tokens into another list : d_main_q_extra_prev_tokens
-  // we will also save data useful is such a case, such as the extra_cost of a
+  // we will also save data useful in such a case, such as the extra_cost of a
   // token compared to the best for that state
   DeviceLaneMatrix<InfoToken> d_main_q_extra_prev_tokens_;
   DeviceLaneMatrix<float2> d_main_q_extra_and_acoustic_cost_;
@@ -536,7 +609,7 @@ class CudaDecoder {
   int32 hashmap_capacity_;
 
   // The first index of all the following vectors (or vector<vector>)
-  // is the ChannelId. To get the number of frames decoded in channel 2,
+  // is the ChannelId. e.g., to get the number of frames decoded in channel 2,
   // look into num_frames_decoded_[2].
 
   // Keep track of the number of frames decoded in the current file.
