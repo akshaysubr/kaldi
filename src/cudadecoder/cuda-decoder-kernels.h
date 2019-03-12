@@ -18,7 +18,6 @@
 #ifndef KALDI_DECODER_CUDA_DECODER_KERNELS_H_
 #define KALDI_DECODER_CUDA_DECODER_KERNELS_H_
 
-#define KALDI_CUDA_DECODER_HASHMAP_NO_KEY -1
 
 #include "cuda-decoder.h"
 
@@ -29,10 +28,6 @@ __global__ void get_best_cost_kernel(DeviceParams cst_dev_params,
                                      CostType fst_zero);
 __global__ void finalize_process_non_emitting_kernel(
     DeviceParams cst_dev_params, KernelParams params);
-__global__ void exclusive_sum_batched_step3_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params);
-__global__ void exclusive_sum_batched_step2_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params);
 __global__ void save_channels_state_from_lanes_kernel(
     DeviceParams cst_dev_params, KernelParams params);
 __global__ void load_channels_state_in_lanes_kernel(DeviceParams cst_dev_params,
@@ -46,20 +41,24 @@ __global__ void expand_arcs_kernel(DeviceParams cst_dev_params,
 template <bool IS_EMITTING>
 __global__ void post_expand_kernel(DeviceParams cst_dev_params,
                                    KernelParams params);
-__global__ void preprocess_in_place_kernel(DeviceParams cst_dev_params,
-                                           KernelParams params);
-__global__ void preprocess_and_contract_kernel(DeviceParams cst_dev_params,
-                                               KernelParams params);
+__global__ void fill_hashmap_with_main_q_kernel(DeviceParams cst_dev_params,
+                                                KernelParams params);
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step1_kernel(
+    DeviceParams cst_dev_params, KernelParams params);
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step2_kernel(
+    DeviceParams cst_dev_params, KernelParams params);
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step3_kernel(
+    DeviceParams cst_dev_params, KernelParams params);
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step4_kernel(
+    DeviceParams cst_dev_params, KernelParams params);
+__global__ void nonemitting_preprocess_and_contract_kernel(
+    DeviceParams cst_dev_params, KernelParams params);
 template <typename T>
 __global__ void concatenate_lanes_data(DeviceParams cst_dev_params,
                                        KernelParams params,
                                        LaneMatrixInterface<T> src, T *concat);
 
 __global__ void init_hashmap_kernel(DeviceParams cst_dev_params);
-__global__ void fill_best_int_cost_kernel(DeviceParams cst_dev_params,
-                                          KernelParams params);
-__global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params);
 __global__ void clear_hashmap_kernel(DeviceParams cst_dev_params,
                                      KernelParams params);
 __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
@@ -104,7 +103,7 @@ struct DeviceParams {
   LaneMatrixInterface<CostType> d_main_q_acoustic_cost;
   LaneMatrixInterface<InfoToken> d_main_q_info;
 
-  LaneMatrixInterface<int2> d_aux_q_state_and_cost;  // TODO int_cost
+  LaneMatrixInterface<int2> d_aux_q_state_and_cost;
   LaneMatrixInterface<CostType> d_aux_q_acoustic_cost;
   LaneMatrixInterface<InfoToken> d_aux_q_info;
   ChannelMatrixInterface<int32> d_main_q_arc_offsets;
@@ -118,12 +117,11 @@ struct DeviceParams {
 
   ChannelMatrixInterface<int32> d_main_q_degrees_prefix_sum;
   LaneMatrixInterface<int2> d_main_q_block_sums_prefix_sum;
-  LaneMatrixInterface<int32> d_main_q_representative_id;
+  LaneMatrixInterface<int32> d_main_q_state_hash_idx;
   LaneMatrixInterface<int32> d_main_q_extra_prev_tokens_prefix_sum;
   LaneMatrixInterface<int32> d_main_q_n_extra_prev_tokens_local_idx;
   LaneMatrixInterface<InfoToken> d_main_q_extra_prev_tokens;
   int32 max_nlanes;
-  // TODO use the CudaFst struct
   int32 q_capacity;
   CostType *d_arc_weights;
   int32 *d_arc_nextstates;
@@ -143,7 +141,6 @@ struct DeviceParams {
   int32 adaptive_beam_bin_width;
 };
 
-// TODO add STATIC_ASSERT for this struct size < 4KB
 struct KernelParams {
   // In AdvanceDecoding,
   // the lane lane_id will compute the channel
