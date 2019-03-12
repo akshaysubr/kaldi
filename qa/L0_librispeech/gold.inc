@@ -1,10 +1,11 @@
 #!/bin/bash
 
 declare -A EXPECTED_WER
+declare -A EXPECTED_PERF
 
 EXPECTED_WER=( 
   ["test_clean"]="5.53" 
-  ["test_other"]="13.99" 
+  ["test_other"]="14.00" 
 )
 
 EXPECTED_PERF=(
@@ -16,4 +17,6 @@ EXPECTED_PERF=(
   ["4xP100_test_other"]="1300"
   ["4xV100_test_clean"]="1500"
   ["4xV100_test_other"]="1500"
+  ["8xV100_test_clean"]="800"
+  ["8xV100_test_other"]="700"
 )
