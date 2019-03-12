@@ -71,7 +71,7 @@ namespace CudaDecode {
 
 // Returning the number of CTAs to launch for (N,M) elements to compute
 // M is usually the batch size
-inline dim3 KALDI_CUDA_DECODER_NUM_BLOCKS(int N, int M) {
+inline dim3 KaldiCudaDecoderNumBlocks(int N, int M) {
   dim3 grid;
   // TODO MAX_NUM_BLOCKS.
   grid.x = KALDI_CUDA_DECODER_DIV_ROUND_UP(N, KALDI_CUDA_DECODER_1D_BLOCK);
