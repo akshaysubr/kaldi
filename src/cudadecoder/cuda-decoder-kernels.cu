@@ -16,8 +16,8 @@
 // limitations under the License.
 
 #include <cub/cub.cuh>
-#include "cuda-decoder-kernels-utils.h"
 #include "cuda-decoder-kernels.h"
+#include "cuda-decoder-kernels-utils.inc"  // TODO this is temporary. We'll switch back to a .h asap.
 
 namespace kaldi {
 namespace CudaDecode {
@@ -957,7 +957,8 @@ __global__ void get_best_cost_kernel_step1(DeviceParams cst_dev_params,
         channel_counters->min_int_cost_and_arg_without_final.x;
     KALDI_CUDA_DECODER_1D_KERNEL_LOOP(idx, main_q_end) {
       if (idx == 0)
-        lane_counters->nfinals = 0;  // will be used in the next kernel
+        lane_counters->n_within_lattice_beam =
+            0;  // will be used in the next kernel
       const int2 both =
           cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[idx];
       const int token_state = both.x;
@@ -1036,7 +1037,7 @@ __global__ void get_best_cost_kernel_step2(DeviceParams cst_dev_params,
       if (token_int_cost < lattice_int_cutoff) {
         // That token will be included in the lattice (last frame)
         // save it
-        int list_idx = atomicAdd(&lane_counters->nfinals, 1);
+        int list_idx = atomicAdd(&lane_counters->n_within_lattice_beam, 1);
         cst_dev_params.d_list_final_tokens_in_main_q.lane(ilane)[list_idx] = {
             global_offset + idx, token_int_cost};
       }

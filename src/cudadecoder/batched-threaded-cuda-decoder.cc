@@ -496,7 +496,7 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
 
   // Data structures that are reusable across decodes but unique to each thread
   CudaDecoder cuda_decoder(cuda_fst_, config_.decoder_opts,
-                           config_.max_batch_size, config_.max_batch_size);
+                           config_.max_batch_size);
   nnet3::NnetBatchComputer computer(config_.compute_opts, am_nnet_->GetNnet(),
                                     am_nnet_->Priors());
 
