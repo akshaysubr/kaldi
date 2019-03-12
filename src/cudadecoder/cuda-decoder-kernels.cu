@@ -1494,55 +1494,84 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_step3_kernel(
   }
 }
 
-__global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params) {
+// Step4: We now know where to store our extra prev tokens in
+// d_main_q_extra_prev_tokens.
+// We will now move the tokens that need to be moved (when multiple tokens are
+// associated to the same FST state)
+// into d_main_q_extra_prev_tokens. In d_main_q_info, we will store the location
+// of that list [offset,size]
+// so that when backtracking, when we read d_main_q_info[token_idx], we know
+// where to look to have the list
+// of the same-state tokens
+// It is the last step of the
+// emitting_preprocess_and_list_extra_prev_tokens_step[i]_kernel pipeline
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step4_kernel(
+    DeviceParams cst_dev_params, KernelParams params) {
   const int nlanes = params.nlanes_used;
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
     const LaneCounters *lane_counters =
         cst_dev_params.d_lanes_counters.lane(ilane);
     const int32 ichannel = params.channel_to_compute[ilane];
     const int main_q_end = lane_counters->main_q_narcs_and_end.y;
+    // Previous frames have filled d_main_q_extra_prev_tokens.
+    // d_main_q_extra_prev_tokens was then flushed to host. We want to set the
+    // global
+    // (global in the sense "for all frames") offset on where to read it the
+    // h_all_tokens_extra_prev_tokens_ on host.
+    // adding the main_q_extra_prev_tokens_global_offset for that
     const int prev_global_idx =
         lane_counters->main_q_extra_prev_tokens_global_offset;
     KALDI_CUDA_DECODER_1D_KERNEL_LOOP(main_q_idx, main_q_end) {
-      int32 hash_idx =
-          cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx];
-      bool is_representative = (hash_idx < 0);
-      if (is_representative) {
-        hash_idx = -hash_idx - 1;  // reverting is_representative flag
-      }
+      // We'll take care of token at main_q_idx
+      // Loading hashmap information about token.state
+      bool is_representative;
+      int32 hash_idx;
+      GetFSTStateHashIndex(
+          cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx],
+          &hash_idx, &is_representative);
+
       HashmapValueT val = cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx];
-      int prev_counts = val.count;
-      if (prev_counts >
-          1) {  // in that case we must the info_token somewhere else
+      // How many tokens are associated with that fst state token.state
+      int same_count = val.count;
+      bool must_move_to_extra_prev_tokens = (same_count > 1);
+      if (must_move_to_extra_prev_tokens) {
+        // Moving to the extra_prev_tokens list.
+        // Some of those tokens have an extra cost (compared to the best cost
+        // for that FST state)
+        // Generating and saving that extra cost. We will use it when generating
+        // the lattice.
         CostType token_cost = orderedIntToFloat(
             cst_dev_params.d_main_q_state_and_cost.channel(ichannel)[main_q_idx]
                 .y);
-        CostType acoustic_cost =
-            cst_dev_params.d_main_q_acoustic_cost.lane(ilane)[main_q_idx];
-        InfoToken inf_tok =
-            cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx];
         CostType best_cost = orderedIntToFloat(val.min_and_argmin_int_cost.x);
         CostType extra_cost = token_cost - best_cost;
-        int extra_prev_tokens_offset = val.min_and_argmin_int_cost.y;
-        int local_idx =
+        // Loading the token to be moved
+        InfoToken inf_tok =
+            cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx];
+        CostType acoustic_cost =
+            cst_dev_params.d_main_q_acoustic_cost.lane(ilane)[main_q_idx];
+        // Where to write this state list in d_main_q_extra_prev_tokens
+        int32 extra_prev_tokens_offset = val.min_and_argmin_int_cost.y;
+        // Place of that specific token in the extra_prev_tokens sublist of that
+        // specific FST state
+        int32 local_idx =
             cst_dev_params.d_main_q_n_extra_prev_tokens_local_idx.lane(
                 ilane)[main_q_idx];
+        // negative counts to signal that's a (offset,count)
+        // cf definition of InfoToken
         cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx] = {
-            prev_global_idx + extra_prev_tokens_offset,
-            -prev_counts};  // negative counts to signal that's a (offset,count)
-                            // pair
-        int list_idx = extra_prev_tokens_offset + local_idx;
+            prev_global_idx + extra_prev_tokens_offset, -same_count};
+        // Where to write this token in d_main_q_extra_prev_tokens
+        int32 list_idx = extra_prev_tokens_offset + local_idx;
+        // Moving token. Also saving extra_cost
         cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] =
-            inf_tok;  // moving the prev_tokens info in another list
+            inf_tok;
+        cst_dev_params.d_main_q_extra_and_acoustic_cost.lane(
+            ilane)[list_idx] = {extra_cost, acoustic_cost};
         assert(inf_tok.prev_token >= (lane_counters->main_q_global_offset -
                                       cst_dev_params.q_capacity) &&
                inf_tok.prev_token <=
                    (lane_counters->main_q_global_offset + main_q_end));
-        cst_dev_params.d_main_q_extra_and_acoustic_cost.lane(
-            ilane)[list_idx] = {extra_cost, acoustic_cost};
-        // InfoToken inf2_tok =
-        // cst_dev_params.d_main_q_extra_prev_tokens.lane(ilane)[list_idx] ;
       }
     }
   }

@@ -42,11 +42,15 @@ __global__ void expand_arcs_kernel(DeviceParams cst_dev_params,
 template <bool IS_EMITTING>
 __global__ void post_expand_kernel(DeviceParams cst_dev_params,
                                    KernelParams params);
+__global__ void fill_hashmap_with_main_q_kernel(DeviceParams cst_dev_params,
+                                                KernelParams params);
 __global__ void emitting_preprocess_and_list_extra_prev_tokens_step1_kernel(
     DeviceParams cst_dev_params, KernelParams params);
 __global__ void emitting_preprocess_and_list_extra_prev_tokens_step2_kernel(
     DeviceParams cst_dev_params, KernelParams params);
 __global__ void emitting_preprocess_and_list_extra_prev_tokens_step3_kernel(
+    DeviceParams cst_dev_params, KernelParams params);
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step4_kernel(
     DeviceParams cst_dev_params, KernelParams params);
 __global__ void nonemitting_preprocess_and_contract_kernel(
     DeviceParams cst_dev_params, KernelParams params);
@@ -56,10 +60,6 @@ __global__ void concatenate_lanes_data(DeviceParams cst_dev_params,
                                        LaneMatrixInterface<T> src, T *concat);
 
 __global__ void init_hashmap_kernel(DeviceParams cst_dev_params);
-__global__ void fill_hashmap_with_main_q_kernel(DeviceParams cst_dev_params,
-                                                KernelParams params);
-__global__ void fill_extra_prev_tokens_list_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params);
 __global__ void clear_hashmap_kernel(DeviceParams cst_dev_params,
                                      KernelParams params);
 __global__ void compute_costs_histogram_kernel(DeviceParams cst_dev_params,
