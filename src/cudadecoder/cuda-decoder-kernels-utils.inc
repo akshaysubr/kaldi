@@ -204,6 +204,20 @@ __device__ void hashmap_insert(HashmapValueT *d_map_values, int key,
   *local_idx = atomicAdd(&d_val->count, 1);
   atomicMinI2(&d_val->min_and_argmin_int_cost, {int_cost, arg});
 }
+
+__device__ __inline__ void SetFSTStateHashIndex(int32 raw_hash_idx, bool is_representative, FSTStateHashIndex *hash_idx) {
+	*hash_idx = is_representative 
+	? (-raw_hash_idx - 1)  // -1 to force it < 0
+	: raw_hash_idx;
+}
+
+__device__ __inline__ void GetFSTStateHashIndex(FSTStateHashIndex &hash_idx, int32 *raw_hash_idx, bool *is_representative) {
+	*is_representative = (hash_idx < 0);
+	*raw_hash_idx = *is_representative 
+	? (-(hash_idx + 1))
+	: hash_idx;
+}
+
 }  // end namespace CudaDecode
 }  // end namespace kaldi
 

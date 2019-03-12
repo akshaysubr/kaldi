@@ -308,12 +308,19 @@ struct __align__(8) InfoToken {
   // return the {offset,size} pair necessary to list those tokens in the
   // extra_prev_tokens list
   // They are stored at offset "offset", and we have "size" of those
-  std::pair<int32, int32> GetNextStateTokensList() {
+  std::pair<int32, int32> GetSameFSTStateTokensList() {
     KALDI_ASSERT(!IsUniqueTokenForStateAndFrame());
 
     return {prev_token, -arc_idx};
   }
 };
+
+// Used to store the index in the GPU hashmap of that FST state
+// The hashmap is only generated with the final main queue (post max_active_) of
+// each frame
+// Also stores the information or whether or not the owner of that object is the
+// representative of this FSTState
+typedef int32 FSTStateHashIndex;
 
 __inline__ int32 floatToOrderedIntHost(float floatVal) {
   int32 intVal;

@@ -88,7 +88,7 @@ void CudaDecoder::AllocateDeviceData() {
   d_main_q_n_extra_prev_tokens_local_idx_.Resize(nlanes_,
                                                  max_tokens_per_frame_);
 
-  d_main_q_representative_id_.Resize(nlanes_, max_tokens_per_frame_);
+  d_main_q_state_hash_idx_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_extra_prev_tokens_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_extra_and_acoustic_cost_.Resize(nlanes_, max_tokens_per_frame_);
   d_main_q_block_sums_prefix_sum_.Resize(
@@ -202,8 +202,8 @@ void CudaDecoder::InitDeviceParams() {
       d_main_q_degrees_prefix_sum_.GetInterface();
   h_device_params_->d_main_q_block_sums_prefix_sum =
       d_main_q_block_sums_prefix_sum_.GetInterface();
-  h_device_params_->d_main_q_representative_id =
-      d_main_q_representative_id_.GetInterface();
+  h_device_params_->d_main_q_state_hash_idx =
+      d_main_q_state_hash_idx_.GetInterface();
   h_device_params_->d_main_q_extra_prev_tokens_prefix_sum =
       d_main_q_extra_prev_tokens_prefix_sum_.GetInterface();
   h_device_params_->d_main_q_n_extra_prev_tokens_local_idx =
@@ -588,7 +588,7 @@ void CudaDecoder::PruneAndPreprocess(bool *all_aux_queues_empty) {
   *all_aux_queues_empty = (max_aux_q_end == 0);
   if (*all_aux_queues_empty) return;
 
-  preprocess_and_contract_kernel<<<
+  nonemitting_preprocess_and_contract_kernel<<<
       KaldiCudaDecoderNumBlocks(max_aux_q_end, nlanes_used_),
       KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
                                                      *h_kernel_params_);
@@ -622,16 +622,16 @@ void CudaDecoder::PostProcessingMainQueue() {
 
   ApplyMaxActiveAndReduceBeam(MAIN_Q);
 
-  fill_best_int_cost_kernel<<<KaldiCudaDecoderNumBlocks(max_main_q_end,
-                                                        nlanes_used_),
-                              KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-      *h_device_params_, *h_kernel_params_);
+  fill_hashmap_with_main_q_kernel<<<
+      KaldiCudaDecoderNumBlocks(max_main_q_end, nlanes_used_),
+      KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
+                                                     *h_kernel_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
-  preprocess_in_place_kernel<<<KaldiCudaDecoderNumBlocks(max_main_q_end,
-                                                         nlanes_used_),
-                               KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(
-      *h_device_params_, *h_kernel_params_);
+  emitting_preprocess_and_list_extra_prev_tokens_kernel_step1<<<
+      KaldiCudaDecoderNumBlocks(max_main_q_end, nlanes_used_),
+      KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
+                                                     *h_kernel_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
   exclusive_sum_batched_step2_kernel<<<
@@ -1009,7 +1009,7 @@ void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
       } else {
         // Using the first arc with extra_cost == 0
         int32 offset, size;
-        std::tie(offset, size) = token.GetNextStateTokensList();
+        std::tie(offset, size) = token.GetSameFSTStateTokensList();
         bool found_best = false;
         for (auto i = 0; i < size; ++i) {
           CostType arc_extra_cost =
@@ -1178,7 +1178,7 @@ void CudaDecoder::AddFinalTokensToLattice(LaneId ilane, ChannelId ichannel,
         // the first one
         // from the list
         int32 offset, size;
-        std::tie(offset, size) = final_token.GetNextStateTokensList();
+        std::tie(offset, size) = final_token.GetSameFSTStateTokensList();
         InfoToken prev_token =
             h_all_tokens_extra_prev_tokens_[ichannel][offset];
         arc_idx = prev_token.arc_idx;
@@ -1360,7 +1360,7 @@ void CudaDecoder::GetSameFSTStateTokenList(
     *nsame = 1;
   } else {
     int32 offset, size;
-    std::tie(offset, size) = token.GetNextStateTokensList();
+    std::tie(offset, size) = token.GetSameFSTStateTokensList();
     *tok_beg = &h_all_tokens_extra_prev_tokens_[ichannel][offset];
     *extra_extra_and_acoustic_cost_beg =
         &h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_[ichannel]

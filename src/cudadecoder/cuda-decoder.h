@@ -558,14 +558,18 @@ class CudaDecoder {
   // Histogram. Used to perform the histogram of the token costs
   // in the main_q. Used to perform a soft topk of the main_q (max-active)
   DeviceLaneMatrix<int32> d_histograms_;
-  // Used when generating d_main_q_extra_prev_tokens
-  // This happens when we have multiple tokens for a given state S
-  // The best token for S (always unique, even if multiple tokens have the best
-  // cost, we arbitraly pick one) will be the representative of that state S.
-  // d_main_q_representative_id_ contains the id of their representative for
-  // each token.
+  // When filling the hashmap in PostProcessingMainQueue, we create a hashmap
+  // value for each FST state
+  // presents in the main_q (if at least one token is associated with that
+  // state)
+  // d_main_q_state_hash_idx_[token_idx] is the index of the state token.state
+  // in the hashmap
+  // Stored into a FSTStateHashIndex, which is actually a int32.
+  // FSTStateHashIndex should only
+  // be accessed through [Get|Set]FSTStateHashIndex, because it uses the bit
+  // sign to also remember if that token is the representative of that state.
   // If only one token is associated with S, its representative will be itself
-  DeviceLaneMatrix<int32> d_main_q_representative_id_;
+  DeviceLaneMatrix<FSTStateHashIndex> d_main_q_state_hash_idx_;
   // local_idx of the extra cost list for a state
   // For a given state S, first token associated with S will have local_idx=0
   // the second one local_idx=1, etc. The order of the local_idxs is random
