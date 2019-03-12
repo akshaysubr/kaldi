@@ -18,6 +18,9 @@
 #ifndef KALDI_DECODER_CUDA_DECODER_KERNELS_UTILS_H_
 #define KALDI_DECODER_CUDA_DECODER_KERNELS_UTILS_H_
 
+#define KALDI_CUDA_DECODER_HASHMAP_NO_KEY -1
+#define KALDI_CUDA_DECODER_HASHMAP_NO_VAL \
+	{KALDI_CUDA_DECODER_HASHMAP_NO_KEY, 0, {INT_MAX, -1}}
 // TODO this file is not ready. It will become a clean .h file asap
 
 #include "util/stl-utils.h"

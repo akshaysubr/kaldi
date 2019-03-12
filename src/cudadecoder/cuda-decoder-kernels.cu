@@ -29,40 +29,9 @@ __global__ void init_hashmap_kernel(DeviceParams cst_dev_params) {
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, max_nlanes) {
     const int capacity = cst_dev_params.hashmap_capacity;
     KALDI_CUDA_DECODER_1D_KERNEL_LOOP(idx, capacity) {
-      cst_dev_params.d_hashmap_values.lane(ilane)[idx] = {
-          KALDI_CUDA_DECODER_HASHMAP_NO_KEY, 0, {INT_MAX, -1}};
+      cst_dev_params.d_hashmap_values.lane(ilane)[idx] =
+          KALDI_CUDA_DECODER_HASHMAP_NO_VAL;
     }
-  }
-}
-
-// Clear the hashmaps after use
-// Each element in the map has a representative in the main_q
-// Everyone of those representatives has the responsability to reset their
-// corresponding value in the hashmap
-// Once this kernel returns, the hashmaps are cleared
-__global__ void clear_hashmap_kernel(DeviceParams cst_dev_params,
-                                     KernelParams params) {
-  const int nlanes = params.nlanes_used;
-  KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
-    LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
-    const int main_q_end = lane_counters->main_q_narcs_and_end.y;
-    KALDI_CUDA_DECODER_1D_KERNEL_LOOP(main_q_idx, main_q_end) {
-      int32 hash_idx =
-          cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx];
-      bool is_representative = (hash_idx < 0);  // negative value when the token
-                                                // at main_q_idx is a
-                                                // representative
-      if (is_representative) {
-        hash_idx = -hash_idx - 1;  // reverting is_representative flag
-        cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx] = {
-            KALDI_CUDA_DECODER_HASHMAP_NO_KEY, 0, {INT_MAX, -1}};  // clear
-      }
-    }
-
-    // This is the last kernel for that frame
-    // Resets q_overflow
-    if (threadIdx.x == 0 && blockIdx.x == 0)
-      lane_counters->q_overflow = OVERFLOW_NONE;
   }
 }
 
@@ -1574,6 +1543,39 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_step4_kernel(
                    (lane_counters->main_q_global_offset + main_q_end));
       }
     }
+  }
+}
+
+// Clear the hashmaps after use
+// Each element in the map has a representative in the main_q
+// Everyone of those representatives has the responsability to reset their
+// corresponding value in the hashmap
+// Once this kernel returns, the hashmaps are cleared
+__global__ void clear_hashmap_kernel(DeviceParams cst_dev_params,
+                                     KernelParams params) {
+  const int nlanes = params.nlanes_used;
+  KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
+    LaneCounters *lane_counters = cst_dev_params.d_lanes_counters.lane(ilane);
+    const int main_q_end = lane_counters->main_q_narcs_and_end.y;
+    KALDI_CUDA_DECODER_1D_KERNEL_LOOP(main_q_idx, main_q_end) {
+      bool is_representative;
+      int32 hash_idx;
+      GetFSTStateHashIndex(
+          cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx],
+          &hash_idx, &is_representative);
+      // Representative owns a state. Each representative resets its associated
+      // token.state
+      // in the hashmap
+      if (is_representative) {
+        cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx] =
+            KALDI_CUDA_DECODER_HASHMAP_NO_VAL;  // clear
+      }
+    }
+
+    // This is the last kernel for that frame
+    // Resets q_overflow
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+      lane_counters->q_overflow = OVERFLOW_NONE;
   }
 }
 
