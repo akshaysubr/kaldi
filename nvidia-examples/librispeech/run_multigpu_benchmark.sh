@@ -1,7 +1,7 @@
 #!/bin/bash
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
-datasets="test_clean"
+datasets="test_clean test_other"
 if [ $# -ge 1 ]; then
   num_gpus=$1
 else
