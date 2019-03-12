@@ -13,7 +13,7 @@ if [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla V100
 elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla P100" | wc -l) -gt 0 ]]; then
 	GPU_NAME="P100"
 elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla P40" | wc -l) -gt 0 ]]; then
-	GPU_NAME="P0"
+	GPU_NAME="P40"
 elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla T4" | wc -l) -gt 0 ]]; then
 	GPU_NAME="T4"
 fi
