@@ -34,7 +34,6 @@ do
 
     echo "    dataset=$dataset, GPU=$d: " 
     echo "         WER=$WER, Expected=$EWER"
-    echo "         PERF=$PERF, Expected=$EPERF"
     PASS=`echo "$WER <= $EWER" | bc`
     if [ $PASS -ne "1" ]; then
       echo "              Error:  WER rate ($WER) greater than  $EWER"
