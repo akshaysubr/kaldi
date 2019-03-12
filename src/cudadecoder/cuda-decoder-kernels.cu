@@ -1265,7 +1265,7 @@ __global__ void fill_hashmap_with_main_q_kernel(DeviceParams cst_dev_params,
 // that one
 // Each representative counts the number of emitting arcs it is responsible for,
 // and we will compute the prefix sum of the arc degrees
-__global__ void emitting_preprocess_and_list_extra_prev_tokens_kernel_step1(
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step1_kernel(
     DeviceParams cst_dev_params, KernelParams params) {
   // Operator for the prefix sum inside the CUDA block
   typedef cub::BlockScan<int2, KALDI_CUDA_DECODER_1D_BLOCK> BlockScan;
@@ -1322,9 +1322,9 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_kernel_step1(
         representing_state = (main_q_idx == state_best_int_cost_argmin);
         // Saving the hash_idx of that fst state + if we're responsible for that
         // state
-        cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx] =
-            representing_state ? (-hash_idx - 1)  // -1 to force it < 0
-                               : hash_idx;
+        SetFSTStateHashIndex(
+            hash_idx, representing_state,
+            &cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx]);
 
         // One of the best token for that state will represent that state in the
         // next frame
@@ -1339,19 +1339,18 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_kernel_step1(
             cst_dev_params.d_main_q_arc_offsets.channel(ichannel)[main_q_idx] =
                 start;
           }
-          n_extra_prev_token =
-              (h_val.count > 1) ? (h_val.count)  // in that case we move the
-                                                 // list of predecessors
-                                                 // somewhere else
-                                : 0;  // if only one predecessor, let's store it
-                                      // directly in the .prev_token element
+          // If that FST state has only one token associated to it, we store
+          // that token directly in
+          // d_main_q_info (its original place)
+          // We only move it into the d_main_q_extra_prev_tokens list if
+          // multiple tokens are associated to that state
+          n_extra_prev_token = (h_val.count > 1) ? (h_val.count) : 0;
         }
       }
 
       // Computing a local prefix sum inside that CUDA block
-      // A second kernel will take care of adding the necessary offset to those
+      // Others kernels will take care of adding the necessary offset to those
       // local prefix sums
-
       int2 zeroi2 = {0, 0};
       int2 vali2 = {degree, n_extra_prev_token};
       int2 aggi2;
@@ -1362,7 +1361,7 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_kernel_step1(
 
       if (main_q_idx < main_q_end) {
         // This is not the final global prefix sum
-        // A second kernel will add the necessary offset
+        // Other kernels will add the necessary offset
         cst_dev_params.d_main_q_degrees_prefix_sum.channel(
             ichannel)[main_q_idx] = degree_local_prefix_sum;
         cst_dev_params.d_main_q_extra_prev_tokens_prefix_sum.lane(
@@ -1392,9 +1391,13 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_kernel_step1(
   }
 }
 
-// Batched scan is not available in CUB
-__global__ void exclusive_sum_batched_step2_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params) {
+// In step1, we've computed the local (CTA-wide) prefix sums. We also have the
+// local sums of each individual CTAs
+// In this kernel, we will compute the offset of each CTA in the global prefix
+// sum. We will then add those offsets in step3
+// Only one CTA / lane
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step2_kernel(
+    DeviceParams cst_dev_params, KernelParams params) {
   typedef cub::BlockScan<int2, KALDI_CUDA_DECODER_1D_BLOCK> BlockScan;
   __shared__ typename BlockScan::TempStorage sh_temp_storage;
   const int nlanes = params.nlanes_used;
@@ -1435,6 +1438,7 @@ __global__ void exclusive_sum_batched_step2_kernel(DeviceParams cst_dev_params,
 
       if (itile == 0) {
         // Last time those were used was in previous kernel
+        // We should centralize those into a final kernel
         lane_counters->min_int_cost = INT_MAX;
         lane_counters->int_cutoff = INT_MAX;
         const CostType current_beam =
@@ -1448,9 +1452,14 @@ __global__ void exclusive_sum_batched_step2_kernel(DeviceParams cst_dev_params,
   }
 }
 
-// Batched scan is not available in CUB
-__global__ void exclusive_sum_batched_step3_kernel(DeviceParams cst_dev_params,
-                                                   KernelParams params) {
+// Step3: Uses the CTA offsets computed in step2 to transform the CTA-wide
+// prefix sums to global prefix sums
+// The representative of each FST states saves into the hashmap the location of
+// the extra_prev_tokens of that state
+// in d_main_q_extra_prev_tokens. That way each extra tokens will know where to
+// write itself in the next kernel.
+__global__ void emitting_preprocess_and_list_extra_prev_tokens_step3_kernel(
+    DeviceParams cst_dev_params, KernelParams params) {
   const int nlanes = params.nlanes_used;
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
     const LaneCounters *lane_counters =
@@ -1462,18 +1471,21 @@ __global__ void exclusive_sum_batched_step3_kernel(DeviceParams cst_dev_params,
       const int2 local_sum_offset =
           cst_dev_params.d_main_q_block_sums_prefix_sum.lane(
               ilane)[local_sum_idx];
-      int32 hash_idx =
-          cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx];
-
       cst_dev_params.d_main_q_degrees_prefix_sum.channel(
           ichannel)[main_q_idx] += local_sum_offset.x;
       int extra_prev_tokens_offset =
           cst_dev_params.d_main_q_extra_prev_tokens_prefix_sum.lane(
               ilane)[main_q_idx] +
           local_sum_offset.y;
-      bool is_representative = (hash_idx < 0);
+      // Loading the hash index associate with token.state
+      // If representative, store the location of the extra prev tokens list for
+      // that state in the hashmap
+      bool is_representative;
+      int32 hash_idx;
+      GetFSTStateHashIndex(
+          cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx],
+          &hash_idx, &is_representative);
       if (is_representative) {
-        hash_idx = -hash_idx - 1;
         HashmapValueT &val =
             cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx];
         val.min_and_argmin_int_cost.y = extra_prev_tokens_offset;

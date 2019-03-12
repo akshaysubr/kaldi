@@ -628,18 +628,18 @@ void CudaDecoder::PostProcessingMainQueue() {
                                                      *h_kernel_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
-  emitting_preprocess_and_list_extra_prev_tokens_kernel_step1<<<
+  emitting_preprocess_and_list_extra_prev_tokens_step1_kernel<<<
       KaldiCudaDecoderNumBlocks(max_main_q_end, nlanes_used_),
       KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
                                                      *h_kernel_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
-  exclusive_sum_batched_step2_kernel<<<
+  emitting_preprocess_and_list_extra_prev_tokens_step2_kernel<<<
       KaldiCudaDecoderNumBlocks(1, nlanes_used_), KALDI_CUDA_DECODER_1D_BLOCK,
       0, compute_st_>>>(*h_device_params_, *h_kernel_params_);
   KALDI_DECODER_CUDA_CHECK_ERROR();
 
-  exclusive_sum_batched_step3_kernel<<<
+  emitting_preprocess_and_list_extra_prev_tokens_step3_kernel<<<
       KaldiCudaDecoderNumBlocks(max_main_q_end, nlanes_used_),
       KALDI_CUDA_DECODER_1D_BLOCK, 0, compute_st_>>>(*h_device_params_,
                                                      *h_kernel_params_);
