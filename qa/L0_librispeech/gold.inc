@@ -4,5 +4,16 @@ declare -A EXPECTED_WER
 
 EXPECTED_WER=( 
   ["test_clean"]="5.53" 
-  ["test_other"]="13.97" 
+  ["test_other"]="13.99" 
+)
+
+EXPECTED_PERF=(
+  ["2xT4_test_clean"]="1300"
+  ["2xT4_test_other"]="1100"
+  ["2xP40_test_clean"]="1300"
+  ["2xP40_test_other"]="1150"
+  ["4xP100_test_clean"]="1400"
+  ["4xP100_test_other"]="1300"
+  ["4xV100_test_clean"]="1500"
+  ["4xV100_test_other"]="1500"
 )

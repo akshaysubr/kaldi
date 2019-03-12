@@ -2,25 +2,51 @@
 
 source gold.inc
 
-num_gpus=`nvidia-smi -L | wc -l`
-datasets="test_clean test_other"
+NUM_GPUS=`nvidia-smi -L | wc -l`
+DATASETS="test_clean test_other"
 
-fail=0
+FAIL=0
+
+GPU_NAME=UNKNOWN
+if [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla V100" | wc -l) -gt 0 ]]; then
+	GPU_NAME="V100"
+elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla P100" | wc -l) -gt 0 ]]; then
+	GPU_NAME="P100"
+elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla P40" | wc -l) -gt 0 ]]; then
+	GPU_NAME="P0"
+elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla T4" | wc -l) -gt 0 ]]; then
+	GPU_NAME="T4"
+fi
+
+
 
 echo "CHECKING RESULTS"
-for dataset in $datasets;
+for dataset in $DATASETS;
 do
-  for (( d = 0 ; d < $num_gpus ; d++ )); do
+  testname="${NUM_GPUS}x${GPU_NAME}_${dataset}"
+  echo "testname=$testname"
+  for (( d = 0 ; d < $NUM_GPUS ; d++ )); do
     WER=`cat /tmp/ls-results.$d/log.batched-wav-nnet3-cuda.$dataset.out | grep "%WER" | cut -d " " -f 2`
-    pass=`echo "${WER} > ${EXPECTED_WER[$dataset]}" | bc`
+    PERF=`cat /tmp/ls-results.$d/log.batched-wav-nnet3-cuda.$dataset.out | grep Overall | grep Aggregate | cut -d ":" -f 8 | cut -d " " -f 2
 
-    echo "    dataset=$dataset, GPU=$d, WER=$WER, Expected=${EXPECTED_WER[$dataset]}"
-    if [ $pass -ne "0" ]; then
-      echo "      Error:  WER rate $WER greater than  ${EXPECTED_WER[$dataset]}"
-      fail=1
+    EWER=${EXPECTED_WER[$dataset]}
+    EPERF=${EXPECTED_PERF[$testname]}
+
+    echo "    dataset=$dataset, GPU=$d: " 
+    echo "         WER=$WER, Expected=$EWER"
+    PASS=`echo "$WER <= $EWER" | bc`
+    if [ $PASS -ne "1" ]; then
+      echo "              Error:  WER rate )$WER) greater than  $EWER}"
+      FAIL=1
+    fi
+    echo "         PERF=$PERF, Expected=$EPERF}"
+    PASS=`echo "${PERF} >= $EPERF " | bc`
+    if [ $PASS -ne "1" ]; then
+      echo "              Error:  PERF ($PERF) less than than  $EPERF}"
+      FAIL=1
     fi
   done
 done
 
-exit $fail
+exit $FAIL
 
