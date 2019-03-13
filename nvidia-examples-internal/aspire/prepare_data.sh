@@ -11,6 +11,7 @@ data_url=www.openslr.org/resources/12
 lm_url=www.openslr.org/resources/11
 mfccdir=mfcc
 
+mkdir -p $data
 mkdir -p $models/$model
 mkdir -p $datasets/$model
 

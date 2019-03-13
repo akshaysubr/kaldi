@@ -40,6 +40,7 @@ RUN cd tools/ \
 # Copy remainder of source code
 COPY . .
 
+RUN rm -Rf nvidia-examples-internal/
 RUN cd src/ \
  && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ \
     --cuda-arch="-gencode arch=compute_52,code=sm_52 -gencode arch=compute_60,code=sm_60 -gencode arch=compute_61,code=sm_61 -gencode arch=compute_70,code=sm_70 -gencode arch=compute_75,code=sm_75" \
@@ -50,7 +51,7 @@ RUN cd src/ \
  && find . -name "*.o" -exec rm {} \; \
  && find . -name "*.a" -exec rm {} \; \
  && cd ../tools/ \
- && make dockerclean
+ && make dockerclean 
 
 ENV PYTHONPATH $PYTHONPATH:/usr/local/python
 
