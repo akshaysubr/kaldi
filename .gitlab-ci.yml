@@ -91,7 +91,7 @@ py3-base:
               "COPY .gitlab-ci.yml /opt/${CI_PROJECT_NAME}/\n"
               "COPY .git/ /opt/${CI_PROJECT_NAME}/.git/\n"
               "COPY qa/   /opt/${CI_PROJECT_NAME}/qa/\n"
-              "COPY nvidia-examples-internal/aspire /opt/workspace/nvidia-examples/aspire\n" 
+              "COPY nvidia-examples-internal/aspire /workspace/nvidia-examples/aspire\n" 
               "COPY nvidia-examples-internal/examples.inc /workspace/nvidia-examples/examples.inc\n" 
               "COPY --from=build-scripts / /nvidia/\n"
               "$(test "${VIRTUAL}" -eq 1 -a -n "${NCCL_VERSION}"   && echo "ENV NCCL_VERSION=\"${NCCL_VERSION}\"     NCCL_VIRTUAL=1"  )\n"
