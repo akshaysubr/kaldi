@@ -24,7 +24,7 @@ pushd /opt/kaldi/egs/librispeech/s5
 # you might not want to do this for interactive shells.
 set -e
 
-if [[ "$SKIP_DOWNLOAD" -ne "1" ]]; then
+if [[ "$SKIP_DATA_DOWNLOAD" -ne "1" ]]; then
   echo ----------- Fetching dataset -----------
 
   # download the data.  Note: we're using the 100 hour setup for
@@ -57,11 +57,13 @@ fi
 
 popd >&/dev/null
 
-echo ----------- Fetching trained model -----------
-pushd $models >&/dev/null
-wget https://github.com/ryanleary/kaldi-test/releases/download/v0.0/LibriSpeech-trained.tgz -O LibriSpeech-trained.tgz
-tar -xzf LibriSpeech-trained.tgz -C $model
-popd >&/dev/null
+if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
+  echo ----------- Fetching trained model -----------
+  pushd $models >&/dev/null
+  wget https://github.com/ryanleary/kaldi-test/releases/download/v0.0/LibriSpeech-trained.tgz -O LibriSpeech-trained.tgz
+  tar -xzf LibriSpeech-trained.tgz -C $model
+  popd >&/dev/null
+fi
 
 ln -s ../run_benchmark.sh
 ln -s ../run_multigpu_benchmark.sh
