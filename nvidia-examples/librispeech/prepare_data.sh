@@ -62,3 +62,6 @@ pushd $models >&/dev/null
 wget https://github.com/ryanleary/kaldi-test/releases/download/v0.0/LibriSpeech-trained.tgz -O LibriSpeech-trained.tgz
 tar -xzf LibriSpeech-trained.tgz -C $model
 popd >&/dev/null
+
+ln -s ../run_benchmark.sh
+ln -s ../run_multigpu_benchmark.sh

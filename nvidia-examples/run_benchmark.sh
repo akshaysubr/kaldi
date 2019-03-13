@@ -3,12 +3,12 @@ trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 echo "Usage: $0 <GPU_IDX> <data-sets> [gpu_threads] [cpu_threads] [max_batch_size] [batch_drain_size] [iterations] [file_limit] [beam] [lattice_beam] [max_active]"
 
-#by default use device 0 unless told otherwise
+#sets model_path, dataset_path, datasets
+source ../examples.inc
 
+#by default use device 0 unless told otherwise
 export gpu=${1:-0}
 
-model_path=/workspace/models/LibriSpeech/
-dataset_path=/workspace/datasets/LibriSpeech/
 result_path=/tmp/ls-results.$gpu
 
 DECODERS="batched-wav-nnet3-cuda"
@@ -16,7 +16,9 @@ DECODERS="batched-wav-nnet3-cuda"
 export KALDI_ROOT=${KALDI_ROOT:-/opt/kaldi}
 export CUDA_VISIBLE_DEVICES=$gpu
 
-data_sets=${2:-"test_clean test_other"}
+if [ $# -ge 1 ]; then
+ datasets=$2
+fi
 
 gpu_threads=${3:-2}
 
@@ -50,8 +52,10 @@ max_active=${11:-10000}
 #NVPROF="nvprof -f -o profile.out"
 
 let worker_threads="$cpu_threads - $gpu_threads"
+
+#must always have at least one worker thread
 if [ $worker_threads -lt 0 ]; then
-  worker_threads=0
+    worker_threads=1
 fi
 
 echo "GPU: $CUDA_VISIBLE_DEVICES GPU Threads: $gpu_threads CPU Threads: $cpu_threads Worker Threads: $worker_threads Batch Size: $max_batch_size Batch Drain: $batch_drain_size Iterations: $iterations FileLimit: $file_limit beam=$beam lattice-beam=$lattice_beam max-active=$max_active"
@@ -64,7 +68,7 @@ mkdir -p $result_path
 # copy vocabulary locally as lowercase (see below caveat for comment on this)
 cat $model_path/words.txt | tr '[:upper:]' '[:lower:]' > $result_path/words.txt
 
-for test_set in $data_sets ; do
+for test_set in $datasets ; do
   mkdir $result_path/$test_set
   echo "Generating new reference transcripts for model and dataset..."
   cat $dataset_path/$test_set/text | tr '[:upper:]' '[:lower:]' > $result_path/$test_set/text
@@ -75,7 +79,7 @@ done
 
 fail=0
 for decoder in $DECODERS ; do
-  for test_set in $data_sets ; do
+  for test_set in $datasets ; do
     log_file="$result_path/log.$decoder.$test_set.out"
 
     path="cudadecoderbin"
@@ -135,7 +139,7 @@ done
 
 echo "BENCHMARK SUMMARY:"
 for decoder in $DECODERS ; do
-  for test_set in $data_sets ; do
+  for test_set in $datasets ; do
     log_file="$result_path/log.$decoder.$test_set.out"
     echo "    test_set: $test_set"
     echo "        `cat $log_file | grep 'Overall:  Aggregate Total Time' | cut -d ")" -f 3 |  awk '{$1=$1};1'`"
