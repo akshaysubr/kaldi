@@ -276,6 +276,11 @@ gather:
     - V100
     - 4GPU
 
+.V100_8GPU: &V100_8GPU
+    tags:
+    - V100
+    - 8GPU
+
 .T4_R410_2GPU: &T4_R410_2GPU
     tags:
     - T4
@@ -328,6 +333,10 @@ L0_librispeech--P40_R384_2GPU:
 L0_librispeech--V100_4GPU:
     <<: *L0_TEST
     <<: *V100_4GPU
+
+L0_librispeech--V100_8GPU:
+    <<: *L0_TEST
+    <<: *V100_8GPU
 
 L0_librispeech--T4_R410_2GPU:
     <<: *L0_TEST
