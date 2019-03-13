@@ -8,9 +8,6 @@ Kaldi is an open-source software framework for speech processing.
 This container has Kaldi pre-built and ready to use in /opt/kaldi. In addition,
 the source can be found in /opt/kaldi/src.
 
-The open-source project can be found here: https://github.com/kaldi-asr/kaldi
-Documentation can be found here:  http://kaldi-asr.org/
-
 Kaldi is pre-built in this container, but it can be rebuilt like this:
 
 ```
@@ -36,6 +33,11 @@ cd /workspace/nvidia-examples/librispeech/
 ./run_benchmark.sh
 ```
 
+## Suggested Reading
+
+The open-source project can be found here: https://github.com/kaldi-asr/kaldi
+
+Documentation can be found here:  http://kaldi-asr.org/
 
 
 
