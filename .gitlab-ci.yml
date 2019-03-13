@@ -271,11 +271,6 @@ gather:
     - R384
     - 2GPU
 
-.V100_4GPU: &V100_4GPU
-    tags:
-    - V100
-    - 4GPU
-
 .V100_8GPU: &V100_8GPU
     tags:
     - V100
@@ -318,10 +313,6 @@ L0_egs_voxforge--P100_4GPU:
     <<: *L0_TEST
     <<: *P100_4GPU
 
-L0_egs_voxforge--V100_4GPU:
-    <<: *L0_TEST
-    <<: *V100_4GPU
-
 L0_librispeech--P100_4GPU:
     <<: *L0_TEST
     <<: *P100_4GPU
@@ -329,10 +320,6 @@ L0_librispeech--P100_4GPU:
 L0_librispeech--P40_R384_2GPU:
     <<: *L0_TEST
     <<: *P40_R384_2GPU
-
-L0_librispeech--V100_4GPU:
-    <<: *L0_TEST
-    <<: *V100_4GPU
 
 L0_librispeech--V100_8GPU:
     <<: *L0_TEST
