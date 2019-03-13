@@ -14,7 +14,7 @@ Documentation can be found here:  http://kaldi-asr.org/
 Kaldi is pre-built in this container, but it can be rebuilt like this:
 
 ```
-%> make -C -j /opt/kaldi/src/
+%> make -j -C /opt/kaldi/src/
 ```
 
 ## LibriSpeech Example
