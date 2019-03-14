@@ -33,6 +33,14 @@ cd /workspace/nvidia-examples/librispeech/
 ./run_benchmark.sh
 ```
 
+To run on multiple-GPUs you must run a seperate application on each GPU.We have 
+provided a script demonstring this.
+
+```
+cd /workspace/nvidia-examples/librispeech/
+./run_multigpu_benchmark.sh
+```
+
 ## Suggested Reading
 
 The open-source project can be found here: https://github.com/kaldi-asr/kaldi
