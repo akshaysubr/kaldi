@@ -5,7 +5,7 @@ declare -A EXPECTED_PERF
 
 EXPECTED_WER=( 
   ["test_clean"]="5.55" 
-  ["test_other"]="14.02" 
+  ["test_other"]="14.03" 
 )
 
 EXPECTED_PERF=(
