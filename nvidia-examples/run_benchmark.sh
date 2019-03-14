@@ -83,7 +83,7 @@ for decoder in $DECODERS ; do
     log_file="$result_path/log.$decoder.$test_set.out"
 
     path="cudadecoderbin"
-    cuda_flags="--cuda-use-tensor-cores=true --iterations=$iterations --max-tokens-per-frame=500000 --cuda-memory-proportion=.5 --max-batch-size=$max_batch_size --cuda-control-threads=$gpu_threads --batch-drain-size=$batch_drain_size --cuda-worker-threads=$worker_threads"
+    cuda_flags="--cuda-use-tensor-cores=true --iterations=$iterations --max-tokens-per-frame=400000 --cuda-memory-proportion=.5 --max-batch-size=$max_batch_size --cuda-control-threads=$gpu_threads --batch-drain-size=$batch_drain_size --cuda-worker-threads=$worker_threads"
 
     # run the target decoder with the current dataset
     echo "Running $decoder decoder on $test_set$trunc [$threads threads]..."
