@@ -54,7 +54,13 @@ fi
 
 popd >&/dev/null
 
-#no model download at this time
+if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
+  echo ----------- Fetching trained model -----------
+  pushd $models >&/dev/null
+  wget http://sqrl/datasets/speech/models/aspire-trained.tar.gz -O aspire-trained.tgz
+  tar -xzf aspire-trained.tgz
+  popd >&/dev/null
+fi
 
 ln -s ../run_benchmark.sh
 ln -s ../run_multigpu_benchmark.sh
