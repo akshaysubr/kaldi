@@ -9,8 +9,8 @@ EXPECTED_WER=(
 )
 
 EXPECTED_PERF=(
-  ["2xT4_test_clean"]="1300"
-  ["2xT4_test_other"]="1100"
+  ["2xT4_test_clean"]="1200"
+  ["2xT4_test_other"]="1000"
   ["2xP40_test_clean"]="1300"
   ["2xP40_test_other"]="800"
   ["4xP100_test_clean"]="1200"
