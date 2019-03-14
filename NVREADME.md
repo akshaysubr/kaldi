@@ -33,8 +33,8 @@ cd /workspace/nvidia-examples/librispeech/
 ./run_benchmark.sh
 ```
 
-To run on multiple-GPUs you must run a seperate application on each GPU.We have 
-provided a script demonstring this.
+To run on multiple-GPUs you must run a separate application on each GPU.  We have 
+provided a script demonstrating this.
 
 ```
 cd /workspace/nvidia-examples/librispeech/
