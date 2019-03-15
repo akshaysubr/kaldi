@@ -18,7 +18,7 @@ for dataset in $datasets; do
   echo "Running $dataset on $num_gpus GPUs with $threads_per_gpu threads per GPU"
   
   for (( d = 0 ; d < $num_gpus ; d++ )); do
-    ./run_benchmark.sh $d $dataset 2 $threads_per_gpu &> output.$d&
+    GPU=$d DATA_SETS="$dataset" GPU_THREADS=2 CPU_THREADS=$threads_per_gpu ./run_benchmark.sh &> output.$d&
   done
   
   wait
