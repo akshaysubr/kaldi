@@ -34,7 +34,7 @@ struct CudaDecoderConfig {
   BaseFloat default_beam;
   BaseFloat lattice_beam;
   int32 ntokens_pre_allocated;
-  int32 max_tokens_per_frame;
+  int32 main_q_capacity, aux_q_capacity;
   int32 nlanes;
   int32 nchannels;
   int32 max_active;
@@ -43,7 +43,8 @@ struct CudaDecoderConfig {
       : default_beam(15.0),
         lattice_beam(10.0),
         ntokens_pre_allocated(2000000),
-        max_tokens_per_frame(1000000),
+        main_q_capacity(100000),
+        aux_q_capacity(1000000),
         max_active(10000) {}
 
   void Register(OptionsItf *opts) {
@@ -59,10 +60,8 @@ struct CudaDecoderConfig {
         "Number of tokens pre-allocated in host buffers.  If"
         "this size is exceeded the buffer will reallocate larger consuming more"
         "resources");
-    opts->Register(
-        "max-tokens-per-frame", &max_tokens_per_frame,
-        "maximum tokens in GPU memory per frame.  If this"
-        "value is exceeded the beam will tighten and accuracy may decrease.");
+    opts->Register("main_q_capacity", &main_q_capacity, "TODO");  // TODO
+    opts->Register("aux_q_capacity", &aux_q_capacity, "TODO");    // TODO
     opts->Register("lattice-beam", &lattice_beam,
                    "The width of the lattice beam");
     opts->Register("max-active", &max_active,
@@ -71,8 +70,8 @@ struct CudaDecoderConfig {
   }
   void Check() const {
     KALDI_ASSERT(default_beam > 0.0 && ntokens_pre_allocated >= 0 &&
-                 max_tokens_per_frame > 0 && lattice_beam >= 0.0f &&
-                 max_active > 1);
+                 main_q_capacity > 0 && aux_q_capacity >= main_q_capacity &&
+                 lattice_beam >= 0.0f && max_active > 1);
   }
 };
 
@@ -565,7 +564,7 @@ class CudaDecoder {
   int32 ntokens_pre_allocated_;
   int32 max_active_;         // Target value for the params
   int32 max_active_thresh_;  // target value + tolerance
-  int32 max_tokens_per_frame_;
+  int32 aux_q_capacity_, main_q_capacity_;
   // Hashmap capacity. Multiple of max_tokens_per_frame
   int32 hashmap_capacity_;
 

@@ -17,7 +17,6 @@
 
 #define SLEEP_BACKOFF_NS 500
 #define SLEEP_BACKOFF_S ((double)SLEEP_BACKOFF_NS/1e9)
-#if HAVE_CUDA == 1
 #include "cudadecoder/batched-threaded-cuda-decoder.h"
 #include "base/kaldi-utils.h"
 #include <nvToolsExt.h>
@@ -634,5 +633,3 @@ void BatchedThreadedCudaDecoder::ExecuteWorker(int threadId) {
 
 }  // end namespace cuda_decoder
 } // end namespace kaldi.
-
-#endif
