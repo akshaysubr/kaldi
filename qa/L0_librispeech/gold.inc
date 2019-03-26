@@ -9,14 +9,14 @@ EXPECTED_WER=(
 )
 
 EXPECTED_PERF=(
-  ["2xT4_test_clean"]="1200"
-  ["2xT4_test_other"]="1000"
-  ["2xP40_test_clean"]="1300"
-  ["2xP40_test_other"]="800"
-  ["4xP100_test_clean"]="1200"
-  ["4xP100_test_other"]="700"
-  ["4xV100_test_clean"]="1400"
-  ["4xV100_test_other"]="1200"
+  ["2xT4_test_clean"]="0"
+  ["2xT4_test_other"]="0"
+  ["2xP40_test_clean"]="0"
+  ["2xP40_test_other"]="0"
+  ["4xP100_test_clean"]="0"
+  ["4xP100_test_other"]="0"
+  ["4xV100_test_clean"]="0"
+  ["4xV100_test_other"]="0"
   ["8xV100_test_clean"]="800"
   ["8xV100_test_other"]="700"
 )
