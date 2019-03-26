@@ -17,7 +17,6 @@
 
 #ifndef KALDI_CUDA_DECODER_DECODABLE_ITF_H
 #define KALDI_CUDA_DECODER_DECODABLE_ITF_H
->>>>>>> master-develop
 
 #include "itf/decodable-itf.h"
 
@@ -28,8 +27,6 @@ class CudaDecodableInterface : public DecodableInterface {
 public:
   virtual BaseFloat *GetLogLikelihoodsCudaPointer(int32 subsampled_frame) = 0;
 };
-}
-
 
 }  // end namespace cuda_decoder
 }  // end namespace kaldi.

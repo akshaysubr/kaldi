@@ -284,6 +284,7 @@ int main(int argc, char *argv[]) {
               << " Aggregate Total Time: " << total_time
               << " Total Audio: " << total_audio * iterations
               << " RealTimeX: " << total_audio * iterations / total_time;
+
     delete word_syms; // will delete if non-NULL.
 
     clat_writer.Close();
