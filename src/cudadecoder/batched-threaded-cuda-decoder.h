@@ -1,25 +1,22 @@
 // cudadecoder/batched-threaded-cuda-decoder.h
-/*
- * Copyright (c) 2017, NVIDIA CORPORATION.  All rights reserved.
- * Authors:  Hugo Braun, Justin Luitjens, Ryan Leary
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//
+// Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+// Hugo Braun, Justin Luitjens, Ryan Leary
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#ifndef KALDI_CUDA_DECODEABLE_H_
-#define KALDI_CUDA_DECODEABLE_H_
-
-#if HAVE_CUDA == 1
+#ifndef KALDI_CUDA_DECODER_BATCHED_THREADED_CUDA_DECODER_H_
+#define KALDI_CUDA_DECODER_BATCHED_THREADED_CUDA_DECODER_H_
 
 #include <atomic>
 #include <thread>
@@ -33,7 +30,7 @@
 #include "thread-pool.h"
 
 namespace kaldi {
-namespace CudaDecode {
+namespace cuda_decoder {
 
 /* BatchedThreadedCudaDecoderConfig
  * This class is a common configuration class for the various components
@@ -45,13 +42,16 @@ namespace CudaDecode {
 // BatchedThreadedCudaDecoder
 struct BatchedThreadedCudaDecoderConfig {
   BatchedThreadedCudaDecoderConfig()
-      : max_batch_size(10), batch_drain_size(5), num_control_threads(7),
-        num_worker_threads(4), determinize_lattice(true),
+      : max_batch_size(50),
+        batch_drain_size(10),
+        num_control_threads(2),
+        num_worker_threads(20),
+        determinize_lattice(true),
         max_pending_tasks(4000){};
   void Register(OptionsItf *po) {
-
     po->Register("max-batch-size", &max_batch_size,
-                 "The maximum batch size to be used by the decoder.");
+                 "The maximum batch size to be used by the decoder. "
+                 "Higher->Faster, more GPU memory used");
     po->Register("batch-drain-size", &batch_drain_size,
                  "How far to drain the batch before refilling work.  This "
                  "batches pre/post decode work.");
@@ -264,9 +264,7 @@ private:
   std::vector<std::thread> thread_contexts_;      // A list of thread contexts
 };
 
-}  // end namespace CudaDecode
+}  // end namespace cuda_decoder
 } // end namespace kaldi.
 
-#endif
-
-#endif
+#endif  // KALDI_CUDA_DECODER_BATCHED_THREADED_CUDA_DECODER_H_

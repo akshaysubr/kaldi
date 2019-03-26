@@ -25,8 +25,8 @@ freely, subject to the following restrictions:
    distribution.
 */
 
-#ifndef THREAD_POOL_H
-#define THREAD_POOL_H
+#ifndef KALDI_CUDA_DECODER_THREAD_POOL_H_
+#define KALDI_CUDA_DECODER_THREAD_POOL_H_
 
 #include <condition_variable>
 #include <functional>
@@ -114,4 +114,4 @@ inline ThreadPool::~ThreadPool() {
     worker.join();
 }
 
-#endif
+#endif  // KALDI_CUDA_DECODER_THREAD_POOL_H_

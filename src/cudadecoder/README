@@ -90,12 +90,12 @@ BatchedThreadedCudaDecoderOptions:
 Decoder Options:
   beam:  The width of the beam during decoding
   lattice-beam:  The width of the lattice beam
-  max-tokens-preallocated:  number of tokens allocated in host buffers.  If
+  ntokens-preallocated:  number of tokens allocated in host buffers.  If
     this size is exceeded the buffer will reallocate larger consuming more
     resources
   max-tokens-per-frame:  maximum tokens in GPU memory per frame.  If this
     value is exceeded the beam will tighten and accuracy may decrease.
-  max-active:  maximum number of arcs active in any given frame.
+  max-active: at the end of each frame computation, we keep only its best max-active tokens (arc instantiations)
 
 Device Options:
   use-tensor-cores:  Enables tensor core (fp16 math) for gemms.  This is
@@ -133,4 +133,9 @@ usage. How they impact memory usage and accuracy is discussed below:
     will reduce kernel runtime while increase launch latency overhead.
     Ideally this should be as large as possible while still fitting into
     memory.  Note that currently the maximum allowed is 200.
+
+== Acknowledgement ==
+
+We would like to thank Daniel Povey, Zhehuai Chen and Daniel Galvez for their help and expertise during the review process.
+
 

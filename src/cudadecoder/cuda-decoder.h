@@ -15,90 +15,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef KALDI_DECODER_CUDA_DECODER_H_
-#define KALDI_DECODER_CUDA_DECODER_H_
+#ifndef KALDI_CUDA_DECODER_CUDA_DECODER_H_
+#define KALDI_CUDA_DECODER_CUDA_DECODER_H_
+
+#include "cudadecoder/cuda-decodable-itf.h"
+#include "cudadecoder/cuda-decoder-common.h"
+#include "cudadecoder/cuda-fst.h"
+#include "nnet3/decodable-online-looped.h"
 
 #include <cuda_runtime_api.h>
 #include <tuple>
 #include <vector>
 
-#include "cudadecoder/cuda-decodable-itf.h"
-#include "cudadecoder/cuda-decoder-utils.h"
-#include "cudadecoder/cuda-fst.h"
-#include "nnet3/decodable-online-looped.h"
-#include "util/stl-utils.h"
-
-// A decoder channel is linked to one utterance. Frames
-// from the same must be sent to the same channel.
-//
-// A decoder lane is where the computation actually happens
-// a decoder lane is given a frame and its associated channel
-// and does the actual computation
-//
-// An analogy would be lane -> a core, channel -> a software thread
-
-// Number of GPU decoder lanes
-#define KALDI_CUDA_DECODER_MAX_N_LANES 200
-
-// If we're at risk of filling the tokens queue,
-// the beam is reduced to keep only the best candidates in the
-// remaining space
-// We then slowly put the beam back to its default value
-// beam_next_frame = min(default_beam, RECOVER_RATE * beam_previous_frame)
-#define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_RECOVER_RATE 1.2f
-
-// Defines for the cuda decoder kernels
-// It shouldn't be necessary to change the DIMX of the kernels
-
-// Below that value, we launch the persistent kernel for NonEmitting
-#define KALDI_CUDA_DECODER_NONEM_LT_MAX_NARCS 4096
-
-// We know we will have at least X elements in the hashmap
-// We allocate space for X*KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR elements
-// to avoid having too much collisions
-#define KALDI_CUDA_DECODER_HASHMAP_CAPACITY_FACTOR 1
-
-// Max size of the total kernel arguments
-// 4kb for compute capability >= 2.0
-#define KALDI_CUDA_DECODER_MAX_KERNEL_ARGUMENTS_BYTE_SIZE (4096)
-
-// When applying the max-active, we need to compute a topk
-// to perform that (soft) topk, we compute a histogram
-// here we define the number of bins in that histogram
-// it has to be less than the number of 1D threads
-#define KALDI_CUDA_DECODER_HISTO_NBINS 255
-
-// Adaptive beam parameters
-// We will decrease the beam when we detect that we are generating too many
-// tokens
-// for the first segment of the aux_q, we don't do anything (keep the original
-// beam)
-// the first segment is made of (aux_q
-// capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
-// then we will decrease the beam step by step, until 0.
-// we will decrease the beam every m elements, with:
-// x = (aux_q capacity)/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT (static
-// segment
-// y = (aux_q capacity) - x
-// m = y / KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS
-#define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT 4
-#define KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NBINS 8
-// When applying max_active we don't keep exactly max_active_ tokens,
-// but a bit more. And we can call ApplyMaxActiveAndReduceBeam multiple times
-// in the first frame (the first times as a pre-filter, the last time at the
-// very end of the frame)
-// Because keeping a bit more than max_active_ is expected, we add the tolerance
-// so that we can avoid triggering ApplyMaxActiveAndReduceBeam for just a few
-// tokens above the limit
-// at the end of the frame
-#define KALDI_CUDA_DECODER_MAX_ACTIVE_TOLERANCE 0.2
-
 namespace kaldi {
-namespace CudaDecode {
+namespace cuda_decoder {
+
 struct CudaDecoderConfig {
   BaseFloat default_beam;
   BaseFloat lattice_beam;
-  int32 max_tokens;
+  int32 ntokens_pre_allocated;
   int32 max_tokens_per_frame;
   int32 nlanes;
   int32 nchannels;
@@ -107,7 +42,7 @@ struct CudaDecoderConfig {
   CudaDecoderConfig()
       : default_beam(15.0),
         lattice_beam(10.0),
-        max_tokens(2000000),
+        ntokens_pre_allocated(2000000),
         max_tokens_per_frame(1000000),
         max_active(10000) {}
 
@@ -116,21 +51,27 @@ struct CudaDecoderConfig {
         "beam", &default_beam,
         "Decoding beam.  Larger->slower, more accurate. The beam may be"
         "decreased if we are generating too many tokens compared to "
-        "what the queue can hold (max_tokens_per_frame)");
-    opts->Register("max-tokens-pre-allocated", &max_tokens,
-                   "Total number of tokens pre-allocated (equivalent to "
-                   "reserve in a std vector).  If actual usaged exceeds this "
-                   "performance will be degraded");
-    opts->Register("max-tokens-per-frame", &max_tokens_per_frame,
-                   "Number of tokens allocated per frame. If actual usaged "
-                   "exceeds this the results are undefined.");
-    opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam");
+        "what the queue can hold (max_tokens_per_frame). It will then be "
+        "restored "
+        "to default_beam.");
+    opts->Register(
+        "ntokens-pre-allocated", &ntokens_pre_allocated,
+        "Number of tokens pre-allocated in host buffers.  If"
+        "this size is exceeded the buffer will reallocate larger consuming more"
+        "resources");
+    opts->Register(
+        "max-tokens-per-frame", &max_tokens_per_frame,
+        "maximum tokens in GPU memory per frame.  If this"
+        "value is exceeded the beam will tighten and accuracy may decrease.");
+    opts->Register("lattice-beam", &lattice_beam,
+                   "The width of the lattice beam");
     opts->Register("max-active", &max_active,
-                   "Max number of tokens active for each frame");
+                   "At the end of each frame computation, we keep only its "
+                   "best max-active tokens (arc instantiations)");
   }
   void Check() const {
-    KALDI_ASSERT(default_beam > 0.0 && max_tokens > 0 &&
-                 max_tokens_per_frame > 0 && lattice_beam >= 0 &&
+    KALDI_ASSERT(default_beam > 0.0 && ntokens_pre_allocated >= 0 &&
+                 max_tokens_per_frame > 0 && lattice_beam >= 0.0f &&
                  max_active > 1);
   }
 };
@@ -349,6 +290,11 @@ class CudaDecoder {
   // values
   // (func returns int32)
   // Used for instance to ge the max number of arcs for all lanes
+  // func is called with h_lanes_counters_[ilane] for each lane.
+  // h_lanes_counters_
+  // must be ready to be used when calling GetMaxForAllLanes (you might want to
+  // call
+  // CopyLaneCountersToHost[A|]sync to make sure everything is ready first)
   int32 GetMaxForAllLanes(std::function<int32(const LaneCounters &)> func);
   // Copy the lane counters back to host, async or sync
   // The lanes counters contain all the information such as main_q_end (number
@@ -359,17 +305,14 @@ class CudaDecoder {
   void CopyLaneCountersToHostAsync();
   void CopyLaneCountersToHostSync();
   // The selected tokens for each frame will be copied back to host. We will
-  // store them
-  // on host memory, and we wil use them to create the final lattice once we've
-  // reached the last frame
+  // store them on host memory, and we wil use them to create the final lattice
+  // once we've reached the last frame
   // We will also copy information on those tokens that we've generated on the
-  // device, such as
-  // which tokens are associated to the same FST state in the same frame, or
-  // their extra cost.
+  // device, such as which tokens are associated to the same FST state in the
+  // same frame, or their extra cost.
   // We cannot call individuals Device2Host copies for each channel, because it
-  // would lead to a lot of
-  // small copies, reducing performance. Instead we concatenate all channels
-  // data into a single
+  // would lead to a lot of small copies, reducing performance. Instead we
+  // concatenate all channels data into a single
   // continuous array, copy that array to host, then unpack it to the individual
   // channel vectors
   // The first step (pack then copy to host, async) is done in
@@ -382,14 +325,20 @@ class CudaDecoder {
   // That data is contained in the array (pointer, X), with pointer = src[ilane]
   // It will be concatenated in d_concat on device, then copied async into
   // h_concat
-  // That copy is launched on st
+  // That copy is launched on stream st
   // The offset of the data of each lane in the concatenate array is saved in
   // *lanes_offsets_ptr
   // it will be used for unpacking in MoveConcatenatedCopyToVector
+  //
+  // func is called with h_lanes_counters_[ilane] for each lane.
+  // h_lanes_counters_
+  // must be ready to be used when calling GetMaxForAllLanes (you might want to
+  // call
+  // CopyLaneCountersToHost[A|]sync to make sure everything is ready first)
   template <typename T>
   void PerformConcatenatedCopy(std::function<int32(const LaneCounters &)> func,
-                               LaneMatrixInterface<T> src, T *d_concat,
-                               T *h_concat, cudaStream_t st,
+                               LaneMatrixView<T> src, T *d_concat, T *h_concat,
+                               cudaStream_t st,
                                std::vector<int32> *lanes_offsets_ptr);
   template <typename T>
   void MoveConcatenatedCopyToVector(const std::vector<int32> &lanes_offsets,
@@ -587,6 +536,14 @@ class CudaDecoder {
   DeviceLaneMatrix<InfoToken> d_aux_q_info_;
   // Dedicated space for the concat of extra_cost. We should reuse memory
   DeviceLaneMatrix<float2> d_extra_and_acoustic_cost_concat_matrix;
+  // We will list in d_list_final_tokens_in_main_q all tokens within [min_cost;
+  // min_cost+lattice_beam]
+  // It is used when calling GetBestCost
+  // We only use an interface here because we will actually reuse data from
+  // d_aux_q_state_and_cost
+  // We are done using the aux_q when GetBestCost is called, so we can reuse
+  // that memory
+  LaneMatrixView<int2> d_list_final_tokens_in_main_q_;
   // Parameters used by the kernels
   // DeviceParams contains all the parameters that won't change
   // i.e. memory address of the main_q for instance
@@ -605,7 +562,7 @@ class CudaDecoder {
   // Those are defined in CudaDecoderConfig
   CostType default_beam_;
   CostType lattice_beam_;
-  int32 max_tokens_;
+  int32 ntokens_pre_allocated_;
   int32 max_active_;         // Target value for the params
   int32 max_active_thresh_;  // target value + tolerance
   int32 max_tokens_per_frame_;
@@ -635,6 +592,7 @@ class CudaDecoder {
   InfoToken *h_infotoken_concat_, *d_infotoken_concat_;
   CostType *h_acoustic_cost_concat_, *d_acoustic_cost_concat_;
   InfoToken *h_extra_prev_tokens_concat_;
+  int2 *h_list_final_tokens_in_main_q_;
   // Offsets used in MoveConcatenatedCopyToVector
   std::vector<int32> h_main_q_end_lane_offsets_,
       h_emitting_main_q_end_lane_offsets_;
@@ -642,7 +600,7 @@ class CudaDecoder {
   // Used when calling GetBestCost
   std::vector<std::pair<int32, CostType>> argmins_;
   std::vector<bool> has_reached_final_;
-  std::vector<std::vector<std::pair<int, float>>>
+  std::vector<std::vector<std::pair<int32, CostType>>>
       list_finals_token_idx_and_cost_;
 
   // GetRawLattice helper
@@ -769,7 +727,7 @@ class CudaDecoder {
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
 
-}  // end namespace CudaDecode
+}  // end namespace cuda_decoder
 }  // end namespace kaldi
 
-#endif
+#endif  // KALDI_CUDA_DECODER_CUDA_DECODER_H_

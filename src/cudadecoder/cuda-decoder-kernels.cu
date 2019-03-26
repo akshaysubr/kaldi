@@ -17,12 +17,12 @@
 
 #include <cub/cub.cuh>
 #include "cuda-decoder-kernels.h"
-#include "cuda-decoder-kernels-utils.inc"  // TODO this is temporary. We'll switch back to a .h asap.
+#include "cuda-decoder-kernels-utils.h"
 
 namespace kaldi {
-namespace CudaDecode {
+namespace cuda_decoder {
 
-// Initialize the hashmap with no_vals
+// Initialize the hashmap with NO_VAL
 // Called in InitDeviceData, when building the CudaDecoder object
 __global__ void init_hashmap_kernel(DeviceParams cst_dev_params) {
   const int max_nlanes = cst_dev_params.max_nlanes;
@@ -189,9 +189,10 @@ __global__ void save_channels_state_from_lanes_kernel(
 // Used to prepare data for copy to Host. We want to avoid small Device2Host
 // copies.
 template <typename T>
-__global__ void concatenate_lanes_data(DeviceParams cst_dev_params,
-                                       KernelParams params,
-                                       LaneMatrixInterface<T> src, T *concat) {
+__global__ void concatenate_lanes_data_kernel(DeviceParams cst_dev_params,
+                                              KernelParams params,
+                                              LaneMatrixView<T> src,
+                                              T *concat) {
   const int nlanes = params.nlanes_used;
   KALDI_CUDA_DECODER_BATCH_KERNEL_LOOP(ilane, nlanes) {
     int32 beg = params.main_q_end_lane_offsets[ilane];
@@ -278,7 +279,7 @@ __global__ void nonemitting_preprocess_and_contract_kernel(
       if (KALDI_CUDA_DECODER_IS_LAST_1D_THREAD()) {
         // This conditional branch is entered by the last thread
         // Because it is the last, the prefix_sum of that thread contains the
-        // sum of all elts
+        // sum of all elements
 
         // We also add the value from this thread - the prefix sum is exclusive
         // For the sum, we want it inclusive
@@ -354,7 +355,70 @@ __global__ void nonemitting_preprocess_and_contract_kernel(
   }
 }
 
+// GetAdaptiveBeam is used in ExpandArcs
+// When we generate new tokens by traversing arcs, 
+// we can end up creating a lot of tokens, if the current frame 
+// generated loglikelihoods too uniform for instance (we don't have
+// any good tokens that will reduce the cutoff, so we end up generating
+// a lot of tokens)
+// To avoid overflowing the aux_q, we apply a decreasing beam.
+// With aux_q_end being the current aux_q size, we have a decrease function f, with
+// adaptive_beam = f(aux_q_end)
+// f is a decreasing piecewise constant function
+// Please note that when processing tokens, we usually have dozens of thousands of threads
+// generating tokens. Those are already in flight, and will not reload the beam immediatly.
+// It means that we need to start reducing the beam as soon as we detect that we are generating more tokens than
+// expected. 
+// We can configure the function f using KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
+// and KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NSTEPS.
+// We will use default_beam for the first max_tokens_per_frame/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
+// tokens in the aux_q.
+// Once we reach that number, we will decrease the adaptive beam linearly from default_beam to 0,
+// using KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NSTEPS steps
 //
+// x-axis : aux_q_end. How much tokens are already in the aux_q
+// y-axis : adaptive_beam = f(aux_q_end)
+// default_beam _| ________________
+//               |               /\ _________
+//               |                |          _________
+//            0 _|   static_segment                   _________
+//               |________________________________________________
+//               |                                             |     
+//   aux_q_end=  0                                    max_tokens_per_frame
+// We have :     
+// static_segment = max_tokens_per_frame/KALDI_CUDA_DECODER_ADAPTIVE_BEAM_STATIC_SEGMENT
+// and KALDI_CUDA_DECODER_ADAPTIVE_BEAM_NSTEPS = 3
+__device__ void UpdateAdaptiveBeam(const DeviceParams &cst_dev_params,
+                                   const int aux_q_index_block_offset,
+                                   IntegerCostType min_int_cost,
+                                   int2 *adaptive_int_beam_with_validity_index,
+                                   LaneCounters *lane_counters) {
+  int32 beam_valid_until_idx = adaptive_int_beam_with_validity_index->y;
+  if (aux_q_index_block_offset < beam_valid_until_idx) return;  // nothing to do
+
+  CostType beam = orderedIntToFloat(adaptive_int_beam_with_validity_index->x);
+  while (aux_q_index_block_offset >= beam_valid_until_idx) {
+    beam /= 2;
+    beam_valid_until_idx += cst_dev_params.adaptive_beam_bin_width;
+  }
+
+  IntegerCostType new_int_cutoff = (min_int_cost < INT_MAX)
+      ? floatToOrderedInt(orderedIntToFloat(min_int_cost) + beam)
+      : INT_MAX;
+  IntegerCostType int_beam = floatToOrderedInt(beam);
+  adaptive_int_beam_with_validity_index->x = int_beam;
+  adaptive_int_beam_with_validity_index->y = beam_valid_until_idx;
+  // We can have races between the two atomics
+  // However the worst than can happen is a CTA might delay updating the beam
+  // This is not a critical bug. However, once we have a floatToOrderedInt
+  // that is generating unsigned ints, we could merge the two atomics into a
+  // single atomic64
+  atomicMin(&lane_counters->adaptive_int_beam_with_validity_index.x, int_beam);
+  atomicMax(&lane_counters->adaptive_int_beam_with_validity_index.y,
+            beam_valid_until_idx);
+  atomicMin(&lane_counters->int_cutoff, new_int_cutoff);
+}
+
 // ExpandArc kernel
 // This kernel does the actual work of traversing arcs
 //
@@ -720,7 +784,6 @@ __global__ void post_expand_kernel(DeviceParams cst_dev_params,
   }
 }
 
-// FinalizeProcessNonemitting
 // Meta-kernel (merging preprocess and expand) but only works with 1 CUDA block
 // Used to avoid calling multiple main kernels (such as expand_arcs_kernel)
 // for the tail of non emitting (lots of iterations with small number of arcs)
@@ -739,7 +802,6 @@ __global__ void post_expand_kernel(DeviceParams cst_dev_params,
 // so that it's ready for next ProcessEmitting
 //
 // This kernel works, but can be greatly simplified now.
-//
 __launch_bounds__(KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 1) __global__
     void finalize_process_non_emitting_kernel(DeviceParams cst_dev_params,
                                               KernelParams params) {
@@ -918,7 +980,7 @@ __launch_bounds__(KALDI_CUDA_DECODER_LARGEST_1D_BLOCK, 1) __global__
 // We set both channel_counters->min_int_cost_and_arg_without_final
 // and channel_counters->min_int_cost_and_arg_with_final
 // One add the final_cost[token.state] before looking for the min
-__global__ void get_best_cost_kernel_step1(DeviceParams cst_dev_params,
+__global__ void get_best_cost_step1_kernel(DeviceParams cst_dev_params,
                                            KernelParams params,
                                            bool use_final_probs,
                                            CostType fst_zero) {
@@ -967,10 +1029,9 @@ __global__ void get_best_cost_kernel_step1(DeviceParams cst_dev_params,
 // Step2: Now that step1 found the min_cost (with and without final cost)
 // If at least one final token (token associated with a final fst state)
 // exists in the token queue, AND if use_final_probs is true,
-// we will
 // We can detect all tokens with a cost within [min_cost;min_cost+lattice_beam]
 // and list them into d_list_final_tokens_in_main_q
-__global__ void get_best_cost_kernel_step2(DeviceParams cst_dev_params,
+__global__ void get_best_cost_step2_kernel(DeviceParams cst_dev_params,
                                            KernelParams params,
                                            bool use_final_probs,
                                            CostType fst_zero) {
@@ -1187,12 +1248,23 @@ __global__ void fill_hashmap_with_main_q_kernel(DeviceParams cst_dev_params,
             ichannel)[main_q_idx];
         StateId token_state = both.x;
         IntegerCostType token_int_cost = both.y;
-        int local_idx;
-        hashmap_insert(cst_dev_params.d_hashmap_values.lane(ilane), token_state,
-                       token_int_cost, main_q_idx,
-                       cst_dev_params.hashmap_capacity, &local_idx);
+        int local_idx, hash_idx;
+        hashmap_insert_or_aggregate(cst_dev_params.d_hashmap_values.lane(ilane),
+                                    token_state, token_int_cost, main_q_idx,
+                                    cst_dev_params.hashmap_capacity, &local_idx,
+                                    &hash_idx);
         cst_dev_params.d_main_q_n_extra_prev_tokens_local_idx.lane(
             ilane)[main_q_idx] = local_idx;
+        // Saving where that token.state ended up in the hashmap
+        // false = this token is not the representative of this state
+        // We will update representing_state once we know more (in the next
+        // kernel)
+        // We first need to add all tokens to the hashmap. Which will be the
+        // case when
+        // this kernel returns.
+        SetFSTStateHashIndex(
+            hash_idx, false,
+            &cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx]);
       }
     }
   }
@@ -1212,17 +1284,12 @@ __global__ void fill_hashmap_with_main_q_kernel(DeviceParams cst_dev_params,
 // so we'll compute a prefix_sum also to compute those indexes. We'll then save
 // the location of each extra tokens list (its offset and size in
 // d_main_q_extra_prev_tokens),
-// and save it into d_main_q_info (where we used to store the actual tokens).
-// When reading d_main_q_info, we can call
-// token.IsUniqueTokenForStateAndFrame(),
-// if true, it is directly the token that we want
-// if false, we call token.GetSameFSTStateTokensList(), which gives us
-// [offset,size] of where to read in d_main_q_extra_prev_tokens to find the
-// tokens that we want
-
+// and save it into d_main_q_info for later lattice processing
+//
 // First step : Reading the hashmap, detecting which token is representative for
-// each FST state (we pick one of the best ones, with the best ones being the
-// ones with the lowest cost)
+// each FST state, which is decided by fill_hashmap_with_main_q_kernel()
+// (we pick one of the best ones, with the best ones being the ones with the
+// lowest cost)
 // this representative will be responsible for K tokens, with K being the number
 // of tokens associated with that FST state. We only considers the cases where K
 // > 1,
@@ -1276,16 +1343,20 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_step1_kernel(
             ichannel)[main_q_idx];
         StateId token_state = both.x;
         IntegerCostType token_int_cost = both.y;
-        int hash_idx;
         // Loading info about token.next_state. Is there multiple tokens for
         // that state ?
         // How many ? What's the min token.cost for that state ?
+        int32 hash_idx;    // we saved the hash_idx after inserting
+        bool bool_buffer;  // will always be false. We just need it to call the
+                           // function
+        GetFSTStateHashIndex(
+            cst_dev_params.d_main_q_state_hash_idx.lane(ilane)[main_q_idx],
+            &hash_idx, &bool_buffer);
         HashmapValueT h_val =
-            hashmap_find(cst_dev_params.d_hashmap_values.lane(ilane),
-                         token_state, cst_dev_params.hashmap_capacity,
-                         &hash_idx);  // we could save the hash_idx directly in
-                                      // fill_hashmap_with_main_q_kernel
-        const IntegerCostType state_best_int_cost_argmin =
+            cst_dev_params.d_hashmap_values.lane(ilane)[hash_idx];
+        // Token index of one of the token which the lowest token.cost for that
+        // state
+        const int32 state_best_int_cost_argmin =
             h_val.min_and_argmin_int_cost.y;
         // Checking if we're the representative of that state
         representing_state = (main_q_idx == state_best_int_cost_argmin);
@@ -1526,10 +1597,11 @@ __global__ void emitting_preprocess_and_list_extra_prev_tokens_step4_kernel(
         int32 local_idx =
             cst_dev_params.d_main_q_n_extra_prev_tokens_local_idx.lane(
                 ilane)[main_q_idx];
-        // negative counts to signal that's a (offset,count)
-        // cf definition of InfoToken
-        cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx] = {
-            prev_global_idx + extra_prev_tokens_offset, -same_count};
+        // Saving the location of the extra prev tokens for that state into that
+        // InfoToken
+        SetSameFSTStateTokensList(
+            prev_global_idx + extra_prev_tokens_offset, same_count,
+            &cst_dev_params.d_main_q_info.lane(ilane)[main_q_idx]);
         // Where to write this token in d_main_q_extra_prev_tokens
         int32 list_idx = extra_prev_tokens_offset + local_idx;
         // Moving token. Also saving extra_cost
@@ -1579,26 +1651,227 @@ __global__ void clear_hashmap_kernel(DeviceParams cst_dev_params,
   }
 }
 
-template __global__ void expand_arcs_kernel<true>(DeviceParams cst_dev_params,
-                                                  KernelParams params);
-template __global__ void expand_arcs_kernel<false>(DeviceParams cst_dev_params,
-                                                   KernelParams params);
-template __global__ void post_expand_kernel<true>(DeviceParams cst_dev_params,
-                                                  KernelParams params);
-template __global__ void post_expand_kernel<false>(DeviceParams cst_dev_params,
-                                                   KernelParams params);
-template __global__ void concatenate_lanes_data<InfoToken>(
-    DeviceParams cst_dev_params, KernelParams params,
-    LaneMatrixInterface<InfoToken> src, InfoToken *concat);
-template __global__ void concatenate_lanes_data<CostType>(
-    DeviceParams cst_dev_params, KernelParams params,
-    LaneMatrixInterface<CostType> src, CostType *concat);
-template __global__ void concatenate_lanes_data<float2>(
-    DeviceParams cst_dev_params, KernelParams params,
-    LaneMatrixInterface<float2> src, float2 *concat);
-template __global__ void concatenate_lanes_data<int32>(
-    DeviceParams cst_dev_params, KernelParams params,
-    LaneMatrixInterface<int32> src, int32 *concat);
-}  // end namespace CudaDecode
+// Kernels wrappers
 
+void SaveChannelsStateFromLanesKernel(const dim3 &grid, const dim3 &block,
+                                      const cudaStream_t &st,
+                                      const DeviceParams &cst_dev_params,
+                                      const KernelParams &kernel_params) {
+  save_channels_state_from_lanes_kernel<<<grid, block, 0, st>>>(cst_dev_params,
+                                                                kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void LoadChannelsStateInLanesKernel(const dim3 &grid, const dim3 &block,
+                                    const cudaStream_t &st,
+                                    const DeviceParams &cst_dev_params,
+                                    const KernelParams &kernel_params) {
+  load_channels_state_in_lanes_kernel<<<grid, block, 0, st>>>(cst_dev_params,
+                                                              kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void InitDecodingOnDeviceKernel(const dim3 &grid, const dim3 &block,
+                                const cudaStream_t &st,
+                                const DeviceParams &cst_dev_params,
+                                const KernelParams &kernel_params) {
+  init_decoding_on_device_kernel<<<grid, block, 0, st>>>(cst_dev_params,
+                                                         kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void InitializeInitialLaneKernel(const dim3 &grid, const dim3 &block,
+                                 const cudaStream_t &st,
+                                 const DeviceParams &cst_dev_params) {
+  initialize_initial_lane_kernel<<<grid, block, 0, st>>>(cst_dev_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+template <bool IS_EMITTING>
+void ExpandArcsKernel(const dim3 &grid, const dim3 &block,
+                      const cudaStream_t &st,
+                      const DeviceParams &cst_dev_params,
+                      const KernelParams &kernel_params) {
+  expand_arcs_kernel<IS_EMITTING><<<grid, block, 0, st>>>(cst_dev_params,
+                                                          kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+template <bool IS_EMITTING>
+void PostExpandKernel(const dim3 &grid, const dim3 &block,
+                      const cudaStream_t &st,
+                      const DeviceParams &cst_dev_params,
+                      const KernelParams &kernel_params) {
+  post_expand_kernel<IS_EMITTING><<<grid, block, 0, st>>>(cst_dev_params,
+                                                          kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void NonEmittingPreprocessAndContractKernel(const dim3 &grid, const dim3 &block,
+                                            const cudaStream_t &st,
+                                            const DeviceParams &cst_dev_params,
+                                            const KernelParams &kernel_params) {
+  nonemitting_preprocess_and_contract_kernel<<<grid, block, 0, st>>>(
+      cst_dev_params, kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void FillHashmapWithMainQKernel(const dim3 &grid, const dim3 &block,
+                                const cudaStream_t &st,
+                                const DeviceParams &cst_dev_params,
+                                const KernelParams &kernel_params) {
+  fill_hashmap_with_main_q_kernel<<<grid, block, 0, st>>>(cst_dev_params,
+                                                          kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void EmittingPreprocessAndListExtraPrevTokensStep1Kernel(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &kernel_params) {
+  emitting_preprocess_and_list_extra_prev_tokens_step1_kernel<<<grid, block, 0,
+                                                                st>>>(
+      cst_dev_params, kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void EmittingPreprocessAndListExtraPrevTokensStep2Kernel(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &kernel_params) {
+  emitting_preprocess_and_list_extra_prev_tokens_step2_kernel<<<grid, block, 0,
+                                                                st>>>(
+      cst_dev_params, kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void EmittingPreprocessAndListExtraPrevTokensStep3Kernel(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &kernel_params) {
+  emitting_preprocess_and_list_extra_prev_tokens_step3_kernel<<<grid, block, 0,
+                                                                st>>>(
+      cst_dev_params, kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void EmittingPreprocessAndListExtraPrevTokensStep4Kernel(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &kernel_params) {
+  emitting_preprocess_and_list_extra_prev_tokens_step4_kernel<<<grid, block, 0,
+                                                                st>>>(
+      cst_dev_params, kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+template <typename T>
+void ConcatenateLanesDataKernel(const dim3 &grid, const dim3 &block,
+                                const cudaStream_t &st,
+                                const DeviceParams &cst_dev_params,
+                                const KernelParams &kernel_params,
+                                const LaneMatrixView<T> &src, T *concat) {
+  concatenate_lanes_data_kernel<<<grid, block, 0, st>>>(
+      cst_dev_params, kernel_params, src, concat);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void InitHashmapKernel(const dim3 &grid, const dim3 &block,
+                       const cudaStream_t &st,
+                       const DeviceParams &cst_dev_params) {
+  init_hashmap_kernel<<<grid, block, 0, st>>>(cst_dev_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void ClearHashmapKernel(const dim3 &grid, const dim3 &block,
+                        const cudaStream_t &st,
+                        const DeviceParams &cst_dev_params,
+                        const KernelParams &kernel_params) {
+  clear_hashmap_kernel<<<grid, block, 0, st>>>(cst_dev_params, kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void ComputeCostsHistogramKernel(const dim3 &grid, const dim3 &block,
+                                 const cudaStream_t &st,
+                                 const DeviceParams &cst_dev_params,
+                                 const KernelParams &kernel_params,
+                                 bool use_aux_q) {
+  compute_costs_histogram_kernel<<<grid, block, 0, st>>>(
+      cst_dev_params, kernel_params, use_aux_q);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void UpdateBeamUsingHistogramKernel(const dim3 &grid, const dim3 &block,
+                                    const cudaStream_t &st,
+                                    const DeviceParams &cst_dev_params,
+                                    const KernelParams &kernel_params,
+                                    bool use_aux_q) {
+  update_beam_using_histogram_kernel<<<grid, block, 0, st>>>(
+      cst_dev_params, kernel_params, use_aux_q);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void FinalizeProcessNonEmittingKernel(const dim3 &grid, const dim3 &block,
+                                      const cudaStream_t &st,
+                                      const DeviceParams &cst_dev_params,
+                                      const KernelParams &kernel_params) {
+  finalize_process_non_emitting_kernel<<<grid, block, 0, st>>>(cst_dev_params,
+                                                               kernel_params);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void GetBestCostStep1Kernel(const dim3 &grid, const dim3 &block,
+                            const cudaStream_t &st,
+                            const DeviceParams &cst_dev_params,
+                            const KernelParams &kernel_params, bool isfinal,
+                            CostType fst_zero) {
+  get_best_cost_step1_kernel<<<grid, block, 0, st>>>(
+      cst_dev_params, kernel_params, isfinal, fst_zero);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+void GetBestCostStep2Kernel(const dim3 &grid, const dim3 &block,
+                            const cudaStream_t &st,
+                            const DeviceParams &cst_dev_params,
+                            const KernelParams &kernel_params, bool isfinal,
+                            CostType fst_zero) {
+  get_best_cost_step2_kernel<<<grid, block, 0, st>>>(
+      cst_dev_params, kernel_params, isfinal, fst_zero);
+  KALDI_DECODER_CUDA_CHECK_ERROR();
+}
+
+template void ExpandArcsKernel<true>(const dim3 &grid, const dim3 &block,
+                                     const cudaStream_t &st,
+                                     const DeviceParams &cst_dev_params,
+                                     const KernelParams &params);
+template void ExpandArcsKernel<false>(const dim3 &grid, const dim3 &block,
+                                      const cudaStream_t &st,
+                                      const DeviceParams &cst_dev_params,
+                                      const KernelParams &params);
+template void PostExpandKernel<true>(const dim3 &grid, const dim3 &block,
+                                     const cudaStream_t &st,
+                                     const DeviceParams &cst_dev_params,
+                                     const KernelParams &params);
+template void PostExpandKernel<false>(const dim3 &grid, const dim3 &block,
+                                      const cudaStream_t &st,
+                                      const DeviceParams &cst_dev_params,
+                                      const KernelParams &params);
+
+template void ConcatenateLanesDataKernel<InfoToken>(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &params,
+    const LaneMatrixView<InfoToken> &src, InfoToken *concat);
+
+template void ConcatenateLanesDataKernel<CostType>(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &params,
+    const LaneMatrixView<CostType> &src, CostType *concat);
+
+template void ConcatenateLanesDataKernel<float2>(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &params,
+    const LaneMatrixView<float2> &src, float2 *concat);
+
+template void ConcatenateLanesDataKernel<int32>(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &st,
+    const DeviceParams &cst_dev_params, const KernelParams &params,
+    const LaneMatrixView<int32> &src, int32 *concat);
+
+}  // end namespace cuda_decoder
 }  // end namespace kaldi
