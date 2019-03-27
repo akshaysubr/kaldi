@@ -1,8 +1,10 @@
 #!/bin/bash
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
-#sets datasets
-source ../examples.inc
+#set local model parameters
+source ./default_parameters.inc
+#set global model parameters
+source ../default_parameters.inc
 
 if [ $# -ge 1 ]; then
   num_gpus=$1
@@ -14,11 +16,11 @@ total_gpus=`nvidia-smi -q | grep "Product Name" | wc -l`
 total_threads=`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`
 threads_per_gpu=`echo $total_threads/$num_gpus | bc`
 
-for dataset in $datasets; do
+for dataset in $DATASETS; do
   echo "Running $dataset on $num_gpus GPUs with $threads_per_gpu threads per GPU"
   
   for (( d = 0 ; d < $num_gpus ; d++ )); do
-    GPU=$d DATA_SETS="$dataset" GPU_THREADS=2 CPU_THREADS=$threads_per_gpu ./run_benchmark.sh &> output.$d&
+    GPU=$d DATASETS="$dataset" CPU_THREADS=$threads_per_gpu ./run_benchmark.sh &> output.$d&
   done
   
   wait
