@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
         "are\n"
         "set via config files whose filenames are passed as options\n"
         "\n"
-        "Usage: online2-wav-nnet3-latgen-faster [options] <nnet3-in> <fst-in> "
+        "Usage: batched-wav-nnet3-cuda [options] <nnet3-in> <fst-in> "
         "<wav-rspecifier> <lattice-wspecifier>\n";
 
     std::string word_syms_rxfilename;
@@ -144,16 +144,16 @@ int main(int argc, char *argv[]) {
                                 // decoder
 
     po.Register("write-lattice", &write_lattice,
-                "Output lattice to a file.  Setting to false is useful when "
-                "benchmarking.");
+                "Output lattice to a file. Setting to false is useful when "
+                "benchmarking");
     po.Register("word-symbol-table", &word_syms_rxfilename,
                 "Symbol table for words [for debug output]");
     po.Register("file-limit", &num_todo,
                 "Limits the number of files that are processed by this driver. "
-                " After N files are processed the remaing files are ignored.  "
-                "Useful for profiling.");
+                "After N files are processed the remaining files are ignored. "
+                "Useful for profiling");
     po.Register("iterations", &iterations,
-                "Number of times to decode the corpus.  Output will be written "
+                "Number of times to decode the corpus. Output will be written "
                 "only once.");
 
     // Multi-threaded CPU and batched GPU decoder

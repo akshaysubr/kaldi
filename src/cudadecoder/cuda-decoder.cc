@@ -15,6 +15,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if HAVE_CUDA == 1
+
 #include "cuda-decoder.h"
 #include "cuda-decoder-kernels.h"
 
@@ -840,17 +842,16 @@ void CudaDecoder::CheckOverflow() {
             << "Preventing overflow of main_q. Continuing "
             << "execution but the quality of the output may be decreased. "
             << "To prevent this from happening, please increase the parameter "
-               "--max-tokens-per-frame"
-            << " and/or decrease --beam";
+               "--main-q-capacity"
+            << " and/or decrease --max-active";
       }
       if ((q_overflow & OVERFLOW_AUX_Q) == OVERFLOW_AUX_Q) {
         // overflowed aux_q
         KALDI_WARN
             << "Preventing overflow of aux_q. Continuing "
             << "execution but the quality of the output may be decreased. "
-            << "execution but the quality of the output may be decreased. "
             << "To prevent this from happening, please increase the parameter "
-               "--max-tokens-per-frame"
+               "--aux-q-capacity"
             << " and/or decrease --beam";
       }
 
@@ -1591,4 +1592,6 @@ void CudaDecoder::CheckStaticAsserts() {
         }
 */
 }  // end namespace cuda_decoder
-}  // end namespace kaldi.
+}  // end namespace kaldi
+
+#endif  // HAVE_CUDA == 1
