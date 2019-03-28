@@ -300,11 +300,15 @@ void BatchedThreadedCudaDecoder::ComputeBatchNnet(
     Matrix<BaseFloat> &input_features = task.input_features;
     std::vector<nnet3::NnetInferenceTask> &ntasks = nnet_tasks[i];
 
+    Vector<BaseFloat>* ifeat=NULL;
+    if (ivector_features.Dim()>0) {
+      ifeat=&ivector_features;
+    }
     // create task list
     computer.SplitUtteranceIntoTasks(output_to_cpu, input_features,
-                                     &ivector_features, NULL,
+                                     ifeat, NULL,
                                      online_ivector_period, &ntasks);
-
+    
     // Add tasks to computer
     for (size_t j = 0; j < ntasks.size(); j++) {
       computer.AcceptTask(&ntasks[j], max_pending_minibatches);
@@ -352,7 +356,6 @@ void BatchedThreadedCudaDecoder::ComputeOneFeature(TaskState *task_) {
   // All frames should be ready here
   int32 numFrames = feature.NumFramesReady();
 
-  int32 ivector_dim = feature.IvectorFeature()->Dim();
   int32 input_dim = feature.InputFeature()->Dim();
 
   std::vector<int> frames(numFrames);
@@ -360,12 +363,18 @@ void BatchedThreadedCudaDecoder::ComputeOneFeature(TaskState *task_) {
   for (int j = 0; j < numFrames; j++)
     frames[j] = j;
 
-  input_features.Resize(numFrames, input_dim);
-  ivector_features.Resize(ivector_dim);
-
   // Copy Features
+  input_features.Resize(numFrames, input_dim);
   feature.InputFeature()->GetFrames(frames, &input_features);
-  feature.IvectorFeature()->GetFrame(numFrames - 1, &ivector_features);
+ 
+  //Ivectors are optional, if they were not provided skip this step
+  if(feature.IvectorFeature()!=NULL) { 
+    int32 ivector_dim = feature.IvectorFeature()->Dim();
+    ivector_features.Resize(ivector_dim);
+
+    // Copy Features
+    feature.IvectorFeature()->GetFrame(numFrames - 1, &ivector_features);
+  }
   nvtxRangePop();
 
   AddTaskToPendingTaskQueue(task_);
