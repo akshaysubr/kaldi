@@ -16,14 +16,14 @@ AUX_Q_CAPACITY=${AUX_Q_CAPACITY:-500000}
 #query GPU memory
 gpu_memory=`nvidia-smi -q -i $GPU | grep -A1 "FB Memory" | grep Total | tr -s " " | cut -d " " -f 4`
 if [ $gpu_memory -ge 16000 ]; then
-  MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-200}
-  BATCH_DRAIN_SIZE=${BATCH_DRAIN_SIZE:-20}
+  MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-180}
+  BATCH_DRAIN_SIZE=${BATCH_DRAIN_SIZE:-15}
 elif [ $gpu_memory -ge 8000 ]; then
-  MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-100}
-  BATCH_DRAIN_SIZE=${BATCH_DRAIN_SIZE:-10}
+  MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-90}
+  BATCH_DRAIN_SIZE=${BATCH_DRAIN_SIZE:-8}
 elif [ $gpu_memory -ge 4000 ]; then
-  MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-50}
-  BATCH_DRAIN_SIZE=${BATCH_DRAIN_SIZE:-5}
+  MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-40}
+  BATCH_DRAIN_SIZE=${BATCH_DRAIN_SIZE:-4}
 else
   echo "ERROR not enough GPU memory to run benchmark."
   exit 1;
