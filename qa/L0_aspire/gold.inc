@@ -17,6 +17,6 @@ EXPECTED_PERF=(
   ["4xP100_test_other"]="0"
   ["4xV100_test_clean"]="0"
   ["4xV100_test_other"]="0"
-  ["8xV100_test_clean"]="500"
+  ["8xV100_test_clean"]="400"
   ["8xV100_test_other"]="250"
 )
