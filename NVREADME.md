@@ -56,7 +56,7 @@ Model parameters are specified in two files.
 Global parameters are found in (1) while model specific parameters 
 that override default ones can be found in (2).
 Additionally, any parameter setting can be overridden by setting the parameters in the users'
-enviorment prior to launching run_benchmark.sh.
+environment prior to launching run_benchmark.sh.
 
 ## Running with a custom model or dataset
 
