@@ -22,6 +22,6 @@ ADDLIBS = ../cudadecoder/kaldi-cudadecoder.a  \
 ../gmm/kaldi-gmm.a ../tree/kaldi-tree.a ../util/kaldi-util.a \
 ../matrix/kaldi-matrix.a ../base/kaldi-base.a 
 
-include ../makefiles/default_rules.mk
-
 endif
+
+include ../makefiles/default_rules.mk
