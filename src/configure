@@ -525,8 +525,8 @@ function linux_configure_speex {
 }
 
 function linux_atlas_failure {
-  echo ATLASINC = $ATLASROOT/include >> kaldi.mk
-  echo ATLASLIBS = [somewhere]/liblapack.a [somewhere]/libcblas.a [somewhere]/libatlas.a [somewhere]/libf77blas.a $ATLASLIBDIR >> kaldi.mk
+  echo ATLASINC = $ATLASROOT/include/atlas >> kaldi.mk
+  echo ATLASLIBS = [somewhere]/atlas/liblapack.a [somewhere]/atlas/libcblas.a [somewhere]/atlas/libatlas.a [somewhere]/atlas/libf77blas.a $ATLASLIBDIR >> kaldi.mk
   echo >> kaldi.mk
   if [[ "$TARGET_ARCH" == arm* ]]; then
     cat makefiles/linux_atlas_arm.mk >> kaldi.mk
@@ -589,7 +589,7 @@ function linux_configure_atlas_generic {
   fi
   libdir=$(dirname $(echo $ATLASLIBS | awk '{print $1}'))
   [ -z "$libdir" ] && echo "Error getting libdir in linux_configure_atlas_generic: dir=$dir,suffix=$suffix" && exit 1;
-  echo ATLASINC = $ATLASROOT/include >> kaldi.mk
+  echo ATLASINC = $ATLASROOT/include/atlas >> kaldi.mk
   echo ATLASLIBS = $ATLASLIBS -Wl,-rpath=$libdir >> kaldi.mk
   echo >> kaldi.mk
   if [[ "$TARGET_ARCH" == arm* ]]; then
@@ -615,7 +615,7 @@ function linux_configure_redhat_fat {
   done
   libdir=$(dirname $(echo $ATLASLIBS | awk '{print $1}'))
   [ -z "$libdir" ] && echo "Error getting libdir in linux_configure_redhat_fat" && exit 1;
-  echo ATLASINC = $ATLASROOT/include >> kaldi.mk
+  echo ATLASINC = $ATLASROOT/include/atlas >> kaldi.mk
   echo ATLASLIBS = $ATLASLIBS -Wl,-rpath=$libdir >> kaldi.mk
   echo >> kaldi.mk
   if [[ "$TARGET_ARCH" == arm* ]]; then
@@ -634,7 +634,7 @@ function linux_configure_atlas_static {
 
   if [ -z $ATLASLIBDIR ]; then # Note: it'll pick up the last one below.
     for dir in /usr{,/local}/lib{64,}{,/atlas,/atlas-sse2,/atlas-sse3} \
-       /usr/local/atlas/lib{,64} `pwd`/../tools/ATLAS/build/install/lib/ $ATLASROOT/lib; do
+       /usr/local/atlas/lib{,64} `pwd`/../tools/ATLAS/build/install/lib/ $ATLASROOT/atlas/lib; do
      linux_check_static &&  ATLASLIBDIR=$dir
     done
     if [ -z $ATLASLIBDIR ]; then # Note: it'll pick up the last one below.
@@ -672,7 +672,7 @@ function linux_configure_atlas_static {
   done
   if $threaded_atlas; then ATLASLIBS="$ATLASLIBS"; fi
 
-  echo ATLASINC = $ATLASROOT/include >> kaldi.mk
+  echo ATLASINC = $ATLASROOT/include/atlas >> kaldi.mk
   echo ATLASLIBS = $ATLASLIBS >> kaldi.mk
   echo >> kaldi.mk
   if [[ "$TARGET_ARCH" == arm* ]]; then
@@ -709,7 +709,7 @@ function linux_configure_dynamic {
   if $threaded_atlas; then pt=t; else pt=s; fi # relevant to "fat" libraries, will change later for separate ones
   if [ -z $ATLASLIBDIR ]; then # Note: it'll pick up the last one below.
     for dir in /usr{,/local}/lib{,64}{,/atlas,/atlas-sse2,/atlas-sse3,/x86_64-linux-gnu} \
-      `pwd`/../tools/ATLAS/build/install/lib/ $ATLASROOT/lib; do
+      `pwd`/../tools/ATLAS/build/install/lib/ $ATLASROOT/lib/atlas; do
       linux_check_dynamic && ATLASLIBDIR=$dir && ATLASLIBNAME=$atlas_libname
     done
     if [ -z $ATLASLIBDIR -o -z $ATLASLIBNAME ]; then
@@ -756,7 +756,7 @@ function linux_configure_dynamic {
     if $threaded_atlas; then ATLASLIBS="$ATLASLIBS"; fi
   fi
 
-  echo ATLASINC = $ATLASROOT/include >> kaldi.mk
+  echo ATLASINC = $ATLASROOT/include/atlas >> kaldi.mk
   echo ATLASLIBS = $ATLASLIBS >> kaldi.mk
   echo ATLASLDFLAGS = -Wl,-rpath,$ATLASLIBDIR >> kaldi.mk
   echo >> kaldi.mk
@@ -934,6 +934,7 @@ do
     shift ;;
   --mathlib=*)
     MATHLIB=`read_value $1`;
+    echo "BLAH MATHLIB='$MATHLIB'"
     shift ;;
   --cudatk-dir=*)
     CUDATKDIR=`read_dirname $1`;
@@ -1001,13 +1002,17 @@ if is_set $HOST; then
 else
   TARGET_ARCH="`uname -m`"
 fi
+    
+echo "BLAH1 MATHLIB='$MATHLIB'"
 
+echo "MKLROOT: $MKLROOT MKLLIBDIR: $MKLLIBDIR"
 # If one of these variables is set, we switch the external math library.
 is_set $MKLLIBDIR && echo "Configuring KALDI to use MKL" && export MATHLIB="MKL"
-is_set $MKLROOT && echo "Configuring KALDI to use MKL"&& export MATHLIB="MKL"
+#is_set $MKLROOT && echo "Configuring KALDI to use MKL"&& export MATHLIB="MKL"
 is_set $CLAPACKROOT && echo "Configuring KALDI to use CLAPACK"&& export MATHLIB="CLAPACK"
 is_set $OPENBLASROOT && echo "Configuring KALDI to use OPENBLAS"&& export MATHLIB="OPENBLAS"
 
+echo "BLAH2 MATHLIB='$MATHLIB'"
 echo "Configuring ..."
 
 # Back up the old kaldi.mk in case we modified it
@@ -1162,8 +1167,9 @@ elif [ "`uname -o`" == "Cygwin"  ]; then
 
 elif [ "`uname`" == "Linux" ]; then
   echo "On Linux: Checking for linear algebra header files ..."
+  echo "MATHLIB=$MATHLIB"
   if [ "$MATHLIB" == "ATLAS" ]; then
-    if [ ! -f $ATLASROOT/include/cblas.h ] || [ ! -f $ATLASROOT/include/clapack.h ] ; then
+    if [ ! -f $ATLASROOT/include/atlas/cblas.h ] || [ ! -f $ATLASROOT/include/atlas/clapack.h ] ; then
       failure "Could not find required header files cblas.h or clapack.h in ATLAS dir '$ATLASROOT/include'"
     fi
     echo "Using ATLAS as the linear algebra library."
