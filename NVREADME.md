@@ -9,7 +9,7 @@ You can learn more about NVIDIA's work in GPU-accelerating speech-to-text infere
 
 ## Overview
 
-This README seeks to both guide you through NVIDIA's speech-to-text performance benchmarks using the LibriSpeech corpus on both clean and noisy speech recordings and also show you how to generate transcripts from your own recorded speech. In the case of using your own recordings, performance is not guaranteed and varies with respect to human accent, distance from the microphone, background noise, language, and the accuracy of the trained model used to perform inference. Nevertheless, we hope that this guide is helpful for the full range of Kaldi developers: from those who are still trying to correctly pronounce Kaldi to the pros using the framework in production.
+This README seeks to both guide you through NVIDIA's speech-to-text performance benchmarks using the LibriSpeech corpus on both clean and noisy speech recordings and also show you how to generate transcripts from your own recorded speech. In the case of using your own recordings, performance is not guaranteed and varies with respect to human accent, distance from the microphone, background noise, language, and the accuracy of the trained model used to perform inference. Nevertheless, we hope that this guide is helpful for the full range of Kaldi developers.
 
 The README is structured as follows:
 1. How to Pull and Run the Kaldi Container
@@ -89,6 +89,7 @@ If you have multiple GPUs in your test system, you can invoke:
 cd /workspace/nvidia-examples/librispeech/
 ./run_multigpu_benchmark.sh
 ```
+Please note that we've supressed all intermediate text output with the multi-GPU benchmark. Running this command will take some time before it produces its brief summary.
 
 GPU isolation within the Docker container can be manipulated with the `NVIDIA_VISIBLE_DEVICES` environment variable. For example:
 ```
