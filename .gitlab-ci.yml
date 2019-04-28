@@ -54,6 +54,7 @@ before_script:
     - echo -e "Dockerfile*\n"
               ".git*\n"
               ".dockerignore\n"
+              "nvidia-examples-internal\n"
               "qa" > .dockerignore
     - docker pull "${BASE_IMAGE_NAME}" ||
       docker pull "${MASTER_BASE_IMAGE_NAME}" || true
