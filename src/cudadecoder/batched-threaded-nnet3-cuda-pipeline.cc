@@ -300,9 +300,9 @@ void BatchedThreadedNnet3CudaPipeline::ComputeBatchNnet(
     Matrix<BaseFloat> &input_features = task.input_features;
     std::vector<nnet3::NnetInferenceTask> &ntasks = nnet_tasks[i];
 
-    Vector<BaseFloat>* ifeat=NULL;
-    if (ivector_features.Dim()>0) {
-      ifeat=&ivector_features;
+    Vector<BaseFloat> *ifeat = NULL;
+    if (ivector_features.Dim() > 0) {
+      ifeat = &ivector_features;
     }
     // create task list
     computer.SplitUtteranceIntoTasks(output_to_cpu, input_features, ifeat, NULL,
@@ -369,6 +369,7 @@ void BatchedThreadedNnet3CudaPipeline::ComputeOneFeature(TaskState *task_) {
   // Copy Features
   input_features.Resize(numFrames, input_dim);
   feature.InputFeature()->GetFrames(frames, &input_features);
+
   // Ivectors are optional, if they were not provided skip this step
   if (feature.IvectorFeature() != NULL) {
     int32 ivector_dim = feature.IvectorFeature()->Dim();
