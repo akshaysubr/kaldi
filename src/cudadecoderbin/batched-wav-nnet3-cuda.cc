@@ -228,6 +228,7 @@ int main(int argc, char *argv[]) {
 
     std::queue<std::pair<std::string, std::string>> processed;
     for (int iter = 0; iter < iterations; iter++) {
+      num_done = 0;
       SequentialTableReader<WaveHolder> wav_reader(wav_rspecifier);
 
       for (; !wav_reader.Done(); wav_reader.Next()) {
@@ -273,7 +274,7 @@ int main(int argc, char *argv[]) {
                       &num_frames, &output_iter, &tot_like);
     } // end while
 
-    KALDI_LOG << "Decoded " << num_done << " utterances, " << num_err
+    KALDI_LOG << "Decoded " << num_done * iterations << " utterances, " << num_err
               << " with errors.";
     KALDI_LOG << "Overall likelihood per frame was " << (tot_like / num_frames)
               << " per frame over " << num_frames << " frames.";
