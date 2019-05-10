@@ -13,7 +13,7 @@ MAX_TOKENS_PER_FRAME=50000 DATA_SETS='test_other' bash -e ./run_benchmark.sh &> 
 tail -n 100 output.log
 
 MAX_TOKENS_PER_FRAME=450000 bash -e ./run_benchmark.sh
-#MAX_TOKENS_PER_FRAME=450000 bash -e ./run_multigpu_benchmark.sh
+MAX_TOKENS_PER_FRAME=450000 bash -e ./run_multigpu_benchmark.sh 1
 
 popd
 bash -e ./check_results.sh

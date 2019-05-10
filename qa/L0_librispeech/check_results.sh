@@ -3,6 +3,8 @@
 source gold.inc
 
 NUM_GPUS=`nvidia-smi -L | wc -l`
+NUM_GPUS=1
+
 DATASETS="test_clean test_other"
 
 FAIL=0
