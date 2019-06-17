@@ -15,933 +15,319 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#define SLEEP_BACKOFF_NS 500
-#define SLEEP_BACKOFF_S ((double)SLEEP_BACKOFF_NS / 1e9)
 #if HAVE_CUDA == 1
 
 #include "cudadecoder/batched-threaded-nnet3-cuda-pipeline.h"
 #include <nvToolsExt.h>
-#include "base/kaldi-utils.h"
 
 namespace kaldi {
 namespace cuda_decoder {
 
-void BatchedThreadedNnet3CudaPipeline::Initialize(
-    const fst::Fst<fst::StdArc> &decode_fst, const nnet3::AmNnetSimple &am_nnet,
-    const TransitionModel &trans_model) {
-  KALDI_LOG << "BatchedThreadedNnet3CudaPipeline Initialize with "
-            << config_.num_control_threads << " control threads, "
-            << config_.num_worker_threads << " worker threads"
-            << " and batch size " << config_.max_batch_size;
-
-  am_nnet_ = &am_nnet;
-  trans_model_ = &trans_model;
-  cuda_fst_.Initialize(decode_fst, trans_model_);
-
-  feature_info_ = new OnlineNnet2FeaturePipelineInfo(config_.feature_opts);
-  feature_info_->ivector_extractor_info.use_most_recent_ivector = true;
-  feature_info_->ivector_extractor_info.greedy_ivector_extractor = true;
-
-  // initialize threads and save their contexts so we can join them later
-  thread_contexts_.resize(config_.num_control_threads);
-
-  // create work queue, padding by 10 so that we can better detect if this
-  // overflows. this should not happen and is just there as a sanity check
-  pending_task_queue_ = new TaskState *[config_.max_pending_tasks + 10];
-  tasks_front_ = 0;
-  tasks_back_ = 0;
-
-  // ensure all allocations/kernels above are complete before launching threads
-  // in different streams.
-  cudaStreamSynchronize(cudaStreamPerThread);
-
-  // Create threadpool for CPU work
-  work_pool_ = new ThreadPool(config_.num_worker_threads);
-
-  exit_ = false;
-  numStarted_ = 0;
-
-  // start workers
-  for (int i = 0; i < config_.num_control_threads; i++) {
-    thread_contexts_[i] =
-        std::thread(&BatchedThreadedNnet3CudaPipeline::ExecuteWorker, this, i);
+void BatchedThreadedNnet3CudaPipeline::BuildBatchFromCurrentTasks() {
+  batch_corr_ids_.clear();
+  batch_is_last_chunk_.clear();
+  if (use_online_ivectors_) {
+    batch_wave_samples_.clear();
+  } else {
+    batch_features_.clear();
+    batch_ivectors_.clear();
+    batch_n_input_frames_valid_.clear();
   }
-
-  // wait for threads to start to ensure allocation time isn't in the timings
-  while (numStarted_ < config_.num_control_threads)
-    kaldi::Sleep(SLEEP_BACKOFF_S);
-}
-void BatchedThreadedNnet3CudaPipeline::Finalize() {
-  // Tell threads to exit and join them
-  exit_ = true;
-
-  for (int i = 0; i < config_.num_control_threads; i++) {
-    thread_contexts_[i].join();
-  }
-
-  cuda_fst_.Finalize();
-
-  delete feature_info_;
-  delete work_pool_;
-  delete[] pending_task_queue_;
-}
-
-// query a specific key to see if compute on it is complete
-bool BatchedThreadedNnet3CudaPipeline::isFinished(const std::string &key) {
-  bool finished;
-  {
-    std::lock_guard<std::mutex> lock(tasks_lookup_mutex_);
-    auto it = tasks_lookup_.find(key);
-    KALDI_ASSERT(it != tasks_lookup_.end());
-    finished = it->second.finished;
-  }
-  return finished;
-}
-
-// remove an audio file from the decoding and clean up resources
-void BatchedThreadedNnet3CudaPipeline::CloseDecodeHandle(
-    const std::string &key) {
-  TaskState *task;
-  decltype(tasks_lookup_.end()) it;
-  {
-    std::lock_guard<std::mutex> lock(tasks_lookup_mutex_);
-    it = tasks_lookup_.find(key);
-    KALDI_ASSERT(it != tasks_lookup_.end());
-    task = &it->second;
-  }
-
-  // wait for task to finish processing
-  while (task->finished != true) kaldi::Sleep(SLEEP_BACKOFF_S);
-
-  // Delete the group counter if necessary
-  std::lock_guard<std::mutex> lk1(group_tasks_mutex_);
-  if (group_tasks_not_done_[task->group] == 0)
-    group_tasks_not_done_.erase(task->group);
-
-  // remove it
-  {
-    std::lock_guard<std::mutex> lock(tasks_lookup_mutex_);
-    std::string &group = task->group;
-    auto p = tasks_group_lookup_.equal_range(group);
-    bool found = false;
-    for (auto it = p.first; it != p.second; ++it) {
-      if (it->second == task) {
-        tasks_group_lookup_.erase(it);
-        found = true;
-        break;
-      }
+  for (size_t task_id = 0; task_id < current_tasks_.size();) {
+    UtteranceTask &task = current_tasks_[task_id];
+    int32 total_n_input;
+    if (use_online_ivectors_) {
+      KALDI_ASSERT(task.h_wave);
+      SubVector<BaseFloat> &h_wave = *task.h_wave;
+      total_n_input = h_wave.Dim();
+    } else {
+      total_n_input = task.d_features->NumRows();
     }
-    KALDI_ASSERT(found);
-    tasks_lookup_.erase(it);
 
-    if (tasks_lookup_.empty()) tasks_lookup_cv_.notify_all();
+    int32 samp_offset = task.samp_offset;
+    int32 samp_remaining = total_n_input - samp_offset;
+    int32 num_samp = std::min(n_input_per_chunk_, samp_remaining);
+    KALDI_ASSERT(num_samp > 0);
+    bool is_last_chunk = (samp_remaining == num_samp);
+    CorrelationID corr_id = task.corr_id;
+    task.samp_offset += num_samp;
+
+    batch_corr_ids_.push_back(corr_id);
+    batch_is_last_chunk_.push_back(is_last_chunk);
+
+    if (use_online_ivectors_) {
+      SubVector<BaseFloat> &h_wave = *task.h_wave;
+      SubVector<BaseFloat> wave_part(h_wave, samp_offset, num_samp);
+      batch_wave_samples_.push_back(wave_part);
+    } else {
+      batch_features_.push_back(task.d_features->Data() +
+                                samp_offset * task.d_features->Stride());
+      if (task_id == 0)
+        batch_features_frame_stride_ = task.d_features->Stride();
+      else
+        KALDI_ASSERT(batch_features_frame_stride_ == task.d_features->Stride());
+      batch_ivectors_.push_back(task.d_ivectors->Data());
+      batch_n_input_frames_valid_.push_back(num_samp);
+    }
+
+    // If last chunk, moving the task to tasks_last_chunk_
+    if (is_last_chunk) {
+      tasks_last_chunk_.push_back(std::move(task));
+      size_t last_task_id = current_tasks_.size() - 1;
+      current_tasks_[task_id] = std::move(current_tasks_[last_task_id]);
+      current_tasks_.pop_back();
+    } else {
+      // If it was the last chunk, we replaced the current task with another one
+      // we must process that task_id again (because it is now another task)
+      // If it was not the last chunk, then we must take care of the next
+      // task_id
+      ++task_id;
+    }
   }
 }
 
 void BatchedThreadedNnet3CudaPipeline::WaitForAllTasks() {
-  std::unique_lock<std::mutex> lk(group_tasks_mutex_);
-  group_done_cv_.wait(lk, [this] { return all_group_tasks_not_done_ == 0; });
+  while (n_tasks_not_done_.load() != 0) usleep(1000);
+}
+
+void BatchedThreadedNnet3CudaPipeline::CreateTaskGroup(
+    const std::string &group) {
+  std::lock_guard<std::mutex> lk(n_group_tasks_not_done_m_);
+  bool inserted;
+  std::unique_ptr<std::atomic<int>> group_cnt;
+  group_cnt.reset(new std::atomic<int>(0));
+  std::tie(std::ignore, inserted) =
+      n_group_tasks_not_done_.emplace(group, std::move(group_cnt));
+  KALDI_ASSERT("Group is already in use" && inserted);
+}
+
+void BatchedThreadedNnet3CudaPipeline::DestroyTaskGroup(
+    const std::string &group) {
+  std::lock_guard<std::mutex> lk(n_group_tasks_not_done_m_);
+  int nerased = n_group_tasks_not_done_.erase(group);
+  KALDI_ASSERT("Group does not exist" && (nerased == 1));
 }
 
 void BatchedThreadedNnet3CudaPipeline::WaitForGroup(const std::string &group) {
-  std::unique_lock<std::mutex> lk(group_tasks_mutex_);
-  group_done_cv_.wait(
-      lk, [this, &group] { return group_tasks_not_done_[group] == 0; });
-  // Safe to delete entry from the map now. If the user creates new task in that
-  // group,
-  // the entry will be created once more
-  group_tasks_not_done_.erase(group);
-}
-
-bool BatchedThreadedNnet3CudaPipeline::IsGroupCompleted(
-    const std::string &group) {
-  std::unique_lock<std::mutex> lk(group_tasks_mutex_);
-  return (group_tasks_not_done_[group] == 0);  // will unlock in destructor
-}
-
-std::string BatchedThreadedNnet3CudaPipeline::WaitForAnyGroup() {
-  std::unique_lock<std::mutex> lk(group_tasks_mutex_);
-  // Waiting for any group to be done.
-  const string *group_done;
-  auto predicate = [this, &group_done] {
-    for (auto it : group_tasks_not_done_) {
-      if (it.second == 0) {
-        group_done = &it.first;
-        return true;
-      }
-    }
-    return false;
-  };
-  group_done_cv_.wait(lk, predicate);
-  return *group_done;
-}
-
-bool BatchedThreadedNnet3CudaPipeline::IsAnyGroupCompleted(std::string *group) {
-  std::lock_guard<std::mutex> lk(group_tasks_mutex_);
-  for (auto it : group_tasks_not_done_) {
-    if (it.second == 0) {
-      *group = it.first;
-      return true;
-    }
-  }
-  return false;  // will unlock in destructor
-}
-
-void BatchedThreadedNnet3CudaPipeline::CloseAllDecodeHandlesForGroup(
-    const std::string &group) {
-  WaitForGroup(group);
-  std::lock_guard<std::mutex> lk1(tasks_lookup_mutex_);
-  auto p = tasks_group_lookup_.equal_range(group);
-  for (auto it = p.first; it != p.second; ++it) {
-    KALDI_ASSERT(it->second->finished==true);
-    tasks_lookup_.erase(it->second->key);
-  }
-  tasks_group_lookup_.erase(p.first, p.second);
-  std::lock_guard<std::mutex> lk2(group_tasks_mutex_);
-  group_tasks_not_done_.erase(group);
-}
-
-void BatchedThreadedNnet3CudaPipeline::CloseAllDecodeHandles() {
-  WaitForAllTasks();
-  std::lock_guard<std::mutex> lk1(tasks_lookup_mutex_);
-  tasks_lookup_.clear();
-  tasks_group_lookup_.clear();
-  std::lock_guard<std::mutex> lk2(group_tasks_mutex_);
-  group_tasks_not_done_.clear();
-}
-
-int32 BatchedThreadedNnet3CudaPipeline::GetNumberOfTasksPending() {
-  int size;
+  std::atomic<int> *n_not_done;
   {
-    std::lock_guard<std::mutex> lk(group_tasks_mutex_);
-    size = all_group_tasks_not_done_;
+    std::lock_guard<std::mutex> lk(n_group_tasks_not_done_m_);
+    auto it = n_group_tasks_not_done_.find(group);
+    KALDI_ASSERT("Group does not exist. Call CreateTaskGroup() first" &&
+                 (it != n_group_tasks_not_done_.end()));
+    n_not_done = it->second.get();
   }
-  return size;
-}
 
-BatchedThreadedNnet3CudaPipeline::TaskState *
-BatchedThreadedNnet3CudaPipeline::AddTask(const std::string &key,
-                                          const std::string &group) {
-  TaskState *task;
-  {
-    std::lock_guard<std::mutex> lock(tasks_lookup_mutex_);
-    // ensure key is unique
-    KALDI_ASSERT(tasks_lookup_.end() == tasks_lookup_.find(key));
-
-    // Create a new task in lookup map
-    task = &tasks_lookup_[key];
-    tasks_group_lookup_.insert({group, task});
-  }
-  task->group = group;
-
-  // Add the task to its group
-  {
-    std::lock_guard<std::mutex> lk(group_tasks_mutex_);
-    ++all_group_tasks_not_done_;
-    ++group_tasks_not_done_[task->group];
-  }
-  return task;
-}
-
-// Adds a decoding task to the decoder
-void BatchedThreadedNnet3CudaPipeline::OpenDecodeHandle(
-    const std::string &key, const WaveData &wave_data, const std::string &group,
-    const std::function<void(CompactLattice &clat)> &callback) {
-  TaskState *task = AddTask(key, group);
-  task->callback = std::move(callback);
-  task->Init(key, wave_data);
-
-  if (config_.gpu_feature_extract) {
-    // Feature extraction done on device
-    AddTaskToPendingTaskQueue(task);
-  } else {
-    // Feature extraction done on host thread
-    work_pool_->enqueue(THREAD_POOL_LOW_PRIORITY,
-                        &BatchedThreadedNnet3CudaPipeline::ComputeOneFeatureCPU,
-                        this, task);
+  while (n_not_done->load(std::memory_order_consume) != 0) {
+    usleep(50);  // TODO
   }
 }
 
 void BatchedThreadedNnet3CudaPipeline::OpenDecodeHandle(
-    const std::string &key, const VectorBase<BaseFloat> &wave_data,
-    float sample_rate, const std::string &group,
-    const std::function<void(CompactLattice &clat)> &callback) {
-  TaskState *task = AddTask(key, group);
-  task->Init(key, wave_data, sample_rate);
-  task->callback = std::move(callback);
+    const std::string &key, const std::shared_ptr<WaveData> &wave_data,
+    std::unique_ptr<SubVector<BaseFloat>> &&h_wave,
+    const std::function<void(CompactLattice &)> &callback,
+    bool auto_close_after_callback, const std::string &group) {
+  if (wave_data) {
+    // TODO unify next assert
+    KALDI_ASSERT(
+        "Mismatch in model and utt frequency" &&
+        (wave_data->SampFreq() == cuda_online_pipeline_.GetModelFrequency()));
+  }
+  n_tasks_not_done_.fetch_add(1);
 
-  if (config_.gpu_feature_extract) {
-    // Feature extraction done on device
-    AddTaskToPendingTaskQueue(task);
+  UtteranceTask task;
+  if (wave_data) task.wave_data = wave_data;
+  if (h_wave) {
+    task.h_wave = std::move(h_wave);
   } else {
-    // Feature extraction done on host thread
-    work_pool_->enqueue(THREAD_POOL_LOW_PRIORITY,
-                        &BatchedThreadedNnet3CudaPipeline::ComputeOneFeatureCPU,
-                        this, task);
-  }
-}
-
-bool BatchedThreadedNnet3CudaPipeline::GetRawLattice(const std::string &key,
-                                                     Lattice *lat) {
-  nvtxRangePushA("GetRawLattice");
-  TaskState *task;
-  {
-    std::lock_guard<std::mutex> lock(tasks_lookup_mutex_);
-    auto it = tasks_lookup_.find(key);
-    KALDI_ASSERT(it != tasks_lookup_.end());
-    task = &it->second;
+    KALDI_ASSERT(wave_data);
+    task.h_wave.reset(new SubVector<BaseFloat>(wave_data->Data(), 0));
   }
 
-  // wait for task to finish.  This should happens automatically without
-  // intervention from the master thread.
-  while (task->finished == false) kaldi::Sleep(SLEEP_BACKOFF_S);
+  KALDI_ASSERT(task.h_wave->Dim() > 0);  // TODO handle == 0
+  task.key = key;
+  task.samp_offset = 0;
+  task.corr_id = corr_id_cnt_.fetch_add(
+      1);  // at 5000 files/s, expected to overflow in ~116 million years
+  task.callback = callback;
+  task.auto_close_after_callback = auto_close_after_callback;
 
-  // GetRawLattice on a determinized lattice is not supported (Per email from
-  // DanP)
-  KALDI_ASSERT(task->determinized == false);
-
-  if (task->error) {
-    nvtxRangePop();
-    return false;
-  }
-  // Store off the lattice
-  *lat = task->lat;
-  nvtxRangePop();
-  return true;
-}
-
-bool BatchedThreadedNnet3CudaPipeline::GetLattice(const std::string &key,
-                                                  CompactLattice *clat) {
-  nvtxRangePushA("GetLattice");
-  TaskState *task;
-  {
-    std::lock_guard<std::mutex> lock(tasks_lookup_mutex_);
-
-    auto it = tasks_lookup_.find(key);
-    KALDI_ASSERT(it != tasks_lookup_.end());
-    task = &it->second;
-  }
-  // wait for task to finish.  This should happens automatically without
-  // intervention from the master thread.
-  while (!task->finished) kaldi::Sleep(SLEEP_BACKOFF_S);
-
-  if (task->error) {
-    nvtxRangePop();
-    return false;
-  }
-
-  // if user has not requested a determinized lattice from the decoder then we
-  // must
-  // determinize it here since it was done done already.
-  if (!config_.determinize_lattice && !task->determinized) {
-    // Determinzation was not done by worker threads so do it here
-    DeterminizeOneLattice(task);
-  }
-
-  *clat = task->dlat;  // grab compact lattice
-  nvtxRangePop();
-  return true;
-}
-
-// Adds task to the PendingTaskQueue
-void BatchedThreadedNnet3CudaPipeline::AddTaskToPendingTaskQueue(
-    TaskState *task) {
-  std::lock_guard<std::mutex> lk(tasks_add_mutex_);
-  if (NumPendingTasks() == config_.max_pending_tasks) {
-    // task queue is full launch a new thread to add this task and exit to make
-    // room for other work
-    work_pool_->enqueue(
-        THREAD_POOL_LOW_PRIORITY,
-        &BatchedThreadedNnet3CudaPipeline::AddTaskToPendingTaskQueue, this,
-        task);
+  if (!group.empty()) {
+    // Need to add it to group
+    std::lock_guard<std::mutex> lk(n_group_tasks_not_done_m_);
+    auto it = n_group_tasks_not_done_.find(group);
+    KALDI_ASSERT("Group does not exist. Call CreateTaskGroup() first" &&
+                 (it != n_group_tasks_not_done_.end()));
+    it->second->fetch_add(1);           // adding current task
+    task.group_cnt = it->second.get();  // will be used to --cnt
   } else {
-    // there is room so let's add it
-    // insert into pending task queue
-    pending_task_queue_[tasks_back_] = task;
-    // (int)tasks_back_);
-    tasks_back_ = (tasks_back_ + 1) % (config_.max_pending_tasks + 10);
-    KALDI_ASSERT(NumPendingTasks() <= config_.max_pending_tasks);
+    task.group_cnt = NULL;
+  }
+
+  if (!auto_close_after_callback) {
+    // Not using callback. Will deliver lattice through completed_lattices_
+    std::lock_guard<std::mutex> lk(completed_lattices_m_);
+    bool inserted;
+    std::unique_ptr<Output> output(new Output);
+    std::tie(std::ignore, inserted) =
+        completed_lattices_.emplace(key, std::move(output));
+    KALDI_ASSERT("Key is already in use" && inserted);
+  }
+  if (use_online_ivectors_) {
+    // If we use online ivectors, we can just add it to the outstanding queue.
+    // ivectors and mfcc will be computed in the online pipeline
+    std::lock_guard<std::mutex> lk(outstanding_utt_m_);
+    outstanding_utt_.push(std::move(task));
+  } else {
+    // Otherwise we first need to compute ivectors and mfcc for the full audio
+    // file
+    // Adding it to the preprocessing queue
+    std::lock_guard<std::mutex> lk(preprocessing_utt_queue_m_);
+    preprocessing_utt_queue_.push(std::move(task));
   }
 }
 
-// Attempts to fill the batch from the task queue.  May not fully fill the
-// batch.
-void BatchedThreadedNnet3CudaPipeline::AquireAdditionalTasks(
-    CudaDecoder &cuda_decoder, ChannelState &channel_state,
-    std::vector<TaskState *> &tasks) {
-  std::vector<ChannelId> &channels = channel_state.channels;
-  std::vector<ChannelId> &free_channels = channel_state.free_channels;
-
-  int tasksRequested =
-      std::min(free_channels.size(), config_.max_batch_size - channels.size());
-  int tasksAssigned = 0;
-  int firstTask = channels.size();
-
-  {
-    // lock required because front might change from other
-    // workers
-    std::lock_guard<std::mutex> lock(tasks_mutex_);
+void BatchedThreadedNnet3CudaPipeline::ComputeOfflineFeatures() {
+  bool iterate = true;
+  do {
+    UtteranceTask task;
     {
-      // compute number of tasks to grab
-      int tasksAvailable = NumPendingTasks();
-      tasksAssigned = std::min(tasksAvailable, tasksRequested);
-
-      // grab tasks
-      for (int i = 0; i < tasksAssigned; i++) {
-        // pending_task_queue_[tasks_front_]);
-        KALDI_ASSERT(NumPendingTasks() > 0);
-        tasks.push_back(pending_task_queue_[tasks_front_]);
-        tasks_front_ = (tasks_front_ + 1) % (config_.max_pending_tasks + 10);
-      }
-    }
-  }
-
-  if (tasksAssigned > 0) {
-    // for each assigned tasks we have to do a little bookkeeping
-
-    // list of channels that need initialization
-    std::vector<ChannelId> init_channels(tasksAssigned);
-
-    for (int i = 0; i < tasksAssigned; i++) {
-      // assign a free channel
-      ChannelId channel;
-      {
-        std::lock_guard<std::mutex> lk(channel_state.free_channels_mutex);
-        KALDI_ASSERT(free_channels.size() >
-                     0);  // it should always be true (cf std::min above)
-        channel = free_channels.back();
-        free_channels.pop_back();
-      }
-      // assign channel to task
-      tasks[i + firstTask]->ichannel = channel;
-      // add channel to processing list
-      channels.push_back(channel);
-      // add new channel to initialization list
-      init_channels[i] = channel;
-    }
-
-    // Setup cuda_decoder channels
-    cuda_decoder.InitDecoding(init_channels);
-  }
-}
-
-// Computes NNET3 across the tasks[first,tasks.size())
-void BatchedThreadedNnet3CudaPipeline::ComputeBatchNnet(
-    nnet3::NnetBatchComputer &computer, int32 first,
-    std::vector<TaskState *> &tasks) {
-  nvtxRangePushA("ComputeBatchNnet");
-
-  bool output_to_cpu = false;
-  int32 online_ivector_period = 0;
-  int max_pending_minibatches =
-      0;  // zero means unlimited.  This API call should not block then.
-
-  // list of nnet tasks for each batch
-  std::vector<std::vector<nnet3::NnetInferenceTask>> nnet_tasks(tasks.size());
-
-  // for all new batches enqueue up nnet work.
-  for (int i = first; i < tasks.size(); i++) {
-    TaskState &task = *tasks[i];
-    std::unique_ptr<TaskData> &task_data = task.task_data;
-    std::vector<nnet3::NnetInferenceTask> &ntasks = nnet_tasks[i];
-
-    if (config_.gpu_feature_extract) {
-      CuVector<BaseFloat> &ivector_features = task_data->ivector_features;
-      CuMatrix<BaseFloat> &input_features = task_data->input_features;
-
-      CuVector<BaseFloat> *ifeat = NULL;
-      if (ivector_features.Dim() > 0) {
-        ifeat = &ivector_features;
-      }
-      // create task list
-      computer.SplitUtteranceIntoTasks(output_to_cpu, input_features, ifeat,
-                                       NULL, online_ivector_period, &ntasks);
-    } else {
-      Vector<BaseFloat> &ivector_features = task_data->ivector_features_cpu;
-      Matrix<BaseFloat> &input_features = task_data->input_features_cpu;
-
-      Vector<BaseFloat> *ifeat = NULL;
-      if (ivector_features.Dim() > 0) {
-        ifeat = &ivector_features;
-      }
-      // create task list
-      computer.SplitUtteranceIntoTasks(output_to_cpu, input_features, ifeat,
-                                       NULL, online_ivector_period, &ntasks);
-    }
-
-    // Add tasks to computer
-    for (size_t j = 0; j < ntasks.size(); j++) {
-      computer.AcceptTask(&ntasks[j], max_pending_minibatches);
-    }
-  }
-
-  // process all minibatches, we allow partial minibatches but this should only
-  // occur on the last iteration
-  bool allow_partial_minibatch = true;
-  while (computer.Compute(allow_partial_minibatch))
-    ;
-
-  // Extract Posteriors
-  for (int i = first; i < tasks.size(); i++) {
-    TaskState &task = *tasks[i];
-    std::unique_ptr<TaskData> &task_data = task.task_data;
-    CuMatrix<BaseFloat> &posteriors = task_data->posteriors;
-    MergeTaskOutput(nnet_tasks[i], &posteriors);
-
-    // nnet output is no longer necessary as we have copied the output out
-    nnet_tasks[i].resize(0);
-
-    // features are no longer needed so free memory here
-    task_data->ivector_features.Resize(0);
-    task_data->input_features.Resize(0,0);
-  }
-
-  nvtxRangePop();
-}
-
-// Computes Features for a single decode instance.
-void BatchedThreadedNnet3CudaPipeline::ComputeOneFeatureCPU(TaskState *task_) {
-  nvtxRangePushA("ComputeOneFeatureCPU");
-  TaskState &task = *task_;
-  std::unique_ptr<TaskData> &task_data = task.task_data;
-  Vector<BaseFloat> &ivector_features = task_data->ivector_features_cpu;
-  Matrix<BaseFloat> &input_features = task_data->input_features_cpu;
-
-  // create decoding state
-  OnlineNnet2FeaturePipeline feature(*feature_info_);
-
-  // Accept waveforms
-  feature.AcceptWaveform(task_data->sample_frequency,
-                         SubVector<BaseFloat>(*task_data->wave_samples, 0,
-                                              task_data->wave_samples->Dim()));
-  feature.InputFinished();
-  // All frames should be ready here
-  int32 numFrames = feature.NumFramesReady();
-  // If we don't have anything to do, we must return now
-  if (numFrames == 0) {
-    task_->finished = true;
-    return;
-  }
-  int32 input_dim = feature.InputFeature()->Dim();
-
-  std::vector<int> frames(numFrames);
-  // create list of frames
-  for (int j = 0; j < numFrames; j++) frames[j] = j;
-
-  // Copy Features
-  input_features.Resize(numFrames, input_dim);
-  feature.InputFeature()->GetFrames(frames, &input_features);
-
-  // Ivectors are optional, if they were not provided skip this step
-  if (feature.IvectorFeature() != NULL) {
-    int32 ivector_dim = feature.IvectorFeature()->Dim();
-    ivector_features.Resize(ivector_dim);
-
-    // Copy Features
-    feature.IvectorFeature()->GetFrame(numFrames - 1, &ivector_features);
-  }
-
-  AddTaskToPendingTaskQueue(task_);
-
-  nvtxRangePop();
-}
-
-// Computes features across the tasks[first,tasks.size()
-void BatchedThreadedNnet3CudaPipeline::ComputeBatchFeatures(
-    int32 first, std::vector<TaskState *> &tasks,
-    OnlineCudaFeaturePipeline &feature_pipeline) {
-  KALDI_ASSERT(config_.gpu_feature_extract == true);
-  nvtxRangePushA("CopyBatchWaves");
-  // below we will pack waves into a single buffer for efficient transfer across
-  // device
-
-  // first count the total number of elements and create a single large vector
-  int count = 0;
-  for (int i = first; i < tasks.size(); i++) {
-    count += tasks[i]->task_data->wave_samples->Dim();
-  }
-
-  // creating a thread local vector of pinned memory.
-  // wave data will be stagged through this memory to get
-  // more efficient non-blocking transfers to the device.
-  thread_local Vector<BaseFloat> pinned_vector;
-
-  if (pinned_vector.Dim() < count) {
-    // WAR:  Not pinning memory because it seems to impact correctness
-    // we are continuing to look into a fix but want to commit this workaround
-    // as a temporary measure.
-    if (pinned_vector.Dim() != 0) {
-      cudaHostUnregister(pinned_vector.Data());
-    }
-
-    // allocated array 2x size
-    pinned_vector.Resize(count * 2, kUndefined);
-    cudaHostRegister(pinned_vector.Data(),
-        pinned_vector.Dim() * sizeof(BaseFloat), 0);
-  }
-
-  // We will launch a thread for each task in order to get better host memory
-  // bandwidth
-  std::vector<std::future<void>> futures;  // for syncing
-
-  // vector copy function for threading below.
-  auto copy_vec = [](SubVector<BaseFloat> dst, const SubVector<BaseFloat> src) {
-    nvtxRangePushA("CopyVec");
-    dst.CopyFromVec(src);
-    nvtxRangePop();
-  };
-
-  // next launch threads to copy all waves for each task in parallel
-  count = 0;
-  for (int i = first; i < tasks.size(); i++) {
-    std::unique_ptr<TaskData> &task_data = tasks[i]->task_data;
-    SubVector<BaseFloat> wave(pinned_vector, count,
-                              task_data->wave_samples->Dim());
-    count += task_data->wave_samples->Dim();
-    futures.push_back(
-        work_pool_->enqueue(copy_vec, wave, *(task_data->wave_samples)));
-  }
-
-  // wait for waves to be copied into place
-  for (int i = 0; i < futures.size(); i++) {
-    futures[i].get();
-  }
-
-  CuVector<BaseFloat> cu_waves(count, kUndefined);
-  // copy memory down asynchronously.  Vector copy functions are synchronous so
-  // we do it manually.
-  // It is important for this to happen asynchrously to help hide launch latency
-  // of smaller kernels
-  // that come in the future.
-  cudaMemcpyAsync(cu_waves.Data(), pinned_vector.Data(),
-                  cu_waves.Dim() * sizeof(BaseFloat), cudaMemcpyHostToDevice,
-                  cudaStreamPerThread);
-  nvtxRangePop();
-
-  nvtxRangePushA("ComputeBatchFeatures");
-  // extract features for each wave
-  count = 0;
-  for (int i = first; i < tasks.size(); i++) {
-    TaskState &task = *tasks[i];
-    std::unique_ptr<TaskData> &task_data = task.task_data;
-
-    CuSubVector<BaseFloat> cu_wave(cu_waves, count,
-                                   task_data->wave_samples->Dim());
-    count += task_data->wave_samples->Dim();
-    feature_pipeline.ComputeFeatures(cu_wave, task_data->sample_frequency,
-                                     &task_data->input_features,
-                                     &task_data->ivector_features);
-
-    int32 numFrames = task_data->input_features.NumRows();
-
-    if (numFrames == 0) {
-      // Make this a warning for now.  Need to check how this is handled
-      KALDI_WARN << "Warning empty audio file";
-    }
-  }
-  nvtxRangePop();
-}
-
-// Allocates decodables for tasks in the range of tasks[first,tasks.size())
-void BatchedThreadedNnet3CudaPipeline::AllocateDecodables(
-    int32 first, std::vector<TaskState *> &tasks,
-    std::vector<CudaDecodableInterface *> &decodables) {
-  // Create mapped decodable here
-  for (int i = first; i < tasks.size(); i++) {
-    std::unique_ptr<TaskData> &task_data = tasks[i]->task_data;
-    CuMatrix<BaseFloat> &posteriors = task_data->posteriors;
-    decodables.push_back(
-        new DecodableCuMatrixMapped(*trans_model_, posteriors, 0));
-  }
-}
-
-// Removes all completed channels from the channel list.
-// Also enqueues up work for post processing
-void BatchedThreadedNnet3CudaPipeline::RemoveCompletedChannels(
-    CudaDecoder &cuda_decoder, ChannelState &channel_state,
-    std::vector<CudaDecodableInterface *> &decodables,
-    std::vector<TaskState *> &tasks) {
-  std::vector<ChannelId> &channels = channel_state.channels;
-  std::vector<ChannelId> &completed_channels = channel_state.completed_channels;
-
-  // Here we will reorder arrays to put finished decodes at the end
-  int cur = 0;  // points to the current unchecked decode
-  int back = tasks.size() - completed_channels.size() -
-             1;  // points to the last unchecked decode
-
-  // for each active channel
-  // scan channels to find finished decodes
-  // move finished decodes to the end
-  for (int i = 0; i < channels.size(); i++) {
-    ChannelId channel = channels[cur];
-    int numDecoded = cuda_decoder.NumFramesDecoded(channel);
-    int toDecode = decodables[cur]->NumFramesReady();
-
-    if (toDecode == numDecoded) {  // if current task is completed
-      // add channel to free and completed queues
-      completed_channels.push_back(channel);
-
-      // this was assigned earlier just making sure it is still consistent
-      KALDI_ASSERT(tasks[cur]->ichannel == channel);
-
-      // Rearrange queues,
-      // move this element to end and end to this spot
-      std::swap(tasks[cur], tasks[back]);
-      std::swap(channels[cur], channels[back]);
-      std::swap(decodables[cur], decodables[back]);
-
-      // back is a completed decode so decrement it
-      back--;
-    } else {
-      // not completed move to next task
-      cur++;
-    }  // end if completed[cur]
-  }    // end for loop
-
-  // removing finished channels from list
-  channels.resize(cur);
-}
-
-// Post decode some channels will be complete
-// For those channels we need to
-//  free up the channel
-//  get and determinize the lattice
-//
-void BatchedThreadedNnet3CudaPipeline::PostDecodeProcessing(
-    CudaDecoder &cuda_decoder, ChannelState &channel_state,
-    std::vector<CudaDecodableInterface *> &decodables,
-    std::vector<TaskState *> &tasks) {
-  std::vector<ChannelId> &channels = channel_state.channels;
-  std::vector<ChannelId> &completed_channels = channel_state.completed_channels;
-
-  // consistency check
-  KALDI_ASSERT(tasks.size() == channels.size() + completed_channels.size());
-
-  // Prepare data for GetRawLattice
-  cuda_decoder.PrepareForGetRawLattice(completed_channels, true);
-  // clean up datastructures for completed tasks
-  for (int i = channels.size(); i < tasks.size(); i++) {
-    tasks[i]->task_data->posteriors.Resize(0,0);
-    delete decodables[i];
-  }
-
-  std::vector<std::future<void>> futures;
-
-  // Calling GetRawLattice + Determinize (optional) on a CPU worker thread
-  for (int i = channels.size(); i < tasks.size(); i++) {
-    // checking that this channel is actually in the completed channels list
-    // order is reversed because we used push_back into completed_channel list
-    KALDI_ASSERT(tasks[i]->ichannel ==
-                 completed_channels[channels.size() +
-                                    completed_channels.size() - i - 1]);
-    futures.push_back(
-        work_pool_->enqueue(THREAD_POOL_NORMAL_PRIORITY,
-                            &BatchedThreadedNnet3CudaPipeline::CompleteTask,
-                            this, &cuda_decoder, &channel_state, tasks[i]));
-  }
-
-  for (int i = 0; i < futures.size(); i++) {
-    futures[i].get();
-  }
-
-  tasks.resize(channels.size());
-  decodables.resize(channels.size());
-  completed_channels.resize(0);
-}
-
-void BatchedThreadedNnet3CudaPipeline::CompleteTask(CudaDecoder *cuda_decoder,
-                                                    ChannelState *channel_state,
-                                                    TaskState *task) {
-  // Calling GetRawLattice for that channel. PrepareForGetRawLattice was already
-  // called
-  cuda_decoder->ConcurrentGetRawLatticeSingleChannel(task->ichannel,
-                                                     &task->lat);
-  // We are done using that channel. Putting it back into the free channels
-  {
-    std::lock_guard<std::mutex> lk(channel_state->free_channels_mutex);
-    channel_state->free_channels.push_back(task->ichannel);
-  }
-
-  // If necessary, determinize the lattice
-  if (config_.determinize_lattice) DeterminizeOneLattice(task);
-
-  if (!config_.determinize_lattice) {
-    ConvertLattice(task->lat, &task->dlat);
-  }
-
-  if (task->callback)  // if callable
-    task->callback(task->dlat);
-
-  task->finished = true;
-
-  {
-    std::lock_guard<std::mutex> lk(group_tasks_mutex_);
-    --all_group_tasks_not_done_;
-    int32 left_in_group = --group_tasks_not_done_[task->group];
-    //    std::cout << "left in group " << task->group << " " << left_in_group
-    //    << std::endl;
-    if (left_in_group == 0) group_done_cv_.notify_all();
-  }
-}
-
-void BatchedThreadedNnet3CudaPipeline::DeterminizeOneLattice(TaskState *task) {
-  nvtxRangePushA("DeterminizeOneLattice");
-  // Note this destroys the original raw lattice
-  DeterminizeLatticePhonePrunedWrapper(*trans_model_, &task->lat,
-                                       config_.decoder_opts.lattice_beam,
-                                       &(task->dlat), config_.det_opts);
-  task->determinized = true;
-  nvtxRangePop();
-}
-
-void BatchedThreadedNnet3CudaPipeline::ExecuteWorker(int threadId) {
-  // Initialize this threads device
-  CuDevice::Instantiate();
-
-  KALDI_LOG << "CudaDecoder batch_size=" << config_.max_batch_size
-            << " num_channels=" << config_.num_channels;
-  // Data structures that are reusable across decodes but unique to each thread
-  CudaDecoder cuda_decoder(cuda_fst_, config_.decoder_opts,
-                           config_.max_batch_size, config_.num_channels);
-  if (config_.num_decoder_copy_threads > 0)
-    cuda_decoder.SetThreadPoolAndStartCPUWorkers(
-        work_pool_, config_.num_decoder_copy_threads);
-  nnet3::NnetBatchComputer computer(config_.compute_opts, am_nnet_->GetNnet(),
-                                    am_nnet_->Priors());
-
-  OnlineCudaFeaturePipeline feature_pipeline(config_.feature_opts);
-
-  ChannelState channel_state;
-
-  std::vector<TaskState *> tasks;  // The state for each decode
-  std::vector<CudaDecodableInterface *> decodables;
-
-  // Initialize reuseable data structures
-  {
-    channel_state.channels.reserve(config_.max_batch_size);
-    channel_state.completed_channels.reserve(config_.max_batch_size);
-    tasks.reserve(config_.max_batch_size);
-    decodables.reserve(config_.max_batch_size);
-    {
-      std::lock_guard<std::mutex> lk(channel_state.free_channels_mutex);
-      channel_state.free_channels.reserve(config_.num_channels);
-      // add all channels to free channel list
-      for (int i = 0; i < config_.num_channels; i++) {
-        channel_state.free_channels.push_back(i);
-      }
-    }
-  }
-
-  numStarted_++;  // Tell master I have started
-
-  // main control loop.  At each iteration a thread will see if it has been
-  // asked to shut
-  // down.  If it has it will exit.  This loop condition will only be processed
-  // if all
-  // other work assigned to this thread has been processed.
-  while (!exit_) {
-    // main processing loop.  At each iteration the thread will do the
-    // following:
-    // 1) Attempt to grab more work.
-    // 2) Initialize any new work
-    // do
-    // 3) Process work in a batch
-    // while(free lanes < drain_count)
-    // 4) Postprocess any completed work
-    do {
-      // 1) attempt to fill the batch
-      if (tasks_front_ != tasks_back_) {  // if work is available grab more work
-
-        int start = tasks.size();  // Save the current assigned tasks size
-
-        AquireAdditionalTasks(cuda_decoder, channel_state, tasks);
-        // New tasks are now in the in tasks[start,tasks.size())
-        if (start != tasks.size()) {  // if there are new tasks
-          if (config_.gpu_feature_extract)
-            ComputeBatchFeatures(start, tasks, feature_pipeline);
-          ComputeBatchNnet(computer, start, tasks);
-          AllocateDecodables(start, tasks, decodables);
-        }
-      }  // end if (tasks_front_!=tasks_back_)
-
-      // check if there is no active work on this thread.
-      // This can happen if another thread was assigned the work.
-      if (tasks.size() == 0) {
-        // Thread is spinning waiting for work.  Backoff.
-        kaldi::Sleep(SLEEP_BACKOFF_S);
+      std::lock_guard<std::mutex> lk(preprocessing_utt_queue_m_);
+      if (preprocessing_utt_queue_.empty()) {
+        iterate = false;
         break;
       }
 
-      // try/catch to catch and report errors inside decoder.
-      // errors can be recoverable or non-recoverable
-      // unrecoverable errors will assert
-      // recoverable errors will cancel the batch (output empty lattice)
-      // and print a warning.
-      // There should be no errors and this is just a sanity check
-      try {
-        // This is in a loop in case we want to drain the batch a little.
-        // Draining the batch will cause initialization tasks to be batched.
-        do {
-          // 3) Process outstanding work in a batch
-          // Advance decoding on all open channels
-          cuda_decoder.AdvanceDecoding(channel_state.channels, decodables);
+      task = std::move(preprocessing_utt_queue_.front());
+      preprocessing_utt_queue_.pop();
+    }
+    KALDI_ASSERT(task.h_wave);
+    SubVector<BaseFloat> &h_wave = *task.h_wave;
+    int32 nsamp = h_wave.Dim();
 
-          // Adjust channel state for all completed decodes
-          RemoveCompletedChannels(cuda_decoder, channel_state, decodables,
-                                  tasks);
-          // do loop repeates until we meet drain size or run out of work
-        } while (config_.max_batch_size - channel_state.channels.size() <
-                     config_.batch_drain_size &&
-                 channel_state.channels.size() > 0);
-        // 4) Post process work.  This reorders completed work to the end,
-        // copies results outs, and cleans up data structures
-        PostDecodeProcessing(cuda_decoder, channel_state, decodables, tasks);
+    cudaEventSynchronize(wave_buffer_->evt);
+    if (nsamp > wave_buffer_->size) {
+      wave_buffer_->Reallocate(nsamp);
+    }
+    std::memcpy(wave_buffer_->h_data, h_wave.Data(),
+                h_wave.Dim() * sizeof(BaseFloat));
 
-      } catch (CudaDecoderException e) {
-        // Code to catch errors.  Most errors are unrecoverable but a user can
-        // mark them
-        // recoverable which will cancel the entire batch but keep processing.
-        if (!e.recoverable) {
-          bool UNRECOVERABLE_EXCEPTION = false;
-          KALDI_LOG << "Error unrecoverable cuda decoder error '" << e.what()
-                    << "'\n";
-          KALDI_ASSERT(UNRECOVERABLE_EXCEPTION);
-        } else {
-          KALDI_LOG << "Error recoverable cuda decoder error '" << e.what()
-                    << "'\n";
-          KALDI_LOG << "    Aborting batch for recovery.  Canceling the "
-                       "following decodes:\n";
-          // Cancel all outstanding tasks
-          for (int i = 0; i < tasks.size(); i++) {
-            // move all channels to free channel queue
-            ChannelId channel = channel_state.channels[i];
-            {
-              std::lock_guard<std::mutex> lk(channel_state.free_channels_mutex);
-              channel_state.free_channels.push_back(channel);
-            }
-            TaskState &task = *(tasks[i]);
-            KALDI_LOG << "      Canceled: " << task.key << "\n";
+    cudaMemcpyAsync(wave_buffer_->d_data, wave_buffer_->h_data,
+                    sizeof(BaseFloat) * nsamp, cudaMemcpyHostToDevice,
+                    cudaStreamPerThread);
 
-            // set error flag
-            task.error = true;
-            task.error_string = e.what();
+    task.d_features.reset(new CuMatrix<BaseFloat>());
+    task.d_ivectors.reset(new CuVector<BaseFloat>());
+    CuSubVector<BaseFloat> wrapper(wave_buffer_->d_data, nsamp);
+    cuda_features_->ComputeFeatures(
+        wrapper, cuda_online_pipeline_.GetModelFrequency(),
+        task.d_features.get(), task.d_ivectors.get());
+    cudaEventRecord(wave_buffer_->evt, cudaStreamPerThread);
+    std::swap(wave_buffer_, next_wave_buffer_);
+    if (task.wave_data) task.wave_data.reset();  // delete wave samples on host
+    {
+      std::lock_guard<std::mutex> lk(outstanding_utt_m_);
+      outstanding_utt_.push(std::move(task));
+      // We dont want to have too many files ready in outstanding_utt_
+      // (using device memory)
+      // using max_batch_size_ as an arbitrary (large enough) value
+      iterate = (outstanding_utt_.size() < max_batch_size_);
+    }
+  } while (iterate);
+  cudaStreamSynchronize(cudaStreamPerThread);  // to keep CuVector in scope
+}
 
-            // cleanup memory
-            delete decodables[i];
+std::shared_ptr<CompactLattice> BatchedThreadedNnet3CudaPipeline::GetLattice(
+    const std::string &key) {
+  Output *out;
+  {
+    std::lock_guard<std::mutex> lk(completed_lattices_m_);
+    auto it = completed_lattices_.find(key);
+    KALDI_ASSERT("Key doesn't exist" && (it != completed_lattices_.end()));
+    out = it->second.get();
+  }
+  // While the clat shared_ptr is not set
+  while (!out->is_clat_set.load(std::memory_order_acquire)) {
+    usleep(10);  // TODO
+  }
+  return out->clat;
+}
 
-            // notifiy master decode is finished
-            task.finished = true;
+void BatchedThreadedNnet3CudaPipeline::CloseDecodeHandle(
+    const std::string &key) {
+  std::lock_guard<std::mutex> lk(completed_lattices_m_);
+  int32 ndeleted = completed_lattices_.erase(key);
+  KALDI_ASSERT("Key doesn't exist" && (ndeleted > 0));
+}
+
+void BatchedThreadedNnet3CudaPipeline::AcquireTasks() {
+  // Trying to get new tasks
+  std::unique_lock<std::mutex> lk(outstanding_utt_m_);
+  while (current_tasks_.size() < max_batch_size_) {
+    // If use_online_ivectors_ is false, we have to fill outstanding_utt_ by
+    // computing features
+    if (!use_online_ivectors_ && outstanding_utt_.size() == 0) {
+      lk.unlock();
+      ComputeOfflineFeatures();
+      lk.lock();
+    }
+    // If still empty, break
+    if (outstanding_utt_.size() == 0) break;
+    UtteranceTask &task = outstanding_utt_.front();
+    cuda_online_pipeline_.InitCorrID(task.corr_id);
+    auto &callback = task.callback;
+    bool auto_close_after_callback = task.auto_close_after_callback;
+    auto &key = task.key;
+    std::atomic<int> *group_cnt = task.group_cnt;
+    cuda_online_pipeline_.SetLatticeCallback(
+        task.corr_id, [this, callback, auto_close_after_callback, key,
+                       group_cnt](CompactLattice &clat) {
+          if (callback) callback(clat);
+          if (auto_close_after_callback) {
+            // Nothing to do to close it, all data structures used during
+            // computation are cleared automatically
+          } else {
+            // Saving the lattice for GetLattice
+            std::shared_ptr<CompactLattice> clat_ptr =
+                std::make_shared<CompactLattice>(clat);
+            std::lock_guard<std::mutex> lk(completed_lattices_m_);
+            auto it = completed_lattices_.find(key);
+            KALDI_ASSERT(it != completed_lattices_.end());
+            it->second->clat = std::move(clat_ptr);
+            it->second->is_clat_set.store(true, std::memory_order_release);
           }
-          tasks.resize(0);
-          channel_state.channels.resize(0);
-          decodables.resize(0);
-        }
-      }
-    } while (tasks.size() > 0);  // more work don't check exit condition
-  }                              // end while(!exit_)
-}  // end ExecuteWorker
+          n_tasks_not_done_.fetch_sub(1, std::memory_order_release);
+          if (group_cnt) group_cnt->fetch_sub(1, std::memory_order_release);
+        });
+    current_tasks_.push_back(std::move(task));
+    outstanding_utt_.pop();
+  }
+}
+
+void BatchedThreadedNnet3CudaPipeline::ComputeTasks() {
+  while (threads_running_) {
+    if (current_tasks_.size() < max_batch_size_) AcquireTasks();
+    if (current_tasks_.empty()) {
+      // If we still have nothing to do, let's sleep a bit
+      usleep(100);  // TODO
+      continue;
+    }
+    BuildBatchFromCurrentTasks();
+
+    if (use_online_ivectors_)
+      cuda_online_pipeline_.DecodeBatch(batch_corr_ids_, batch_wave_samples_,
+                                        batch_is_last_chunk_);
+    else
+      cuda_online_pipeline_.DecodeBatch(
+          batch_corr_ids_, batch_features_, batch_features_frame_stride_,
+          batch_n_input_frames_valid_, batch_ivectors_, batch_is_last_chunk_);
+    // Calling the destructors, freeing memory
+    tasks_last_chunk_.clear();
+  }
+}
 
 }  // end namespace cuda_decoder
-}  // end namespace kaldi
+}  // end namespace kaldi.
 
-#endif  // HAVE_CUDA == 1
+#endif  // HAVE_CUDA

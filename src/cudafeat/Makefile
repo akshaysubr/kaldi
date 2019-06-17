@@ -1,16 +1,18 @@
 
 
 all:
-
 include ../kaldi.mk
 ifeq ($(CUDA), true)
 
 TESTFILES = 
 
 ifeq ($(CUDA), true)
-  OBJFILES +=  feature-window-cuda.o feature-spectral-cuda.o feature-online-cmvn-cuda.o \
-							 online-ivector-feature-cuda-kernels.o online-ivector-feature-cuda.o \
-							 online-cuda-feature-pipeline.o
+OBJFILES +=  feature-window-cuda.o feature-spectral-cuda.o feature-online-cmvn-cuda.o \
+		       online-ivector-feature-cuda-kernels.o online-ivector-feature-cuda.o \
+		       batched-feature-mfcc-cuda.o feature-mfcc-cuda.o \
+                       online-cuda-batched-feature-pipeline.o \
+		       batched-mfcc-kernels.o \
+		       online-cuda-feature-pipeline.o
 endif
 
 LIBNAME = kaldi-cudafeat

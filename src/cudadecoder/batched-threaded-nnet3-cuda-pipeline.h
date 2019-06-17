@@ -15,377 +15,273 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if HAVE_CUDA == 1
+
 #ifndef KALDI_CUDA_DECODER_BATCHED_THREADED_CUDA_DECODER_H_
 #define KALDI_CUDA_DECODER_BATCHED_THREADED_CUDA_DECODER_H_
 
 #include <atomic>
 #include <thread>
 
+#include "cudadecoder/batched-threaded-nnet3-cuda-online-pipeline.h"
 #include "cudadecoder/cuda-decoder.h"
-#include "decodable-cumatrix.h"
-#include "feat/wave-reader.h"
-#include "lat/determinize-lattice-pruned.h"
-#include "nnet3/nnet-batch-compute.h"
-#include "online2/online-nnet2-feature-pipeline.h"
 #include "cudafeat/online-cuda-feature-pipeline.h"
-#include "thread-pool.h"
-
-// If num_channels sets to automatic,
-// num_channels = [this define] * max_batch_size
-#define KALDI_CUDA_DECODER_CHANNELS_BATCH_SIZE_RATIO 1.3
+#include "feat/wave-reader.h"
 
 namespace kaldi {
 namespace cuda_decoder {
-
-/* BatchedThreadedNnet3CudaPipelineConfig
- * This class is a common configuration class for the various components
- * of a batched cuda multi-threaded pipeline.  It defines a single place
- * to control all operations and ensures that the various componets
- * match configurations
- */
-// configuration options common to the BatchedThreadedNnet3CudaPipeline and
-// BatchedThreadedNnet3CudaPipeline
 struct BatchedThreadedNnet3CudaPipelineConfig {
-  BatchedThreadedNnet3CudaPipelineConfig()
-      : max_batch_size(200),
-        num_channels(-1),
-        batch_drain_size(10),
-        num_control_threads(2),
-        num_worker_threads(20),
-        determinize_lattice(true),
-        max_pending_tasks(4000),
-        num_decoder_copy_threads(2),
-        gpu_feature_extract(true) {};
-  void Register(OptionsItf *po) {
-    po->Register("max-batch-size", &max_batch_size,
-                 "The maximum batch size to be used by the decoder. "
-                 "This is also the number of lanes in the CudaDecoder. "
-                 "Larger = Faster and more GPU memory used.");
-    std::ostringstream num_channels_desc;
-    num_channels_desc
-        << "The number of channels "
-           "allocated to the cuda decoder.  This should be larger "
-           "than max_batch_size.  Each channel consumes a small "
-           "amount of memory but also allows us to better overlap "
-           "computation"
-           " (-1 = set to "
-        << KALDI_CUDA_DECODER_CHANNELS_BATCH_SIZE_RATIO << "*max-batch-size).";
-    po->Register("num-channels", &num_channels, num_channels_desc.str());
-    po->Register("batch-drain-size", &batch_drain_size,
-                 "How far to drain the batch before refilling work. This "
-                 "batches pre/post decode work.");
-    po->Register("cuda-control-threads", &num_control_threads,
-                 "The number of pipeline control threads for the CUDA work. "
-                 "e.g. 2 control threads -> 2 independent CUDA pipeline (nnet3 "
-                 "and decoder).");
-    po->Register(
-        "cuda-worker-threads", &num_worker_threads,
-        "The total number of CPU threads launched to process CPU tasks.");
-    po->Register("determinize-lattice", &determinize_lattice,
-                 "Determinize the lattice before output.");
-    po->Register("max-outstanding-queue-length", &max_pending_tasks,
-                 "Number of files to allow to be outstanding at a time. When "
-                 "the number of files is larger than this handles will be "
-                 "closed before opening new ones in FIFO order.");
-    po->Register("cuda-decoder-copy-threads", &num_decoder_copy_threads,
-                 "Advanced - Number of worker threads used in the decoder for "
-                 "the host to host copies.");
-    po->Register("gpu-feature-extract", &gpu_feature_extract,
-                 "Extract features on the GPU.  This reduces CPU overhead "
-                 "leading to better scalability but may reduce overall "
-                 "performance for a single GPU.");
-
-    feature_opts.Register(po);
-    decoder_opts.Register(po);
-    det_opts.Register(po);
-    compute_opts.Register(po);
-  }
-  int max_batch_size;
-  int num_channels;
-  int batch_drain_size;
-  int num_control_threads;
-  int num_worker_threads;
-  bool determinize_lattice;
-  int max_pending_tasks;
-  int num_decoder_copy_threads;
-  bool gpu_feature_extract;
-
-  void ComputeConfig() {
-    if (num_channels == -1)
-      num_channels =
-          max_batch_size * KALDI_CUDA_DECODER_CHANNELS_BATCH_SIZE_RATIO;
-  }
-
-  OnlineNnet2FeaturePipelineConfig feature_opts;      // constant readonly
-  CudaDecoderConfig decoder_opts;                     // constant readonly
-  fst::DeterminizeLatticePhonePrunedOptions det_opts; // constant readonly
-  nnet3::NnetBatchComputerOptions compute_opts;       // constant readonly
+  BatchedThreadedNnet3CudaPipelineConfig() : use_online_ivectors(false) {}
+  BatchedThreadedNnet3CudaOnlinePipelineConfig cuda_online_pipeline_opts;
+  bool use_online_ivectors;
+  void Register(OptionsItf *po) { cuda_online_pipeline_opts.Register(po); }
 };
 
-/*
- * BatchedThreadedNnet3CudaPipeline uses multiple levels of parallelism in order to
- * decode quickly on CUDA GPUs. This is the primary interface for cuda decoding.
- * For examples of how to use this decoder see cudadecoder/README and
- * cudadecoderbin/batched-wav-nnet3-cuda.cc
- */
 class BatchedThreadedNnet3CudaPipeline {
-public:
- BatchedThreadedNnet3CudaPipeline(
-     const BatchedThreadedNnet3CudaPipelineConfig &config)
-     : config_(config), all_group_tasks_not_done_(0) {
-   config_.ComputeConfig();
- };
+  const BatchedThreadedNnet3CudaPipelineConfig &config_;
+  BatchedThreadedNnet3CudaOnlinePipeline cuda_online_pipeline_;
+  using CorrelationID = BatchedThreadedNnet3CudaOnlinePipeline::CorrelationID;
 
- // allocates reusable objects that are common across all decodings
- void Initialize(const fst::Fst<fst::StdArc> &decode_fst,
-                 const nnet3::AmNnetSimple &nnet,
-                 const TransitionModel &trans_model);
+  struct UtteranceTask {
+    UtteranceTask &operator=(const UtteranceTask &) = delete;
+    UtteranceTask(const UtteranceTask &) = delete;
+    UtteranceTask(UtteranceTask &&) = default;
+    UtteranceTask &operator=(UtteranceTask &&) = default;
+    UtteranceTask() = default;
 
- // deallocates reusable objects
- void Finalize();
+    std::shared_ptr<WaveData> wave_data;
+    std::unique_ptr<SubVector<BaseFloat>>
+        h_wave;  // (task.wave_data->Data(), 0)
+    std::string key;
+    int32 samp_offset;
+    CorrelationID corr_id;
+    std::atomic<int> *group_cnt;
+    std::function<void(CompactLattice &)> callback;
+    bool auto_close_after_callback;
 
- // query a specific key to see if compute on it is complete
- bool isFinished(const std::string &key);
-
- // remove an audio file from the decoding and clean up resources
- void CloseDecodeHandle(const std::string &key);
- void CloseAllDecodeHandlesForGroup(const std::string &group);
- void CloseAllDecodeHandles();
-
- // Adds a decoding task to the decoder
- // When passing in a vector of data, the caller must ensure the data exists
- // until the CloseDecodeHandle/WaitForAllTasks is called
- // callback is called once task is done and we pass it the final lattice
- // callback can be used to compute lattice rescoring, find best path in
- // lattice, writing lattice to disk, etc.
- // Important: callback is launched in the threadpool. It must be threadsafe.
- // For instance, if writing to disk, or to stdout,
- // use a lock:
- // e.g. :
- // {
- // 	std::lock_guard<std::mutex> lock(global_mutex);
- // 	// write lattice to disk
- //    // lock is released in the destructor of lock_guard<>
- // }
- void OpenDecodeHandle(
-     const std::string &key, const WaveData &wave_data,
-     const std::string &group = std::string(),
-     const std::function<void(CompactLattice &clat)> &callback =
-         std::function<void(CompactLattice &clat)>());
- // When passing in a vector of data, the caller must ensure the data exists
- // until the CloseDecodeHandle is called
- void OpenDecodeHandle(
-     const std::string &key, const VectorBase<BaseFloat> &wave_data,
-     float sample_rate, const std::string &group = std::string(),
-     const std::function<void(CompactLattice &clat)> &callback =
-         std::function<void(CompactLattice &clat)>());
-
- // Copies the raw lattice for decoded handle "key" into lat
- bool GetRawLattice(const std::string &key, Lattice *lat);
- // Determinizes raw lattice and returns a compact lattice
- bool GetLattice(const std::string &key, CompactLattice *lat);
-
- int32 GetNumberOfTasksPending();
-
- // Wait for all tasks to complete
- void WaitForAllTasks();
- // Wait for all tasks in the group to complete
- void WaitForGroup(const std::string &group);
- // Check if a group is available. Returns if not.
- bool IsGroupCompleted(const std::string &group);
- // Wait for any group to complete, then returns which group completed
- std::string WaitForAnyGroup();
- // Check if any group is available. If one is available, set its name in *group
- bool IsAnyGroupCompleted(std::string *group);
- inline int NumPendingTasks() {
-   return (tasks_back_ - tasks_front_ + config_.max_pending_tasks + 1) %
-          (config_.max_pending_tasks + 1);
+    std::unique_ptr<CuMatrix<BaseFloat>>
+        d_features;  // Used only when use_online_ivectors == false
+    std::unique_ptr<CuVector<BaseFloat>>
+        d_ivectors;  // Used only when use_online_ivectors == false
   };
 
-private:
- // Task data used during computation
- // Is cleared when task is completed
- struct TaskData {
-   Vector<BaseFloat> raw_data;  // Wave input data when wave_reader passed
-   std::shared_ptr<SubVector<BaseFloat>>
-       wave_samples;  // Used as a pointer to either the raw
-                      // data or the samples passed
-   float sample_frequency;
-   Vector<BaseFloat> ivector_features_cpu;
-   Matrix<BaseFloat> input_features_cpu;
-   CuVector<BaseFloat> ivector_features;
-   CuMatrix<BaseFloat> input_features;
-   CuMatrix<BaseFloat> posteriors;
+  bool use_online_ivectors_;
+  int n_input_per_chunk_;
+  std::atomic<uint64_t> corr_id_cnt_;
 
-   TaskData(const WaveData &wave_data_in)
-       : wave_samples(NULL), sample_frequency(0) {
-     int rows = wave_data_in.Data().NumRows();
-     int cols = wave_data_in.Data().NumCols();
-     int stride = wave_data_in.Data().Stride();
+  // Tasks added to the queue, but not yet used
+  std::queue<UtteranceTask> preprocessing_utt_queue_;
+  std::mutex preprocessing_utt_queue_m_;
+  std::queue<UtteranceTask> outstanding_utt_;
+  std::mutex outstanding_utt_m_;
 
-     raw_data.Resize(rows * cols, kUndefined);
+  // Tasks currently being decoded by the cuda pipeline
+  std::vector<UtteranceTask> current_tasks_;
 
-     if (stride == cols) {
-       // contigious so use one large memory copy
-       memcpy(raw_data.Data(), wave_data_in.Data().Data(),
-              rows * cols * sizeof(BaseFloat));
-     } else {
-       // data is not contigious so we need to copy one row at a time
-       for (int i = 0; i < rows; i++) {
-         memcpy(raw_data.Data() + i * cols, wave_data_in.Data().RowData(i),
-                cols * sizeof(BaseFloat));
-       }
-     }
-     wave_samples =
-         std::make_shared<SubVector<BaseFloat>>(raw_data, 0, raw_data.Dim());
-     sample_frequency = wave_data_in.SampFreq();
-   };
+  // Contains the ID of the tasks that are being completed
+  // (we are decoding their last chunk)
+  std::vector<UtteranceTask> tasks_last_chunk_;
 
-   // Init when raw data is passed in.  This data is shallow copied.
-   TaskData(const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
-     wave_samples = std::make_shared<SubVector<BaseFloat>>(wave_data_in, 0,
-                                                           wave_data_in.Dim());
-     sample_frequency = sample_rate;
-   }
- };
+  // Batch sent to online pipeline
+  std::vector<CorrelationID> batch_corr_ids_;
+  std::vector<bool> batch_is_last_chunk_;
+  // Used when use_online_ivectors_
+  std::vector<SubVector<BaseFloat>> batch_wave_samples_;
+  // Used when !use_online_ivectors_
+  std::vector<BaseFloat *> batch_features_;
+  int batch_features_frame_stride_;
+  std::vector<BaseFloat *> batch_ivectors_;
+  std::vector<int> batch_n_input_frames_valid_;
 
- // State needed for each decode task.
- // This state can be passed around by reference or pointer safely
- // and provides a convieniet way to store all decoding state.
- struct TaskState {
-   std::string key;
-   std::string group;  // group for that task. "" is default
-   bool error;
-   std::string error_string;
+  int32 max_batch_size_;
+  // Thread responsible of feeding the online pipeline
+  bool threads_running_;
+  std::thread online_pipeline_control_thread_;
 
-   std::unique_ptr<TaskData> task_data;
+  // Number of tasks currently running
+  std::atomic<int> n_tasks_not_done_;
 
-   int32 ichannel;              // associated CudaDecoder channel
-   Lattice lat;                 // Raw Lattice output
-   CompactLattice dlat;         // Determinized lattice output.  Only set if
-                                // determinize-lattice=true
-   std::atomic<bool> finished;  // Tells master thread if task has finished
-                                // execution
+  // Number of tasks currently running (per group)
+  std::unordered_map<std::string, std::unique_ptr<std::atomic<int>>>
+      n_group_tasks_not_done_;
+  std::mutex n_group_tasks_not_done_m_;
 
-   bool determinized;
+  // If auto_close_after_callback is false, we will store the completed
+  // lattices
+  // there
+  // They will be explicitely deleted by CloseDecodeHandle
+  struct Output {
+    Output() : is_clat_set(false) {}
+    std::atomic<bool> is_clat_set;  // using a separate atomic because
+                                    // std::atomic<std::shared_ptr> only exists
+                                    // with C++20
+    std::shared_ptr<CompactLattice> clat;
+  };
+  std::unordered_map<std::string, std::unique_ptr<Output>> completed_lattices_;
+  std::mutex completed_lattices_m_;
 
-   // (optional) callback is called task is finished and we have a lattice
-   // ready
-   // that way we can compute all CPU tasks in the threadpool (lattice
-   // rescoring, find best path in lattice, etc.)
-   std::function<void(CompactLattice &clat)> callback;
+  std::unique_ptr<OnlineCudaFeaturePipeline> cuda_features_;
 
-   TaskState() : error(false), finished(false), determinized(false) {}
+  struct HostDeviceVector {
+    cudaEvent_t evt;
+    BaseFloat *h_data;
+    BaseFloat *d_data;
+    size_t size;
 
-   // Init when wave data is passed directly in.  This data is deep copied.
-   void Init(const std::string &key_in, const WaveData &wave_data_in) {
-     task_data.reset(new TaskData(wave_data_in));
-     key = key_in;
-   };
-   // Init when raw data is passed in.  This data is shallow copied.
-   void Init(const std::string &key_in,
-             const VectorBase<BaseFloat> &wave_data_in, float sample_rate) {
-     task_data.reset(new TaskData(wave_data_in, sample_rate));
-     key = key_in;
-   }
+    // TODO move values to const
+    HostDeviceVector() : h_data(NULL), d_data(NULL), size(16000 * 50) {
+      cudaEventCreate(&evt);
+      Reallocate(size);
+    }
+
+    virtual ~HostDeviceVector() {
+      Deallocate();
+      cudaEventDestroy(evt);
+    }
+
+    void Reallocate(size_t new_size) {
+      KALDI_ASSERT(new_size > 0);
+      Deallocate();
+      cudaMalloc(&d_data, new_size * sizeof(*d_data));
+      cudaMallocHost(&h_data, new_size * sizeof(*d_data));
+      new_size = size;
+    }
+    void Deallocate() {
+      if (d_data) cudaFree(d_data);
+      if (h_data) cudaFreeHost(h_data);
+    }
   };
 
-  // Creating a new task in the hashmaps
-  TaskState *AddTask(const std::string &key, const std::string &group);
+  std::unique_ptr<HostDeviceVector> wave_buffer_, next_wave_buffer_;
 
-  // Holds the current channel state for a worker
-  struct ChannelState {
-    std::vector<ChannelId> channels;
-    std::vector<ChannelId> free_channels;
-    std::vector<ChannelId> completed_channels;
-    std::mutex free_channels_mutex;
-  };
+ public:
+  BatchedThreadedNnet3CudaPipeline(
+      const BatchedThreadedNnet3CudaPipelineConfig &config,
+      const fst::Fst<fst::StdArc> &decode_fst,
+      const nnet3::AmNnetSimple &am_nnet, const TransitionModel &trans_model)
+      : config_(config),
+        cuda_online_pipeline_(config.cuda_online_pipeline_opts, decode_fst,
+                              am_nnet, trans_model),
+        use_online_ivectors_(config_.use_online_ivectors),
+        corr_id_cnt_(0),
+        max_batch_size_(config_.cuda_online_pipeline_opts.max_batch_size),
+        threads_running_(true),
+        online_pipeline_control_thread_(
+            &BatchedThreadedNnet3CudaPipeline::ComputeTasks, this),
+        n_tasks_not_done_(0) {
+    batch_corr_ids_.reserve(max_batch_size_);
+    batch_wave_samples_.reserve(max_batch_size_);
+    batch_is_last_chunk_.reserve(max_batch_size_);
+    tasks_last_chunk_.reserve(max_batch_size_);
+    if (use_online_ivectors_) {
+      n_input_per_chunk_ = cuda_online_pipeline_.GetNSampsPerChunk();
+    } else {
+      n_input_per_chunk_ = cuda_online_pipeline_.GetNInputFramesPerChunk();
+      cuda_features_.reset(new OnlineCudaFeaturePipeline(
+          config_.cuda_online_pipeline_opts.feature_opts));
+      wave_buffer_.reset(new HostDeviceVector());
+      next_wave_buffer_.reset(new HostDeviceVector());
+    }
+  }
 
-  // Adds task to the PendingTaskQueue
-  void AddTaskToPendingTaskQueue(TaskState *task);
+  ~BatchedThreadedNnet3CudaPipeline() {
+    threads_running_ = false;
+    online_pipeline_control_thread_.join();
+  }
 
-  // Attempts to fill the batch from the task queue.  May not fully fill the
-  // batch.
-  void AquireAdditionalTasks(CudaDecoder &cuda_decoder,
-                             ChannelState &channel_state,
-                             std::vector<TaskState *> &tasks);
+  // Will decode wave_data. Then when done, will call the callback with the
+  // final lattice.
+  // It does not create a handle, so you don't need to call CloseDecodeHandle,
+  // and GetLattice cannot be used with DecodeWithCallback (the lattice is
+  // provided through the callback)
+  // Should be preferred to OpenDecodeHandle/GetLattice/CloseDecodeHandle when
+  // possible
+  // The callback function is called in a multithreaded environment. It must be
+  // threadsafe
+  // To wait for those tasks to complete you can use WaitForGroup or
+  // WaitForAllTasks
+  void DecodeWithCallback(const std::shared_ptr<WaveData> &wave_data,
+                          const std::function<void(CompactLattice &)> &callback,
+                          const std::string &group = std::string()) {
+    OpenDecodeHandle(std::string(), wave_data,
+                     std::unique_ptr<SubVector<BaseFloat>>(), callback, true,
+                     group);
+  }
 
-  // Computes Features for a single decode instance.
-  void ComputeOneFeatureCPU(TaskState *task);
+  void DecodeWithCallback(const VectorBase<BaseFloat> &wave_data,
+                          float sample_rate,
+                          const std::function<void(CompactLattice &)> &callback,
+                          const std::string &group = std::string()) {
+    KALDI_ASSERT(sample_rate == cuda_online_pipeline_.GetModelFrequency());
+    std::unique_ptr<SubVector<BaseFloat>> h_wave(
+        new SubVector<BaseFloat>(wave_data, 0, wave_data.Dim()));
+    OpenDecodeHandle(std::string(), std::shared_ptr<WaveData>(),
+                     std::move(h_wave), callback, true, group);
+  }
 
-  // Computes features across the tasks[first,tasks.size()
-  void ComputeBatchFeatures(int32 first,
-                            std::vector<TaskState *> &tasks,
-                            OnlineCudaFeaturePipeline &feature_pipeline);
+  // Opens a new decode handle. The API user must take care of retriving the
+  // final Lattice with GetLattice and close the handle with CloseDecodeHandle
+  void OpenDecodeHandle(const std::string &key,
+                        const std::shared_ptr<WaveData> &wave_data,
+                        const std::string &group = std::string()) {
+    OpenDecodeHandle(key, wave_data, std::unique_ptr<SubVector<BaseFloat>>(),
+                     std::function<void(CompactLattice &)>(), false, group);
+  }
 
-  // Computes Nnet across the current decode batch
-  void ComputeBatchNnet(nnet3::NnetBatchComputer &computer, int32 first,
-                        std::vector<TaskState *> &tasks);
+  void OpenDecodeHandle(const std::string &key,
+                        const VectorBase<BaseFloat> &wave_data,
+                        float sample_rate,
+                        const std::string &group = std::string()) {
+    KALDI_ASSERT(sample_rate == cuda_online_pipeline_.GetModelFrequency());
+    std::unique_ptr<SubVector<BaseFloat>> h_wave(
+        new SubVector<BaseFloat>(wave_data, 0, wave_data.Dim()));
+    OpenDecodeHandle(key, std::shared_ptr<WaveData>(), std::move(h_wave),
+                     std::function<void(CompactLattice &)>(), false, group);
+  }
+  // Only necessary if OpenDecodeHandle was used. Not if DecodeWithCallback()
+  // was used.
+  void CloseDecodeHandle(const std::string &key);
+  std::shared_ptr<CompactLattice> GetLattice(const std::string &key);
+  // Will be depreciated
+  bool GetLattice(const std::string &key, CompactLattice *lat) {
+    std::shared_ptr<CompactLattice> shlat = GetLattice(key);
+    *lat = *shlat;
+    return true;
+  }
 
-  // Allocates decodables for tasks in the range of
-  // dstates[first,dstates.size())
-  void AllocateDecodables(int32 first, std::vector<TaskState *> &tasks,
-                          std::vector<CudaDecodableInterface *> &decodables);
+  // Create a Task Group. Tasks can be associated with a group.
+  // It is then possible to sync only on those tasks using WaitForGroup
+  // (instead of WaitForAllTasks)
+  void CreateTaskGroup(const std::string &group);
+  void DestroyTaskGroup(const std::string &group);
+  // Wait for all tasks in that group to complete
+  void WaitForGroup(const std::string &group);
 
-  // Removes all completed channels from the channel list.
-  // Also enqueues up work for post processing
-  void
-  RemoveCompletedChannels(CudaDecoder &cuda_decoder,
-                          ChannelState &channel_state,
-                          std::vector<CudaDecodableInterface *> &decodables,
-                          std::vector<TaskState *> &tasks);
+  void WaitForAllTasks();
 
-  // For each completed decode perform post processing work and clean up
-  void PostDecodeProcessing(CudaDecoder &cuda_decoder,
-                            ChannelState &channel_state,
-                            std::vector<CudaDecodableInterface *> &decodables,
-                            std::vector<TaskState *> &tasks);
+  // Used for debug
+  void SetSymbolTable(fst::SymbolTable *word_syms) {
+    cuda_online_pipeline_.SetSymbolTable(word_syms);
+  }
 
-  // Calls ConcurrentGetRawLatticeSingleChannel and Determinize
-  // on a dedicated CPU worker thread at the end of the decode
-  void CompleteTask(CudaDecoder *cuda_decoder, ChannelState *channel_state,
-                    TaskState *state);
-
-  // Determinize one lattice
-  void DeterminizeOneLattice(TaskState *task);
-  // Thread execution function.  This is a single worker thread which processes
-  // input.
-  void ExecuteWorker(int threadId);
-
-  BatchedThreadedNnet3CudaPipelineConfig config_;
-
-  CudaFst cuda_fst_;
-  const TransitionModel *trans_model_;
-  const nnet3::AmNnetSimple *am_nnet_;
-  nnet3::DecodableNnetSimpleLoopedInfo *decodable_info_;
-  OnlineNnet2FeaturePipelineInfo *feature_info_;
-
-  std::mutex tasks_mutex_; // protects tasks_front_ and pending_task_queue_ for
-                           // workers
-  std::mutex tasks_add_mutex_; // protect OpenDecodeHandle if multiple threads
-                               // access
-  std::mutex tasks_lookup_mutex_; // protext tasks_lookup map
-  std::condition_variable tasks_lookup_cv_;
-  std::atomic<int> tasks_front_, tasks_back_;
-  TaskState **pending_task_queue_;
-
-  std::atomic<bool> exit_;      // signals threads to exit
-  std::atomic<int> numStarted_; // signals master how many threads have started
-
-  ThreadPool *work_pool_; // thread pool for CPU work
-  std::map<std::string, int32> group_tasks_not_done_;
-  int32 all_group_tasks_not_done_;
-  std::mutex group_tasks_mutex_;
-  std::condition_variable group_done_cv_;
-  std::unordered_multimap<std::string, TaskState *>
-      tasks_group_lookup_;  // group -> list of tasks
-  std::unordered_map<std::string, TaskState>
-      tasks_lookup_;                              // Contains a map of
-                                                  // utterance to TaskState
-  std::vector<std::thread> thread_contexts_;      // A list of thread contexts
+ private:
+  // Private version of OpenDecodeHandle.
+  // The public one ensure that the user doesn't use a key when
+  // auto_close_after_callback is true
+  void OpenDecodeHandle(const std::string &key,
+                        const std::shared_ptr<WaveData> &wave_data,
+                        std::unique_ptr<SubVector<BaseFloat>> &&h_wave,
+                        const std::function<void(CompactLattice &)> &callback,
+                        bool auto_close_after_callback,
+                        const std::string &group = std::string());
+  void BuildBatchFromCurrentTasks();
+  void AcquireTasks();
+  void ComputeTasks();
+  void ComputeOfflineFeatures();
 };
 
 }  // end namespace cuda_decoder
-} // end namespace kaldi.
+}  // end namespace kaldi.
 
 #endif  // KALDI_CUDA_DECODER_BATCHED_THREADED_CUDA_DECODER_H_
+#endif  // HAVE_CUDA

@@ -19,7 +19,6 @@
 #ifndef KALDI_CUDA_DECODER_DECODABLE_CUMATRIX_H_
 #define KALDI_CUDA_DECODER_DECODABLE_CUMATRIX_H_
 
-#include "cudadecoder/cuda-decodable-itf.h"
 #include "cudamatrix/cu-matrix.h"
 #include "decoder/decodable-matrix.h"
 
@@ -30,39 +29,35 @@ namespace cuda_decoder {
   Cuda Decodable matrix.  Takes transition model and posteriors and provides
   an interface similar to the Decodable Interface
   */
-class DecodableCuMatrixMapped : public CudaDecodableInterface {
-public:
+class DecodableCuMatrixMapped {
+ public:
   // This constructor creates an object that will not delete "likes" when done.
   // the frame_offset is the frame the row 0 of 'likes' corresponds to, would be
   // greater than one if this is not the first chunk of likelihoods.
   DecodableCuMatrixMapped(const TransitionModel &tm,
-                          const CuMatrixBase<BaseFloat> &likes,
+                          const CuSubMatrix<BaseFloat> &likes,
                           int32 frame_offset = 0);
 
-  virtual int32 NumFramesReady() const;
-
-  virtual bool IsLastFrame(int32 frame) const;
-
-  virtual BaseFloat LogLikelihood(int32 frame, int32 tid) {
-    KALDI_ASSERT(false);
-    return 0.0f;  // never executed, compiler requests a return
-  };
+  int32 NumFramesReady() const;
 
   // Note: these indices are 1-based.
-  virtual int32 NumIndices() const;
+  int32 NumIndices() const;
 
   virtual ~DecodableCuMatrixMapped(){};
 
   // returns cuda pointer to nnet3 output
-  virtual BaseFloat *GetLogLikelihoodsCudaPointer(int32 subsampled_frame);
+  BaseFloat *GetLogLikelihoodsCudaPointer(int32 subsampled_frame);
 
-private:
-  const TransitionModel &trans_model_; // for tid to pdf mapping
-  const CuMatrixBase<BaseFloat> *likes_;
+  void SetFrameOffset(int32 frame_offset) { frame_offset_ = frame_offset; }
+  void SetValidNRowsInMatrix(int32 n_valid_likes) {
+    n_valid_likes_ = n_valid_likes;
+  }
 
+ private:
+  const TransitionModel &trans_model_;  // for tid to pdf mapping
+  CuSubMatrix<BaseFloat> likes_;
+  int32 n_valid_likes_;
   int32 frame_offset_;
-
-  KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableCuMatrixMapped);
 };
 
 }  // end namespace cuda_decoder

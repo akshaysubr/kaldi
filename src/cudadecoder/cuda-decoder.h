@@ -18,11 +18,11 @@
 #ifndef KALDI_CUDA_DECODER_CUDA_DECODER_H_
 #define KALDI_CUDA_DECODER_CUDA_DECODER_H_
 
-#include "cudadecoder/cuda-decodable-itf.h"
 #include "cudadecoder/cuda-decoder-common.h"
 #include "cudadecoder/cuda-fst.h"
+#include "cudadecoder/decodable-cumatrix.h"
+#include "cudadecoder/thread-pool.h"
 #include "nnet3/decodable-online-looped.h"
-#include "thread-pool.h"
 
 #include <cuda_runtime_api.h>
 #include <mutex>
@@ -41,7 +41,7 @@ struct CudaDecoderConfig {
   CudaDecoderConfig()
       : default_beam(15.0),
         lattice_beam(10.0),
-        ntokens_pre_allocated(2000000),
+        ntokens_pre_allocated(1000000),
         main_q_capacity(-1),
         aux_q_capacity(-1),
         max_active(10000) {}
@@ -184,7 +184,7 @@ class CudaDecoder {
   CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config,
               int32 nchannels)
       : CudaDecoder(fst, config, nchannels, nchannels) {}
-  ~CudaDecoder();
+  virtual ~CudaDecoder();
 
   // InitDecoding initializes the decoding, and should only be used if you
   // intend to call AdvanceDecoding() on the channels listed in channels
@@ -213,7 +213,7 @@ class CudaDecoder {
   // If max_num_frames is >= 0 it will decode no more than
   // that many frames.
   void AdvanceDecoding(const std::vector<ChannelId> &channels,
-                       std::vector<CudaDecodableInterface *> &decodables,
+                       std::vector<DecodableCuMatrixMapped *> &decodables,
                        int32 max_num_frames = -1);
 
   // Returns the number of frames already decoded in a given channel
@@ -303,7 +303,7 @@ class CudaDecoder {
   // executing). If max_num_frames
   // is > 0, we apply that ceiling to the NumFramesToDecode.
   int32 NumFramesToDecode(const std::vector<ChannelId> &channels,
-                          std::vector<CudaDecodableInterface *> &decodables,
+                          std::vector<DecodableCuMatrixMapped *> &decodables,
                           int32 max_num_frames);
   // Expand the arcs, emitting stage. Must be called after
   // a preprocess_in_place, which happens in PostProcessingMainQueue.
