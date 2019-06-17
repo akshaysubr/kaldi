@@ -24,9 +24,12 @@ namespace kaldi {
 namespace cuda_decoder {
 
 DecodableCuMatrixMapped::DecodableCuMatrixMapped(
-    const TransitionModel &tm, const CuMatrixBase<BaseFloat> &likes,
+    const TransitionModel &tm, const CuSubMatrix<BaseFloat> &likes,
     int32 frame_offset)
-    : trans_model_(tm), likes_(&likes), frame_offset_(frame_offset) {
+    : trans_model_(tm),
+      likes_(likes),
+      n_valid_likes_(INT_MAX),
+      frame_offset_(frame_offset) {
   if (likes.NumCols() != tm.NumPdfs())
     KALDI_ERR << "Mismatch, matrix has " << likes.NumCols()
               << " rows but transition-model has " << tm.NumPdfs()
@@ -34,12 +37,7 @@ DecodableCuMatrixMapped::DecodableCuMatrixMapped(
 }
 
 int32 DecodableCuMatrixMapped::NumFramesReady() const {
-  return frame_offset_ + likes_->NumRows();
-}
-
-bool DecodableCuMatrixMapped::IsLastFrame(int32 frame) const {
-  KALDI_ASSERT(frame < NumFramesReady());
-  return (frame == NumFramesReady() - 1);
+  return frame_offset_ + std::min<int32>(likes_.NumRows(), n_valid_likes_);
 }
 
 // Indices are one-based!  This is for compatibility with OpenFst.
@@ -48,11 +46,11 @@ int32 DecodableCuMatrixMapped::NumIndices() const {
 }
 
 // returns cuda pointer to nnet3 output
-BaseFloat *
-DecodableCuMatrixMapped::GetLogLikelihoodsCudaPointer(int32 subsampled_frame) {
+BaseFloat *DecodableCuMatrixMapped::GetLogLikelihoodsCudaPointer(
+    int32 subsampled_frame) {
   BaseFloat *frame_nnet3_out =
-      (BaseFloat *)likes_->Data() +
-      (subsampled_frame - frame_offset_) * likes_->Stride();
+      (BaseFloat *)likes_.Data() +
+      (subsampled_frame - frame_offset_) * likes_.Stride();
   return frame_nnet3_out;
 };
 
