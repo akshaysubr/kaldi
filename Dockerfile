@@ -7,7 +7,7 @@ LABEL com.nvidia.kaldi.version="${KALDI_VERSION}"
 ARG NVIDIA_KALDI_VERSION
 ENV NVIDIA_KALDI_VERSION=${NVIDIA_KALDI_VERSION}
 
-ARG PYVER=3.5
+ARG PYVER=3.6
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         automake \
@@ -27,11 +27,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
-#ubuntu 18.04 installs atlas under /usr/include/x86_64-linux-gnu and /usr/lib/x86_64-linux-gnu
-RUN mkdir -p /usr/atlas
-RUN ln -s /usr/include/x86_64-linux-gnu /usr/atlas/include
-RUN ln -s /usr/lib/x86_64-linux-gnu /usr/atlas/lib
-
 RUN rm -f /usr/bin/python && ln -s /usr/bin/python$PYVER /usr/bin/python
 RUN MAJ=`echo "$PYVER" | cut -c1-1` && \
     rm -f /usr/bin/python$MAJ && ln -s /usr/bin/python$PYVER /usr/bin/python$MAJ
@@ -46,8 +41,14 @@ RUN cd tools/ \
 # Copy remainder of source code
 COPY . .
 
+# Set up Atlas
+RUN ln -sf /usr/include/x86_64-linux-gnu/atlas     /usr/local/include/atlas           \
+ && ln -sf /usr/include/x86_64-linux-gnu/cblas.h   /usr/local/include/atlas/cblas.h   \
+ && ln -sf /usr/include/x86_64-linux-gnu/clapack.h /usr/local/include/atlas/clapack.h \
+ && ln -sf /usr/lib/x86_64-linux-gnu/atlas         /usr/local/lib/atlas
+
 RUN cd src/ \
- && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ --mathlib=ATLAS --atlas-root=/usr/atlas \
+ && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ --mathlib=ATLAS --atlas-root=/usr/local \
     --cuda-arch="-gencode arch=compute_52,code=sm_52 -gencode arch=compute_60,code=sm_60 -gencode arch=compute_61,code=sm_61 -gencode arch=compute_70,code=sm_70 -gencode arch=compute_75,code=sm_75" \
  && make -j"$(nproc)" depend \
  && make -j"$(nproc)" \
