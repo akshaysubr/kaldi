@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
+#ubuntu 18.04 installs atlas under /usr/include/x86_64-linux-gnu and /usr/lib/x86_64-linux-gnu
+RUN mkdir -p /usr/atlas
+RUN ln -s /usr/include/x86_64-linux-gnu /usr/atlas/include
+RUN ln -s /usr/lib/x86_64-linux-gnu /usr/atlas/lib
+
 RUN rm -f /usr/bin/python && ln -s /usr/bin/python$PYVER /usr/bin/python
 RUN MAJ=`echo "$PYVER" | cut -c1-1` && \
     rm -f /usr/bin/python$MAJ && ln -s /usr/bin/python$PYVER /usr/bin/python$MAJ
@@ -42,7 +47,7 @@ RUN cd tools/ \
 COPY . .
 
 RUN cd src/ \
- && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ --mathlib=ATLAS --atlas-root=/usr \
+ && ./configure --shared --use-cuda --cudatk-dir=/usr/local/cuda/ --mathlib=ATLAS --atlas-root=/usr/atlas \
     --cuda-arch="-gencode arch=compute_52,code=sm_52 -gencode arch=compute_60,code=sm_60 -gencode arch=compute_61,code=sm_61 -gencode arch=compute_70,code=sm_70 -gencode arch=compute_75,code=sm_75" \
  && make -j"$(nproc)" depend \
  && make -j"$(nproc)" \
