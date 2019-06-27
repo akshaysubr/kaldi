@@ -3,7 +3,6 @@
 source gold.inc
 
 NUM_GPUS=`nvidia-smi -L | wc -l`
-NUM_GPUS=1 
 DATASETS="test_clean test_other"
 
 FAIL=0
@@ -36,13 +35,13 @@ do
     echo "    dataset=$dataset, GPU=$d: " 
     echo "         WER=$WER, Expected=$EWER"
     PASS=`echo "$WER <= $EWER" | bc`
-    if [ $PASS -ne "1" ]; then
+    if [ "$PASS" -ne "1" ]; then
       echo "              Error:  WER rate ($WER) greater than  $EWER"
       FAIL=1
     fi
     echo "         PERF=$PERF, Expected=$EPERF"
     PASS=`echo "$PERF >= $EPERF" | bc`
-    if [ $PASS -ne "1" ]; then
+    if [ "$PASS" -ne "1" ]; then
       echo "              Error:  PERF ($PERF) less than than  $EPERF"
       FAIL=1
     fi

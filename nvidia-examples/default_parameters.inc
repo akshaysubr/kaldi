@@ -12,6 +12,7 @@ LATTICE_BEAM=${LATTICE_BEAM:-7}
 MAX_ACTIVE=${MAX_ACTIVE:-10000}
 MAIN_Q_CAPACITY=${MAIN_Q_CAPACITY:-40000}
 AUX_Q_CAPACITY=${AUX_Q_CAPACITY:-500000}
+GPU_FEATURE=${GPU_FEATURE:-true}
 
 #query GPU memory
 gpu_memory=`nvidia-smi -q -i $GPU | grep -A1 "FB Memory" | grep Total | tr -s " " | cut -d " " -f 4`

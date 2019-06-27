@@ -28,6 +28,7 @@ echo "aux-q-capacity=$AUX_Q_CAPACITY"
 echo "MODEL_PATH=$MODEL_PATH"
 echo "DATASET_PATH=$DATASET_PATH"
 echo "DATASETS=$DATASETS"
+echo "GPU_FEATURE=$GPU_FEATURE"
 
 DECODERS="batched-wav-nnet3-cuda"
 DECODER_PATH="cudadecoderbin"
@@ -55,7 +56,7 @@ for decoder in $DECODERS ; do
   for test_set in $DATASETS ; do
     log_file="$result_path/log.$decoder.$test_set.out"
 
-    cuda_flags="--cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS"
+    cuda_flags="--cuda-decoder-copy-threads=0 --gpu-feature-extract=$GPU_FEATURE --num-channels=400 --cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS"
 
     # run the target decoder with the current dataset
     echo "Running $decoder decoder on $test_set..."
