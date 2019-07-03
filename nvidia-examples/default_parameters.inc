@@ -1,6 +1,7 @@
 #!/bin/bash
 
 #set global default parameters only if the variable is not already set
+KALDI_ROOT=${KALDI_ROOT:-"/opt/kaldi/"}
 GPU=${GPU:-0}
 GPU_THREADS=${GPU_THREADS:-2}
 CPU_THREADS=${CPU_THREADS:-`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`}
@@ -13,6 +14,11 @@ MAX_ACTIVE=${MAX_ACTIVE:-10000}
 MAIN_Q_CAPACITY=${MAIN_Q_CAPACITY:-40000}
 AUX_Q_CAPACITY=${AUX_Q_CAPACITY:-500000}
 GPU_FEATURE=${GPU_FEATURE:-true}
+COMPUTE_CER=${COMPUTE_CER:-false}
+FRAME_SUBSAMPLING_FACTOR=${FRAME_SUBSAMPLING_FACTOR:-3}
+COPY_THREADS=${COPY_THREADS:-2}
+FRAMES_PER_CHUNK=${FRAMES_PER_CHUNK:-264}
+USE_SEGMENTS_FILE=${USE_SEGMENTS_FILE:-false}
 
 #query GPU memory
 gpu_memory=`nvidia-smi -q -i $GPU | grep -A1 "FB Memory" | grep Total | tr -s " " | cut -d " " -f 4`

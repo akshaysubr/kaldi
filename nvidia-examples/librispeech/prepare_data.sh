@@ -1,10 +1,15 @@
 #!/bin/bash
 
+#set local model parameters
+source ./default_parameters.inc
+#set global model parameters
+source ../default_parameters.inc
+
 model=LibriSpeech
 
-data=${1:-/workspace/data/}
-datasets=/workspace/datasets/
-models=/workspace/models/
+data=${1:-$WORKSPACE/data/}
+datasets=$WORKSPACE/datasets/
+models=$WORKSPACE/models/
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
@@ -15,7 +20,7 @@ mkdir -p $data/$model
 mkdir -p $models/$model
 mkdir -p $datasets/$model
 
-pushd /opt/kaldi/egs/librispeech/s5
+pushd $KALDI_ROOT/egs/librispeech/s5
 
 . ./cmd.sh
 . ./path.sh
@@ -42,7 +47,10 @@ for part in test-clean test-other; do
   # use underscore-separated names in data directories.
   local/data_prep.sh $data/$model/$part $datasets/$model/$(echo $part | sed s/-/_/g)
   # convert the manifests
-  pushd $datasets/$model/$(echo $part | sed s/-/_/g); (cat wav.scp | awk '{print $1" "$6}' | sed 's/\.flac/\.wav/g' > wav_conv.scp); popd
+  pushd $datasets/$model/$(echo $part | sed s/-/_/g)
+  #sed -i 's@workspace@'"${WORKSPACE}"'@' wav.scp
+  (cat wav.scp | awk '{print $1" "$6}' | sed 's/\.flac/\.wav/g' > wav_conv.scp)
+  popd
 done
 
 if [[ "$SKIP_FLAC2WAV" -ne "1" ]]; then
@@ -62,6 +70,8 @@ if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
   pushd $models >&/dev/null
   wget https://github.com/ryanleary/kaldi-test/releases/download/v0.0/LibriSpeech-trained.tgz -O LibriSpeech-trained.tgz
   tar -xzf LibriSpeech-trained.tgz -C $model
+  cd $model/conf/
+  find . -name "*.conf" -exec sed -i 's@workspace@'"${WORKSPACE}"'@' {} \;
   popd >&/dev/null
 fi
 

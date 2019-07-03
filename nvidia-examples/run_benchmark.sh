@@ -8,7 +8,6 @@ source ../default_parameters.inc
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=$GPU
-export KALDI_ROOT=${KALDI_ROOT:-/opt/kaldi}
 
 result_path=/tmp/ls-results.$GPU
 
@@ -25,6 +24,7 @@ echo "lattice-beam=$LATTICE_BEAM"
 echo "max-active=$MAX_ACTIVE"
 echo "main-q-capacity=$MAIN_Q_CAPACITY"
 echo "aux-q-capacity=$AUX_Q_CAPACITY"
+echo "WORKSPACE=$WORKSPACE"
 echo "MODEL_PATH=$MODEL_PATH"
 echo "DATASET_PATH=$DATASET_PATH"
 echo "DATASETS=$DATASETS"
@@ -52,20 +52,36 @@ for test_set in $DATASETS ; do
 done
 
 fail=0
+if [ "$USE_SEGMENTS_FILE" = "true" ]; then
+  if [ ! -e $DATASET_PATH/$test_set/segments ]; then
+     echo "ERROR: Segments file $DATASET_PATH/$test_set/segments not found."
+     exit 1
+  else
+     for test_set in $DATASETS ; do
+       $KALDI_ROOT/src/featbin/extract-segments scp:$DATASET_PATH/$test_set/$wavscp $DATASET_PATH/$test_set/segments ark:- > segs.$test_set
+     done
+  fi
+fi
 for decoder in $DECODERS ; do
   for test_set in $DATASETS ; do
     log_file="$result_path/log.$decoder.$test_set.out"
+    if [ "$USE_SEGMENTS_FILE" = "true" ]; then
+       scp_in="ark:segs.$test_set"
+    else
+       scp_in="scp:$DATASET_PATH/$test_set/$wavscp"
+    fi
 
-    cuda_flags="--cuda-decoder-copy-threads=0 --gpu-feature-extract=$GPU_FEATURE --num-channels=400 --cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS"
+    cuda_flags="--gpu-feature-extract=$GPU_FEATURE --num-channels=400 --cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS"
 
     # run the target decoder with the current dataset
     echo "Running $decoder decoder on $test_set..."
-    stdbuf -o 0 $NVPROF $KALDI_ROOT/src/$DECODER_PATH/$decoder $cuda_flags --frame-subsampling-factor=3 \
-      --config="$MODEL_PATH/conf/online.conf" --frames-per-chunk=264  --file-limit=$FILE_LIMIT\
+    stdbuf -o 0 $NVPROF $KALDI_ROOT/src/$DECODER_PATH/$decoder $cuda_flags --frame-subsampling-factor=$FRAME_SUBSAMPLING_FACTOR \
+      --config="$MODEL_PATH/conf/online.conf" --frames-per-chunk=$FRAMES_PER_CHUNK  --file-limit=$FILE_LIMIT\
       --max-mem=100000000 --beam=$BEAM --lattice-beam=$LATTICE_BEAM --acoustic-scale=1.0 --determinize-lattice=true --max-active=$MAX_ACTIVE \
+      --cuda-decoder-copy-threads=$COPY_THREADS \
       $MODEL_PATH/final.mdl \
       $MODEL_PATH/HCLG.fst \
-      "scp:$DATASET_PATH/$test_set/$wavscp" \
+      "$scp_in" \
       "ark:|gzip -c > $result_path/lat.$decoder.$test_set.gz" 2>&1 | tee $log_file
 
     if [ $? -ne 0 ]; then
