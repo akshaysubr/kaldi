@@ -76,5 +76,3 @@ if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
 fi
 
 ln -s ../run_benchmark.sh
-ln -s ../run_cpu_benchmark.sh
-ln -s ../run_multigpu_benchmark.sh

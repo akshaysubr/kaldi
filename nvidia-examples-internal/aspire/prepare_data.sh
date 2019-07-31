@@ -39,7 +39,12 @@ for part in test-clean test-other; do
   # use underscore-separated names in data directories.
   local/data_prep.sh $data/$model/$part $datasets/$model/$(echo $part | sed s/-/_/g)
   # convert the manifests
-  pushd $datasets/$model/$(echo $part | sed s/-/_/g); (cat wav.scp | awk '{print $1" "$6}' | sed 's/\.flac/\.wav/g' > wav_conv.scp); popd
+  pushd $datasets/$model/$(echo $part | sed s/-/_/g); 
+  mv wav.scp wav16k.scp
+  cat wav16k.scp | awk '{print $1" "$6}' | sed 's/\.flac/\.wav/g' > wav8k.scp
+  cp wav8k.scp wav.scp
+  popd
+
 done
 
 if [[ "$SKIP_FLAC2WAV" -ne "1" ]]; then
@@ -63,4 +68,3 @@ if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
 fi
 
 ln -s ../run_benchmark.sh
-ln -s ../run_multigpu_benchmark.sh

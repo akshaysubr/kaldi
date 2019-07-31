@@ -1,9 +1,11 @@
 #!/bin/bash
 
 WORKSPACE=${WORKSPACE:-"/workspace/"}
+
+MODEL_NAME=${MODEL_NAME:-"LibriSpeech"}
 MODEL_PATH=${MODEL_PATH:-"${WORKSPACE}/models/LibriSpeech/"}
-DATASET_PATH=${DATASET_PATH:-"${WORKSPACE}/datasets/LibriSpeech/"}
-DATASETS=${DATASETS:-"test_clean test_other"}
+
+DATASET=${DATASET:-"/workspace/datasets/LibriSpeech/test_clean/"}
 
 GPU=${GPU:-0}
 GPU_THREADS=${GPU_THREADS:-2}

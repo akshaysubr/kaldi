@@ -2,6 +2,9 @@
 
 #set global default parameters only if the variable is not already set
 KALDI_ROOT=${KALDI_ROOT:-"/opt/kaldi/"}
+GPU_DECODER=${GPU_DECODER:-"$KALDI_ROOT/src/cudadecoderbin/batched-wav-nnet3-cuda"}
+CPU_DECODER=${CPU_DECODER:-"$KALDI_ROOT/src/online2bin/online2-wav-nnet3-latgen-faster"}
+USE_GPU=${USE_GPU:-1}
 GPU=${GPU:-0}
 GPU_THREADS=${GPU_THREADS:-2}
 CPU_THREADS=${CPU_THREADS:-`cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l`}
@@ -18,7 +21,8 @@ COMPUTE_CER=${COMPUTE_CER:-false}
 FRAME_SUBSAMPLING_FACTOR=${FRAME_SUBSAMPLING_FACTOR:-3}
 COPY_THREADS=${COPY_THREADS:-2}
 FRAMES_PER_CHUNK=${FRAMES_PER_CHUNK:-264}
-USE_SEGMENTS_FILE=${USE_SEGMENTS_FILE:-false}
+SEGMENT_SIZE=${SEGMENT_SIZE:-30}
+OUTPUT_PATH=${OUTPUT_PATH:-"/tmp/results/$MODEL_NAME"}
 
 #query GPU memory
 gpu_memory=`nvidia-smi -q -i $GPU | grep -A1 "FB Memory" | grep Total | tr -s " " | cut -d " " -f 4`

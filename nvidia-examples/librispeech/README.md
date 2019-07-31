@@ -1,6 +1,13 @@
 LibriSpeech Example
 ===========
 
+## Input Requirements
+
+Expected Format:  wav
+Expected Bitrate:  16000
+
+## How to run
+
 This example is an english model trained on the LibriSpeech dataset.  
 
 

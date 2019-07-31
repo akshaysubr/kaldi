@@ -3,8 +3,9 @@
 
 WORKSPACE=${WORKSPACE:-"/workspace/"}
 MODEL_PATH=${MODEL_PATH:-"${WORKSPACE}/models/aspire/"}
-DATASET_PATH=${DATASET_PATH:-"${WORKSPACE}/datasets/aspire/"}
-DATASETS=${DATASETS:-"test_clean test_other"}
+
+MODEL_NAME=${MODEL_NAME:-"aspire"}
+DATASET=${DATASET:-"${WORKSPACE}/datasets/aspire/test_clean"}
 
 GPU_THREADS=${GPU_THREADS:-2}
 
