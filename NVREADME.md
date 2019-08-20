@@ -26,7 +26,7 @@ Before pulling the Kaldi container, ensure that you have successfully installed 
 
 ### Pull the container:
 ```
-docker pull nvcr.io/nvidia/kaldi:<xx.xx>-py3, where <xx.xx>-py3 varies with release but will resemble something like 19.03-py3
+docker pull nvcr.io/nvidia/kaldi:<xx.xx>-py3, where <xx.xx>-py3 varies with release but will resemble something like 19.08-py3
 ```
 
 ### Run the container:
@@ -61,14 +61,13 @@ Standard Kaldi examples provided by Johns Hopkins can be found in `/workspace/ex
 For examples that have been vetted and verified by NVIDIA, navigate to `/workspace/nvidia-examples`. This folder contains the following:
 1. `default_parameters.inc` - used to define global default Kaldi and GPU specific parameters
 2. `librispeech` - folder, used as the 'launchpad' for reproducing our performance benchmarks. More information is given in the "Running the Provided LibriSpeech Example" section below
-3. `run_benchmark.sh` - used to decode speech given a target model and dataset while providing performance and accuracy metrics on a single GPU
-4. `run_multigpu_benchmark.sh` - runs the above benchmark on multiple GPUs
+3. `run_benchmark.sh` - used to decode speech given a target model and dataset while providing performance and accuracy metrics.  Advanced features of this script are described below.
 
 ## Running the Provided LibriSpeech Example
 
 To quickly get started with Kaldi and to realize GPU inferencing performance on the LibriSpeech corpus, NVIDIA has provided an example in `/workspace/nvidia-examples/librispeech`. Within this directory, you will notice:
 1. `default_parameters.inc` - used to define local parameters (e.g. location of datasets and models)
-2. `prepare_data.sh` - a script used to automatically download a corpus of recorded text, translate the format from flac to wav and adjust the sample rate to 16kHz, download a pre-trained LibriSpeech model, and link the `run_benchmark.sh` and `run_multigpu_benchmark.sh` scripts to the local folder
+2. `prepare_data.sh` - a script used to automatically download a corpus of recorded text, translate the format from flac to wav and adjust the sample rate to 16kHz, download a pre-trained LibriSpeech model, and link the `run_benchmark.sh` script to the local folder
 
 It should be noted that our LibriSpeech example *should work out of the box* and no changes to default parameters or datapaths are necessary. Editing these files and understanding the Kaldi tools will be discussed in more depth with "How to Use Your Own Data with Kaldi".
 
@@ -84,45 +83,39 @@ cd /workspace/nvidia-examples/librispeech/
 ./run_benchmark.sh
 ```
 
-If you have multiple GPUs in your test system, you can invoke:
-```
-cd /workspace/nvidia-examples/librispeech/
-./run_multigpu_benchmark.sh
-```
-Please note that we've supressed all intermediate text output with the multi-GPU benchmark. Running this command will take some time before it produces its brief summary.
+## run_benchmark.sh Advanced Usage
 
-GPU isolation within the Docker container can be manipulated with the `NVIDIA_VISIBLE_DEVICES` environment variable. For example:
-```
-export NVIDIA_VISIBLE_DEVICES=0,2
-```
-Makes only GPUs 0 and 2 visible to applications.
+This script is designed to show how to run Kaldi and benchmark decoding.  It is not designed to demonstrate how to use Kaldi in production.  For production use a user should expect to have to do some additional work to meet their needs.
 
-## Generating Transcripts from Decoded Speech
+The benchmark is highly flexible and is controlled via enviornment variables.  These can be set prior to running the script like this:
 
-While performance benchmarks are presented on the terminal after the completion of the benchmark scripts, you can view the transcript output by navigating to `/tmp/ls-results.0`. There are 3 important files to consider in this directory:
-1. `words.txt` - a dictionary of English language words and a corresponding index. For example, the word 'jump' is 92598 while 'zebra' is 199291
-2. `trans.batched-wav-nnet3-cuda.test_clean.gz` - zipped decoded transcript that contains numerical values for decoded speech, in this case, for the test_clean dataset
-3. `trans.batched-wav-nnet3-cuda.test_other.gz` - same as above but for the test_other (noisy) dataset
+```
+USE_GPU=false NUM_PROCESSES=8 ./run_benchmark.sh
+```
 
-Generate transcripts by:
-```
-gunzip trans.batched-wav-nnet3-cuda.test_clean.gz
-/opt/kaldi/egs/librispeech/s5/utils/int2sym.pl -f 2- words.txt trans.batched-wav-nnet3-cuda.test_clean >> transcript_test_clean
-```
-The `int2sym.pl` script maps the `words.txt` dictionary to the decoded numerical values found from the output of the decoded lattice. The 2- flag is file specific and instructs the skipping of the first item in each row (filename).
+For a full list of variables please look at run_benchmark.sh.  Here is a breif list of important variables:
 
-You can listen to the recorded speech examples by navigating to the downloaded data files, located in `/workspace/data/LibriSpeech/test-clean` or `/workspace/data/LibriSpeech/test-other`. Matching recordings to transcripts can be done by opening the `int2sym` output file and noting the first item in each row. For example:
-```
-1089-134686-0000 he hoped there would be stew for dinner turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick peppered flower fattened sauce
-1089-134686-0001 stuff it into you his belly counselled him
-1089-134686-0002 after early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels
-1089-134686-0003 hello bertie any good in your mind
-1089-134686-0004 number den fresh nellie is waiting on you good night husband
-1089-134686-0005 the music came nearer and he recalled the words the words of shelley's fragment upon the moon wandering companionless pale for weariness
-```
-Where 1089-134686-0000 maps to `/workspace/data/LibriSpeech/test-clean/1089/134686/0000.wav`
+1. USE_GPU:  If set to to false the CPU benchmark will be ran.
+2. NUM_PROCESSES:  Number of decoding processes to run.  These will do the same work for benchmarking purposes.  If USE_GPU=true then each process runs on a seperate GPU.
+3. CPU_THREADS:  Number of CPU threads to use in the GPU decoder.
+4. GPU_FEATURE:  If set to true GPU feature extraction will be enabled leading to better multi-GPU scalability.
+5. MAX_BATCH_SIZE:  Number of wavs to attempt to batch together into a single processing flow.
+6. ITERATIONS:  Number of times to decode the input set for timing.
+7. MODEL_PATH:  Path to the model
+8. MODEL_NAME:  Name for the model
+9. DATASET:  Path to the dataset
+10. OUTPUT_PATH:  Base path for output
+11. SEGMENT_SIZE:  Audio of this length will be split up into smaller segments around the size of SEGMENT_SIZE.
 
-## How to Use Your Own Data with Kaldi
+This benchmark can run single or multi-process, split audio into segments, and run CPU or GPU.  The behavior of this script is controlled via enviornment variables.  For example USE_GPU=false ./run_benchmark.sh would run on the CPU where USE_GPU=true ./run_benchmark.sh would run on the GPU. See the script for a complete list of varibales that control execution.
+
+### Output
+
+Output is written by default to $RESULT_PATH where RESULT_PATH=$OUTPUT_PATH/$RUN/$PROCESS, where RUN is the unique run number which starts at zero and increments by one each time the benchmark is ran with that OUTPUT_PATH, and PROCESS is the unqiue process id (0 to $NUM_PROCESSES).
+
+The unique output directory contains a number of files releated to decoding including the dataset that was transcribed ($RESULT_PATH/dataset), the WER rate ($RESULT_PATH/wer), the RTF score ($RESULT_PATH/rtf), and the transcription ($RESULT_PATH/trans).
+
+### How to Use Your Own Data with Kaldi
 To stress a point made earlier in the README, if you're new to Kaldi and want to experiment with your own data, we highly recommend reading the Kaldi documentation, especially the [Kaldi for Dummies Tutorial](http://kaldi-asr.org/doc/kaldi_for_dummies.html). This section is not an exhaustive explanation of the ins-and-outs of Kaldi and is strictly focused on speech-to-text *inference*. As such, we do not refer to Kaldi standards like `utt2spk` that tells what recording belongs to which speaker or `text` that gives the ground-truth transcription for a recording. Both these files apply to training. Further, Kaldi (and NVIDIA's GPU acceleration work) shines on large corpuses of recorded speech. For this tutorial, we'll focus on a handful of recordings to easier demonstrate what's needed as one scales up for real-life applications and performance.
 
 In general, each speech-to-text **inferencing** application will need the following folders and data:
@@ -130,7 +123,9 @@ In general, each speech-to-text **inferencing** application will need the follow
 2. `datasets` - contains, for this container, a wav_conv.scp file that is structured as <file_name> <file_location> for each wav file to be transcribed
 3. `models` - pre-trained model for a given speech corpus (LibriSpeech or ASpIRE, for example)
 
-If you're recording your own audio, ensure that you sample at 16kHz over a Mono channel and export the audio as a wav file. [Audacity](https://www.audacityteam.org/download/) is a good tool to get started with your own recordings. You'll need to construct your own wav_conv.scp file. An example is provided below:
+If you're recording your own audio, ensure that you sample at 16kHz over a Mono channel and export the audio as a wav file. [Audacity](https://www.audacityteam.org/download/) is a good tool to get started with your own recordings. You'll need to construct your own wav.scp file. 
+
+An example is provided below:
 ```
 1089-134686-0000 /workspace/data//LibriSpeech/test-clean/1089/134686/1089-134686-0000.wav
 1089-134686-0001 /workspace/data//LibriSpeech/test-clean/1089/134686/1089-134686-0001.wav
@@ -139,31 +134,33 @@ If you're recording your own audio, ensure that you sample at 16kHz over a Mono 
 1089-134686-0004 /workspace/data//LibriSpeech/test-clean/1089/134686/1089-134686-0004.wav
 ```
 
+If the $DATASET directory does not contain a wav.scp file then one will be automatically created with all wav files in the folder or subfolders provided. 
+
 To mount local folders to your Kaldi Docker container, run the following:
 ```
 docker run --rm -it -v <path/to/local/datasets>:/workspace/datasets/<model_name>/<recordings_name> -v </path/to/local/data>:/workspace/data/<model_name>/<recordings_name> -v </path/to/local/models>:/workspace/models/<model_name> nvcr.io/nvidia/kaldi:<xx.xx>-py3
 ```
 If you want to make use of the LibriSpeech model on your recordings stored under "transcribe_this", <model_name> would be `LibriSpeech` and <recordings_name> would be `transcribe_this`.
 
-We're still going to leverage the `run_benchmark.sh` and `run_multigpu_benchmark.sh` scripts contained in the `/workspace/nvidia-examples` folder. 
+We're still going to leverage the `run_benchmark.sh` script contained in the `/workspace/nvidia-examples` folder. 
 
 Create a new directory, `/workspace/nvidia-examples/<model_name>` and then add a symbolic link to the run scripts. We'll also need to copy a `default_parameters.inc` file from an existing project:
 ```
 ln -s ../run_benchmark.sh
-ln -s ../run_multigpu_benchmark.sh
 cp /workspace/nvidia-examples/librispeech/default_parameters.inc /workspace/nvidia-examples/<model_name>
 ```
-Edit the `default_parameters.inc` folder in `/workspace/nvidia-examples` to ensure the correct MODEL_PATH, DATASET_PATH, and DATASETS are set. While MODEL_PATH and DATASET_PATH are self explanatory, one will replace "test_clean" and "test_other" in DATASETS with the <recordings_name> chosen above.
+Edit the `default_parameters.inc` folder in `/workspace/nvidia-examples` to ensure the correct MODEL_PATH and DATASET are set.
 
 Once the dataset and/or model is in place, a user should create a new directory /workspace/nvidia-examples/<model_name>
-and then add a symbolic link to the run scripts:
+and then add a symbolic link to the run scripts.
 
-If you don't have truth data available for your dataset, we suggest editing the `run_benchmark.sh` script and commenting out the sections calculating accuracy metrics (starting around line 85: calculate wer and ending before the benchmark summary). Run the benchmark as before:
+If you have truth data avaialable it should be placed in $DATASET/text.  If this file is not present then scoring of the result will not take place.
+
+Run the benchmark as before:
 ```
 cd /workspace/nvidia-examples/<model_name>/
 ./run_benchmark.sh
 ```
-Results, as with the standard LibriSpeech example, will be written to `/tmp/ls-results.0`, and you can use the same `int2sym.pl` command as before to generate human-readable transcripts.
 
 ## Suggested Reading
 
