@@ -62,7 +62,7 @@ function run_benchmark() {
        print key " " transcriptions[key]
      }
     }' \
-    $LOCAL_RESULT_PATH/trans_int > $LOCAL_RESULT_PATH/trans_int_combined
+    $LOCAL_RESULT_PATH/trans_int | sort -n > $LOCAL_RESULT_PATH/trans_int_combined
 
   #translate ints to words
   $KALDI_ROOT/egs/wsj/s5/utils/int2sym.pl -f 2- $RESULT_PATH/words.txt $LOCAL_RESULT_PATH/trans_int_combined > $LOCAL_RESULT_PATH/trans
@@ -76,11 +76,54 @@ function run_benchmark() {
       "ark:$RESULT_PATH/gold_text_ints" \
       "ark:$LOCAL_RESULT_PATH/trans_int_combined" >>$LOG_FILE 2>&1
 
+    # calculate character error rate
+    if [ "$COMPUTE_CER" = "true" ]; then
+      # split trans and gold_text into characters
+      cat $LOCAL_RESULT_PATH/trans | perl -CSDA -ane '
+        {
+          print $F[0];
+          foreach $s (@F[1..$#F]) {
+            if (($s =~ /\[.*\]/) || ($s =~ /\<.*\>/) || ($s =~ "!SIL")) {
+              print " $s";
+            } else {
+              @chars = split "", $s;
+              foreach $c (@chars) {
+                print " $c";
+              }
+            }
+          }
+          print "\n";
+        }' > $LOCAL_RESULT_PATH/trans.chars
+      cat $RESULT_PATH/gold_text | perl -CSDA -ane '
+        {
+          print $F[0];
+          foreach $s (@F[1..$#F]) {
+            if (($s =~ /\[.*\]/) || ($s =~ /\<.*\>/) || ($s =~ "!SIL")) {
+              print " $s";
+            } else {
+              @chars = split "", $s;
+              foreach $c (@chars) {
+                print " $c";
+              }
+            }
+          }
+          print "\n";
+        }' > $LOCAL_RESULT_PATH/text.chars
+      # compare with --text
+      $KALDI_ROOT/src/bin/compute-wer --text --mode=present \
+          "ark:$LOCAL_RESULT_PATH/text.chars" \
+	  "ark:$LOCAL_RESULT_PATH/trans.chars" | sed 's/WER/CER/g' >>$LOG_FILE 2>&1
+    fi
+
     # output accuracy metrics
     wer=$(cat $LOG_FILE | grep "%WER")
-    ser=$(cat $LOG_FILE | grep "%SER")
+    cer=$(cat $LOG_FILE | grep "%CER")
+    ser=$(cat $LOG_FILE | grep "%SER" | head -1)
     scored=$(cat $LOG_FILE | grep "Scored")
     echo "  $wer"  > $WER_FILE
+    if [ "$COMPUTE_CER" = "true" ]; then
+      echo "  $cer"  >> $WER_FILE
+    fi
     echo "  $ser"  >> $WER_FILE
     echo "  $scored" >> $WER_FILE
 
@@ -141,6 +184,7 @@ echo "MODEL_NAME=$MODEL_NAME"
 echo "DATASET=$DATASET"
 echo "DECODER=$DECODER"
 echo "OUTPUT_PATH=$OUTPUT_PATH"
+echo "COMPUTE_CER=$COMPUTE_CER"
 
 #symlink files/folders expected to be in the current path
 ln -sf $KALDI_ROOT/egs/wsj/s5/utils/
@@ -203,10 +247,13 @@ cat $MODEL_PATH/words.txt | tr '[:upper:]' '[:lower:]' > $RESULT_PATH/words.txt
 #if transcript exists copy it to the result path and clean it up
 if [ -f  $DATASET/text ]; then
   echo "Generating new reference transcripts for model and dataset..."
-  cat $DATASET/text | tr '[:upper:]' '[:lower:]' > $RESULT_PATH/gold_text
-  oovtok=$(cat $RESULT_PATH/words.txt | grep "<unk>" | awk '{print $2}')
+  #Lower all except the first field (file name)
+  cat $DATASET/text | awk '{printf "%s ",$1; for(i=2;i<=NF;i++) {printf "%s ",tolower($i)} printf "\n"}' > $RESULT_PATH/gold_text
+  if grep -q "<unk>" $RESULT_PATH/words.txt; then
+     oovtok="--map-oov $(cat $RESULT_PATH/words.txt | grep "<unk>" | awk '{print $2}')"
+  fi
 
-  $KALDI_ROOT/egs/wsj/s5/utils/sym2int.pl --map-oov $oovtok -f 2- $RESULT_PATH/words.txt $RESULT_PATH/gold_text > $RESULT_PATH/gold_text_ints 2> /dev/null
+  $KALDI_ROOT/egs/wsj/s5/utils/sym2int.pl $oovtok -f 2- $RESULT_PATH/words.txt $RESULT_PATH/gold_text > $RESULT_PATH/gold_text_ints 2> /dev/null
 fi
 
 #extract segments into an archive
