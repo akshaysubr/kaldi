@@ -5,7 +5,7 @@ WORKSPACE=${WORKSPACE:-"/workspace/"}
 MODEL_NAME=${MODEL_NAME:-"LibriSpeech"}
 MODEL_PATH=${MODEL_PATH:-"${WORKSPACE}/models/LibriSpeech/"}
 
-DATASET=${DATASET:-"/workspace/datasets/LibriSpeech/test_clean/"}
+DATASET=${DATASET:-"${WORKSPACE}/datasets/LibriSpeech/test_clean/"}
 
 GPU=${GPU:-0}
 GPU_THREADS=${GPU_THREADS:-2}
