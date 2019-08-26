@@ -218,8 +218,9 @@ CUDAFLAGS=""
 CPUFLAGS=""
 
 if [ $USE_GPU -eq 1 ]; then
+  NUM_CHANNELS=$(($MAX_BATCH_SIZE + $MAX_BATCH_SIZE/2))
   #Set CUDA decoder specific flags
-  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=400 --cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --file-limit=$FILE_LIMIT --cuda-decoder-copy-threads=$COPY_THREADS"
+  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --file-limit=$FILE_LIMIT --cuda-decoder-copy-threads=$COPY_THREADS"
   SPK2UTT=""
 else
   SPK2UTT=ark:$RESULT_PATH/spk2utt.ark

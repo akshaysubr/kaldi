@@ -190,7 +190,7 @@ py3-stage:
       set -x &&
       docker run $(eval ${NV_DOCKER_ARGS})
              --name "${CONTAINER_NAME}"
-             -v $DATADIR:/data
+             -v $DATADIR:/data:ro
              $(eval echo ${EXTRA_DOCKER_RUN_ARGS})
              -w ${TEST_WORK_DIR}
              ${DEVEL_IMAGE_NAME_VERSIONED}
