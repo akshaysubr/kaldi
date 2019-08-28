@@ -117,7 +117,7 @@ function run_benchmark() {
 
     # output accuracy metrics
     wer=$(cat $LOG_FILE | grep "%WER")
-    cer=$(cat $LOG_FILE | grep "%CER")
+    cer=$(cat $LOG_FILE | grep "%CER" | cat)
     ser=$(cat $LOG_FILE | grep "%SER" | head -1)
     scored=$(cat $LOG_FILE | grep "Scored")
     echo "  $wer"  > $WER_FILE
