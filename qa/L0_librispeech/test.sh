@@ -22,7 +22,7 @@ cd /workspace/nvidia-examples/librispeech
 NUM_GPUS=`nvidia-smi -L | wc -l`
 
 #lowering these to avoid potential OOM errors
-export MAX_BATCH_SIZE=280
+export MAX_BATCH_SIZE=250
 export BATCH_DRAIN_SIZE=30
 
 NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER["test_clean"]} EXPECTED_PERF=${GOLD_PERF["${GPU_NAME}x${NUM_GPUS}_test_clean"]} DATASET=/workspace/datasets/LibriSpeech/test_clean/ bash -e ./run_benchmark.sh
