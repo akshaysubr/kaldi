@@ -44,7 +44,6 @@ for part in test-clean test-other; do
   cat wav16k.scp | awk '{print $1" "$6}' | sed 's/\.flac/\.wav/g' > wav8k.scp
   cp wav8k.scp wav.scp
   popd
-
 done
 
 if [[ "$SKIP_FLAC2WAV" -ne "1" ]]; then
@@ -57,14 +56,51 @@ if [[ "$SKIP_FLAC2WAV" -ne "1" ]]; then
   echo "Converted flac to wav."
 fi
 
-popd >&/dev/null
+popd 
+ 
+CWD=$PWD
 
 if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
   echo ----------- Fetching trained model -----------
-  pushd $models >&/dev/null
-  wget http://sqrl/datasets/speech/models/aspire-trained.tar.gz -O aspire-trained.tgz
-  tar -xzf aspire-trained.tgz
-  popd >&/dev/null
+
+  MODEL_SRC=$KALDI_ROOT/egs/aspire/s5
+
+  pushd $models/$model
+
+  #create symlinks to model recipie
+  for file in $MODEL_SRC/*; do
+    ln -sf $file
+  done
+
+  export PATH=$PATH:./utils/:$KALDI_ROOT/src/bin/
+  #donwload and unpack model
+  wget https://kaldi-asr.org/models/1/0001_aspire_chain_model_with_hclg.tar.bz2 
+  tar --no-same-owner -xjf 0001_aspire_chain_model_with_hclg.tar.bz2
+
+  #we will overwrite path script pulled from the MODEL directory with our own
+  rm -f path.sh
+
+  #symlink the path.sh file
+  ln -s $CWD/../path.sh ./path.sh
+
+  #model prep
+  time steps/online/nnet3/prepare_online_decoding.sh   --mfcc-config conf/mfcc_hires.conf data/lang_chain exp/nnet3/extractor exp/chain/tdnn_7b exp/tdnn_7b_chain_online
+  #this generates the fst but we downloaded it precompiled to save time
+  #time utils/mkgraph.sh --self-loop-scale 1.0 data/lang_pp_test exp/tdnn_7b_chain_online exp/tdnn_7b_chain_online/graph_pp
+  time utils/build_const_arpa_lm.sh data/local/lm/4gram-mincount/lm_unpruned.gz data/lang_pp_test data/lang_pp_test_fg
+
+  #create model bits in expected location
+  ln -sf `pwd`/exp/tdnn_7b_chain_online/graph_pp/HCLG.fst 
+  ln -sf `pwd`/exp/tdnn_7b_chain_online/graph_pp/words.txt
+  ln -sf `pwd`/exp/tdnn_7b_chain_online/final.mdl 
+  ln -sf `pwd`/exp/tdnn_7b_chain_online/conf/
+
+  #filter out unsupported options
+  cp ./conf/online.conf ./conf/online.conf.backup
+  cat ./conf/online.conf.backup | grep -v silence > ./conf/online.conf
+  
+  popd
+
 fi
 
-ln -s ../run_benchmark.sh
+ln -sf ../run_benchmark.sh

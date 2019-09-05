@@ -2,9 +2,9 @@
 
 
 WORKSPACE=${WORKSPACE:-"/workspace/"}
-MODEL_PATH=${MODEL_PATH:-"${WORKSPACE}/models/aspire/"}
-
 MODEL_NAME=${MODEL_NAME:-"aspire"}
+MODEL_PATH=${MODEL_PATH:-"${WORKSPACE}/models/${MODEL_NAME}/"}
+
 DATASET=${DATASET:-"${WORKSPACE}/datasets/aspire/test_clean"}
 
 GPU_THREADS=${GPU_THREADS:-2}

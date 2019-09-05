@@ -155,6 +155,11 @@ THREADS_PER_PROCESS=`echo $CPU_THREADS/$NUM_PROCESSES | bc`
 
 echo "USE_GPU: $USE_GPU"
 echo "NUM_PROCESSES: $NUM_PROCESSES"
+echo "KALDI_ROOT: $KALDI_ROOT"
+echo "WORKSPACE=$WORKSPACE"
+echo "DATASET=$DATASET"
+echo "MODEL_PATH=$MODEL_PATH"
+echo "MODEL_NAME=$MODEL_NAME"
 
 if [ $USE_GPU -eq 1 ]; then
   DECODER=$GPU_DECODER
@@ -162,29 +167,25 @@ if [ $USE_GPU -eq 1 ]; then
   #these are GPU specific parameters
   echo "GPU_FEATURE: $GPU_FEATURE"
   echo "CPU_THREADS: $CPU_THREADS"
-  echo "cuda-control-threads: $GPU_THREADS"
-  echo "cuda-worker-threads: $WORKER_THREADS"
-  echo "batch_size: $MAX_BATCH_SIZE"
-  echo "batch_drain_size: $BATCH_DRAIN_SIZE"
-  echo "iterations: $ITERATIONS"
-  echo "file-limit: $FILE_LIMIT"
-  echo "main-q-capacity=$MAIN_Q_CAPACITY"
-  echo "aux-q-capacity=$AUX_Q_CAPACITY"
+  echo "GPU_THREADS: $GPU_THREADS"
+  echo "WORKER_THREADS: $WORKER_THREADS"
+  echo "MAX_BATCH_SIZE: $MAX_BATCH_SIZE"
+  echo "BATCH_DRAIN_SIZE: $BATCH_DRAIN_SIZE"
+  echo "ITERATIONS: $ITERATIONS"
+  echo "FILE_LIMIT: $FILE_LIMIT"
+  echo "MAIN_Q_CAPACITY=$MAIN_Q_CAPACITY"
+  echo "AUX_Q_CAPACITY=$AUX_Q_CAPACITY"
 else
   DECODER=$CPU_DECODER
 fi
 
 #these prameters work with both GPU and CPU decoder
-echo "beam=$BEAM"
-echo "lattice-beam=$LATTICE_BEAM"
-echo "max-active=$MAX_ACTIVE"
-echo "WORKSPACE=$WORKSPACE"
-echo "MODEL_PATH=$MODEL_PATH"
-echo "MODEL_NAME=$MODEL_NAME"
-echo "DATASET=$DATASET"
+echo "BEAM=$BEAM"
+echo "LATTICE_BEAM=$LATTICE_BEAM"
+echo "MAX_ACTIVE=$MAX_ACTIVE"
 echo "DECODER=$DECODER"
-echo "OUTPUT_PATH=$OUTPUT_PATH"
 echo "COMPUTE_CER=$COMPUTE_CER"
+echo "OUTPUT_PATH=$OUTPUT_PATH"
 
 #symlink files/folders expected to be in the current path
 ln -sf $KALDI_ROOT/egs/wsj/s5/utils/

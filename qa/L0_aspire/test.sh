@@ -16,8 +16,8 @@ fi
 pushd .
 cd /workspace/nvidia-examples/aspire
 
-./prepare_data.sh
-#SKIP_DATA_DOWNLOAD=1 SKIP_FLAC2WAV=1 SKIP_MODEL_DOWNLOAD=1 ./prepare_data.sh
+bash -ex ./prepare_data.sh
+#SKIP_DATA_DOWNLOAD=1 SKIP_FLAC2WAV=1 SKIP_MODEL_DOWNLOAD=1 bash -ex ./prepare_data.sh
 
 NUM_GPUS=`nvidia-smi -L | wc -l`
 
