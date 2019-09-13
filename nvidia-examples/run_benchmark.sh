@@ -212,7 +212,7 @@ else
   #make a new dataset directory and create wav.scp file
   DATASET=$RESULT_PATH/dataset
   
-  mkdir -p dataset
+  mkdir -p $DATASET
   WAVSCP=$DATASET/wav.scp
 
   for file in $WAVES; do
