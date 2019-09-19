@@ -287,7 +287,16 @@ gather:
     when: manual
     allow_failure: true
 
+.IV_test: &IV_TEST
+    stage: test
+    <<: *TEST_TEMPLATE
+    when: manual
+    allow_failure: true
+
 "Run all L1 tests":
+    <<: *MANUAL_TEST_TRIGGER
+
+"Run all IV tests":
     <<: *MANUAL_TEST_TRIGGER
 
 #"Run all L2 tests":
@@ -408,4 +417,12 @@ L1_igbo--V100_8GPU:
 
 L1_igbo--T4_R410_2GPU:
     <<: *L1_TEST
+    <<: *T4_R410_2GPU
+
+IV_en-US--V100_8GPU:
+    <<: *IV_TEST
+    <<: *V100_8GPU
+
+IV_en-US--T4_R410_2GPU:
+    <<: *IV_TEST
     <<: *T4_R410_2GPU
