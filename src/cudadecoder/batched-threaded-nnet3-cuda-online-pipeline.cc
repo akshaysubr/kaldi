@@ -50,7 +50,6 @@ void BatchedThreadedNnet3CudaOnlinePipeline::AllocateAndInitializeData(
   available_channels_.resize(config_.num_channels);
   std::iota(available_channels_.begin(), available_channels_.end(),
             0);  // 0,1,2,3..
-  feature_pipelines_.resize(config_.num_channels);
   corr_id2channel_.reserve(config_.num_channels);
   channel_frame_offset_.resize(config_.num_channels, 0);
   decodables_.reserve(max_batch_size_);
@@ -85,28 +84,37 @@ void BatchedThreadedNnet3CudaOnlinePipeline::SetLatticeCallback(
       new std::function<void(CompactLattice &)>(callback));
 
   std::lock_guard<std::mutex> lk(
-      corrid2callbacks_m_);  // TODO check if callback is deleted
-  corrid2callbacks_.emplace(corr_id, std::move(callback_ptr));
+		  corrid2callbacks_m_);
+  bool inserted;
+  std::tie(std::ignore, inserted) =
+	  corrid2callbacks_.emplace(corr_id, std::move(callback_ptr));
+  KALDI_ASSERT(inserted);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::InitCorrID(CorrelationID corr_id) {
-  int32 ichannel;
-  {
-    std::lock_guard<std::mutex> lk(available_channels_m_);
-    KALDI_ASSERT(!available_channels_.empty());
-    ichannel = available_channels_.back();
-    available_channels_.pop_back();
-  }
   bool inserted;
-  std::tie(std::ignore, inserted) =
-      corr_id2channel_.insert({corr_id, ichannel});
-  KALDI_ASSERT(inserted);
+  decltype(corr_id2channel_.end()) it;
+  std::tie(it, inserted) =
+      corr_id2channel_.insert({corr_id, -1});
+  int32 ichannel;
+  if(inserted) {
+	  // The corr_id was not in use
+	  std::lock_guard<std::mutex> lk(available_channels_m_);
+	  KALDI_ASSERT(!available_channels_.empty());
+	  ichannel = available_channels_.back();
+	  available_channels_.pop_back();
+	  it->second = ichannel;
+  } else {
+	  // This corr id was already in use but not closed 
+	  // It can happen if for instance a channel lost connection and did not send its last chunk 
+	  // Cleaning up 
+	  KALDI_WARN << "This corr_id was already in use";
+	  ichannel = it->second; 
+	  std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
+	  corrid2callbacks_.erase(corr_id);
+  }
 
-  KALDI_ASSERT(!feature_pipelines_[ichannel]);
   channel_frame_offset_[ichannel] = 0;
-  feature_pipelines_[ichannel].reset(
-      new OnlineNnet2FeaturePipeline(*feature_info_));
-
   list_channels_first_chunk_.push_back(ichannel);
   cuda_nnet3_->InitChannel(ichannel);
 }
@@ -225,9 +233,6 @@ void BatchedThreadedNnet3CudaOnlinePipeline::BuildLatticesAndRunCallbacks(
   for (int32 i = 0; i < list_channels_last_chunk_.size(); ++i) {
     uint64_t ichannel = list_channels_last_chunk_[i];
     CorrelationID corr_id = list_corr_id_last_chunk_[i];
-    // We don't need the features anymore
-    KALDI_ASSERT(feature_pipelines_[ichannel]);
-    feature_pipelines_[ichannel].reset();
     int32 ndeleted = corr_id2channel_.erase(corr_id);
     KALDI_ASSERT(ndeleted == 1);
     KALDI_ASSERT(thread_pool_->tryPush(
@@ -364,14 +369,23 @@ void BatchedThreadedNnet3CudaOnlinePipeline::FinalizeDecoding(
         KALDI_LOG << "OUTPUT: " << oss.str();
       }
     }
-    decltype(corrid2callbacks_.end()) it;
+
+    std::unique_ptr<std::function<void(CompactLattice &)>> callback;
     {
-      std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
-      it = corrid2callbacks_.find(corr_id);  // TODO remove map, use ichannel
+	    std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
+	    auto it =
+		    corrid2callbacks_.find(corr_id);  // TODO remove map, use ichannel
+	    if (it != corrid2callbacks_.end()) {
+		    callback = std::move(it->second);
+		    corrid2callbacks_.erase(it);
+	    }
+
     }
-    if (it != corrid2callbacks_.end()) {
-      (*it->second)(dlat);
+    // if ptr set and if callback func callable
+    if (callback && *callback) {
+	    (*callback)(dlat);
     }
+
     // TODO erase it
   }
   n_lattice_callbacks_not_done_.fetch_sub(1);
