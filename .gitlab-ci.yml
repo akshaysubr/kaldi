@@ -138,6 +138,9 @@ py3-devel:
       GIT_STRATEGY: fetch
       GIT_SUBMODULE_STRATEGY: recursive
       GET_SOURCES_ATTEMPTS: 3
+      SQRL_REGISTRY_URL: "sqrl.nvidia.com:443"
+      TARGET_TOKEN_SQRL: "nvadmin"
+      TARGET_REGISTRY_USER_SQRL: "nvadmin"
     dependencies: []
     script:
     # push a xx.yy-stage tag that records the commit we staged from
@@ -154,8 +157,25 @@ py3-devel:
         > Dockerfile.${CI_PROJECT_NAME}.${CI_COMMIT_REF_SLUG/%-devel/-qa}
     - docker build --pull -t "${QA_IMAGE_NAME}" -f Dockerfile.${CI_PROJECT_NAME}.${CI_COMMIT_REF_SLUG/%-devel/-qa} .
     - docker push "${QA_IMAGE_NAME}"
+    # DEVEL and QA IMAGES push to SQRL PUSH
+    - GITLAB_REGISTRY_URL=$(echo $DEVEL_IMAGE_NAME| cut -d'/' -f 1)
+    - export DEVEL_IMAGE_NAME_SQRL=${DEVEL_IMAGE_NAME/$GITLAB_REGISTRY_URL/$SQRL_REGISTRY_URL} && echo "${DEVEL_IMAGE_NAME_SQRL}"
+    - export STAGE_IMAGE_NAME_SQRL=${STAGE_IMAGE_NAME/$GITLAB_REGISTRY_URL/$SQRL_REGISTRY_URL} && echo "${STAGE_IMAGE_NAME_SQRL}"
+    - export QA_IMAGE_NAME_SQRL=${QA_IMAGE_NAME/$GITLAB_REGISTRY_URL/$SQRL_REGISTRY_URL} && echo "${QA_IMAGE_NAME_SQRL}"
+    - echo "${TARGET_TOKEN_SQRL}"   | (set -x && docker login -u "${TARGET_REGISTRY_USER_SQRL}" --password-stdin "${SQRL_REGISTRY_URL}")
+    - docker pull "${DEVEL_IMAGE_NAME}"
+    - docker tag "${DEVEL_IMAGE_NAME}" "${DEVEL_IMAGE_NAME_SQRL}"
+    - docker push ${DEVEL_IMAGE_NAME_SQRL}
+    - docker pull "${QA_IMAGE_NAME}"
+    - docker tag "${QA_IMAGE_NAME}" "${QA_IMAGE_NAME_SQRL}"
+    - docker push ${QA_IMAGE_NAME_SQRL}
+    - docker pull "${STAGE_IMAGE_NAME}"
+    - docker tag "${STAGE_IMAGE_NAME}" "${STAGE_IMAGE_NAME_SQRL}"
+    - docker push ${STAGE_IMAGE_NAME_SQRL}
+
     only:
     - /^.*-devel$/
+    - /sqrl_registry/
     except:
     - api
     - external
