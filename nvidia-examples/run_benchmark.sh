@@ -31,19 +31,13 @@ function run_benchmark() {
     exit 1;
   fi
 
-  # output processing speed from debug log
-  if [ $USE_GPU -eq 1 ]; then
-    RTF=`cat $LOG_FILE | grep RealTimeX | cut -d' ' -f 3-`
-  else
-    RTF="RTF: `cat $LOG_FILE | grep "real-time factor" | cut -d " " -f 8`"
-  fi
+  RTF=`cat $LOG_FILE | grep RealTimeX | cut -d' ' -f 3-`
   echo "  $RTF" &> $RTF_FILE
 
   # convert lattice to transcript
   $KALDI_ROOT/src/latbin/lattice-best-path \
     "ark:gunzip -c $LOCAL_RESULT_PATH/lat.gz |"\
     "ark,t:|gzip -c > $LOCAL_RESULT_PATH/trans_int.gz" >>$LOG_FILE 2>&1
-
 
   gunzip -c $LOCAL_RESULT_PATH/trans_int.gz | sort -n > $LOCAL_RESULT_PATH/trans_int
 
@@ -61,19 +55,30 @@ function run_benchmark() {
      for (key in transcriptions) {
        print key " " transcriptions[key]
      }
-    }' \
-    $LOCAL_RESULT_PATH/trans_int | sort -n > $LOCAL_RESULT_PATH/trans_int_combined
-
+  }' \
+  $LOCAL_RESULT_PATH/trans_int | sort -n > $LOCAL_RESULT_PATH/trans_int_combined
+  
   #translate ints to words
-  $KALDI_ROOT/egs/wsj/s5/utils/int2sym.pl -f 2- $RESULT_PATH/words.txt $LOCAL_RESULT_PATH/trans_int_combined > $LOCAL_RESULT_PATH/trans
+  $KALDI_ROOT/egs/wsj/s5/utils/int2sym.pl -f 2- $RESULT_PATH/words.txt $LOCAL_RESULT_PATH/trans_int_combined> $LOCAL_RESULT_PATH/trans
 
   echo "Transcripts output to $LOCAL_RESULT_PATH/trans" 2>&1 >> $LOG_FILE
 
   #score if necessary
   if [ -f $RESULT_PATH/gold_text_ints ]; then
+ 
+    if [ $ITERATIONS -gt 1 ]; then
+      #multiple iteration passes change the key, so we need to set up gold text to match
+      for (( iter=0 ; iter < $ITERATIONS ; iter++ )); do
+        cat $RESULT_PATH/gold_text_ints | sed "s/[^ ]*/$iter-&/" >> $RESULT_PATH/gold_text_ints_combined
+      done
+    else
+      #no iterations so not modification of gold text necessary
+      ln -s $RESULT_PATH/gold_text_ints  $RESULT_PATH/gold_text_ints_combined
+    fi
+
     # calculate wer
     $KALDI_ROOT/src/bin/compute-wer --mode=present \
-      "ark:$RESULT_PATH/gold_text_ints" \
+      "ark:$RESULT_PATH/gold_text_ints_combined" \
       "ark:$LOCAL_RESULT_PATH/trans_int_combined" >>$LOG_FILE 2>&1
 
     # calculate character error rate
@@ -127,15 +132,7 @@ function run_benchmark() {
     echo "  $ser"  >> $WER_FILE
     echo "  $scored" >> $WER_FILE
 
-    # ensure all expected utterances were processed
-    expected_sentences=$(cat $WAVSCP | wc -l)
-    actual_sentences=$(echo $scored | awk '{print $2}')
-    echo "  Expected: $expected_sentences, Actual: $actual_sentences" >> $WER_FILE
-    if [ $expected_sentences -ne $actual_sentences ]; then
-      echo "  Error: did not return expected number of utterances. Check $LOG_FILE" >> $WER_FILE
-    else
-      echo "  Decoding completed successfully." >> $WER_FILE
-    fi
+    echo "  Decoding completed successfully." >> $WER_FILE
   else
     echo "No gold transcripts found.  Skipping scoring." >> $WER_FILE
   fi
@@ -172,7 +169,6 @@ if [ $USE_GPU -eq 1 ]; then
   echo "WORKER_THREADS: $WORKER_THREADS"
   echo "MAX_BATCH_SIZE: $MAX_BATCH_SIZE"
   echo "BATCH_DRAIN_SIZE: $BATCH_DRAIN_SIZE"
-  echo "ITERATIONS: $ITERATIONS"
   echo "FILE_LIMIT: $FILE_LIMIT"
   echo "MAIN_Q_CAPACITY=$MAIN_Q_CAPACITY"
   echo "AUX_Q_CAPACITY=$AUX_Q_CAPACITY"
@@ -181,6 +177,7 @@ else
 fi
 
 #these prameters work with both GPU and CPU decoder
+echo "ITERATIONS: $ITERATIONS"
 echo "BEAM=$BEAM"
 echo "LATTICE_BEAM=$LATTICE_BEAM"
 echo "MAX_ACTIVE=$MAX_ACTIVE"
@@ -269,17 +266,17 @@ CPUFLAGS=""
 if [ $USE_GPU -eq 1 ]; then
   NUM_CHANNELS=$(($MAX_BATCH_SIZE + $MAX_BATCH_SIZE/2))
   #Set CUDA decoder specific flags
-  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --iterations=$ITERATIONS --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --file-limit=$FILE_LIMIT --cuda-decoder-copy-threads=$COPY_THREADS"
+  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --file-limit=$FILE_LIMIT --cuda-decoder-copy-threads=$COPY_THREADS"
   SPK2UTT=""
 else
   SPK2UTT=ark:$RESULT_PATH/spk2utt.ark
   cat $RESULT_PATH/segments.scp | cut -f 1 -d " " > $RESULT_PATH/spk
   paste -d " " $RESULT_PATH/spk $RESULT_PATH/spk > $RESULT_PATH/spk2utt.ark
-  CPUFLAGS="--online=false"
+  CPUFLAGS="--num-threads=$CPU_THREADS"
 fi
 
 #Set Generic flags
-FLAGS="--frame-subsampling-factor=$FRAME_SUBSAMPLING_FACTOR --frames-per-chunk=$FRAMES_PER_CHUNK --max-mem=100000000 --beam=$BEAM --lattice-beam=$LATTICE_BEAM --acoustic-scale=1.0 --determinize-lattice=true --max-active=$MAX_ACTIVE"
+FLAGS="--frame-subsampling-factor=$FRAME_SUBSAMPLING_FACTOR --frames-per-chunk=$FRAMES_PER_CHUNK --max-mem=100000000 --beam=$BEAM --lattice-beam=$LATTICE_BEAM --acoustic-scale=1.0 --determinize-lattice=true --max-active=$MAX_ACTIVE --iterations=$ITERATIONS"
 
 PIDS=""
 echo "Launching processes in parallel"
@@ -309,6 +306,7 @@ else
   echo "All tests PASSED"
 fi
 
+TOTAL_WER=0
 TOTAL_RTF=0
 for (( d = 0 ; d < $NUM_PROCESSES ; d++ )); do
   LOCAL_RESULT_PATH=$RESULT_PATH/$d
@@ -319,12 +317,11 @@ for (( d = 0 ; d < $NUM_PROCESSES ; d++ )); do
   if [ $USE_GPU -eq 1 ]; then
     RTF=`cat $LOCAL_RESULT_PATH/rtf | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 10`
   else
-    RTF=`cat $LOCAL_RESULT_PATH/output.log| grep real-time | cut -d " " -f 12` 
-    #CPU decoder returns the inverse
-    RTF=`echo "1.0 / $RTF" | bc -l`
+    RTF=`cat $LOCAL_RESULT_PATH/rtf | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 11`
   fi
   WER=`cat $LOCAL_RESULT_PATH/wer  | grep WER | cut -d " " -f 4`
   TOTAL_RTF=`echo "$RTF + ${TOTAL_RTF}" | bc`
+  TOTAL_WER=`echo "$WER + ${TOTAL_WER}" | bc`
 
   if [ ! -z "$EXPECTED_WER" ]; then
     PASS=`echo "$WER <= $EXPECTED_WER" | bc`
@@ -342,7 +339,8 @@ for (( d = 0 ; d < $NUM_PROCESSES ; d++ )); do
   fi
 done
 AVERAGE_RTF=`echo "scale=4; ${TOTAL_RTF} / $NUM_PROCESSES" | bc -l`
-echo "Total RTF: ${TOTAL_RTF} Average RTF: $AVERAGE_RTF"
+AVERAGE_WER=`echo "scale=4; ${TOTAL_WER} / $NUM_PROCESSES" | bc -l`
+echo "Total RTF: ${TOTAL_RTF} Average RTF: $AVERAGE_RTF Average WER: $AVERAGE_WER"
 
 if [ $FAIL -eq 1 ]; then
   echo "Expected WER or PERF test failure.";

@@ -3,7 +3,7 @@
 #set global default parameters only if the variable is not already set
 KALDI_ROOT=${KALDI_ROOT:-"/opt/kaldi/"}
 GPU_DECODER=${GPU_DECODER:-"$KALDI_ROOT/src/cudadecoderbin/batched-wav-nnet3-cuda"}
-CPU_DECODER=${CPU_DECODER:-"$KALDI_ROOT/src/online2bin/online2-wav-nnet3-latgen-faster"}
+CPU_DECODER=${CPU_DECODER:-"$KALDI_ROOT/src/cudadecoderbin/online2-wav-nnet3-latgen-faster-threaded"}
 USE_GPU=${USE_GPU:-1}
 GPU=${GPU:-0}
 GPU_THREADS=${GPU_THREADS:-2}
