@@ -22,8 +22,8 @@ bash -ex ./prepare_data.sh
 NUM_GPUS=`nvidia-smi -L | wc -l`
 
 
-NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER["test_clean"]} EXPECTED_PERF=${GOLD_PERF["${GPU_NAME}x${NUM_GPUS}_test_clean"]} DATASET=/workspace/datasets/aspire/test_clean/ bash -e ./run_benchmark.sh
+ITERATIONS=5 NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER["test_clean"]} EXPECTED_PERF=${GOLD_PERF["${GPU_NAME}x${NUM_GPUS}_test_clean"]} DATASET=/workspace/datasets/aspire/test_clean/ bash -e ./run_benchmark.sh
 
-NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER["test_other"]} EXPECTED_PERF=${GOLD_PERF["${GPU_NAME}x${NUM_GPUS}_test_other"]} DATASET=/workspace/datasets/aspire/test_other/ bash -e ./run_benchmark.sh
+ITERATIOS=5 NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER["test_other"]} EXPECTED_PERF=${GOLD_PERF["${GPU_NAME}x${NUM_GPUS}_test_other"]} DATASET=/workspace/datasets/aspire/test_other/ bash -e ./run_benchmark.sh
 
 popd

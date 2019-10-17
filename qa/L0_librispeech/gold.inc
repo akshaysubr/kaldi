@@ -17,6 +17,6 @@ GOLD_PERF=(
   ["P100x4_test_other"]="0"
   ["V100x2_test_clean"]="0"
   ["V100x2_test_other"]="0"
-  ["V100x8_test_clean"]="2800"
-  ["V100x8_test_other"]="2000"
+  ["V100x8_test_clean"]="2300"
+  ["V100x8_test_other"]="1700"
 )

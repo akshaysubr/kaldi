@@ -378,20 +378,20 @@ L0_librispeech--T4_R410_2GPU:
     <<: *L0_TEST
     <<: *T4_R410_2GPU
 
-L1_aspire--P100_4GPU:
-    <<: *L1_TEST
+L0_aspire--P100_4GPU:
+    <<: *L0_TEST
     <<: *P100_4GPU
 
-L1_aspire--P40_R384_2GPU:
-    <<: *L1_TEST
+L0_aspire--P40_R384_2GPU:
+    <<: *L0_TEST
     <<: *P40_R384_2GPU
 
-L1_aspire--V100_8GPU:
-    <<: *L1_TEST
+L0_aspire--V100_8GPU:
+    <<: *L0_TEST
     <<: *V100_8GPU
 
-L1_aspire--T4_R410_2GPU:
-    <<: *L1_TEST
+L0_aspire--T4_R410_2GPU:
+    <<: *L0_TEST
     <<: *T4_R410_2GPU
 
 L1_igbo--P100_4GPU:
