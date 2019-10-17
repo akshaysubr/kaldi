@@ -175,7 +175,6 @@ py3-devel:
 
     only:
     - /^.*-devel$/
-    - /sqrl_registry/
     except:
     - api
     - external
