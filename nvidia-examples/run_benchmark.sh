@@ -69,16 +69,18 @@ function run_benchmark() {
     if [ $ITERATIONS -gt 1 ]; then
       #multiple iteration passes change the key, so we need to set up gold text to match
       for (( iter=0 ; iter < $ITERATIONS ; iter++ )); do
-        cat $RESULT_PATH/gold_text_ints | sed "s/[^ ]*/$iter-&/" >> $RESULT_PATH/gold_text_ints_combined
+        cat $RESULT_PATH/gold_text_ints | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_ints_combined
       done
     else
       #no iterations so not modification of gold text necessary
-      ln -s $RESULT_PATH/gold_text_ints  $RESULT_PATH/gold_text_ints_combined
+      ln -s $RESULT_PATH/gold_text_ints  $LOCAL_RESULT_PATH/gold_text_ints_combined
     fi
+  
+    $KALDI_ROOT/egs/wsj/s5/utils/int2sym.pl -f 2- $RESULT_PATH/words.txt $LOCAL_RESULT_PATH/gold_text_ints_combined > $LOCAL_RESULT_PATH/gold_trans_combined
 
     # calculate wer
     $KALDI_ROOT/src/bin/compute-wer --mode=present \
-      "ark:$RESULT_PATH/gold_text_ints_combined" \
+      "ark:$LOCAL_RESULT_PATH/gold_text_ints_combined" \
       "ark:$LOCAL_RESULT_PATH/trans_int_combined" >>$LOG_FILE 2>&1
 
     # calculate character error rate
