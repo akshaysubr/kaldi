@@ -126,16 +126,23 @@ void BatchedThreadedNnet3CudaOnlinePipeline::RunCUDAFeatureExtraction() {
 void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
     const std::vector<CorrelationID> &corr_ids,
     const std::vector<SubVector<BaseFloat>> &wave_samples,
-    const std::vector<bool> &is_last_chunk) {
+    const std::vector<bool> &end_of_sequence) {
   nvtxRangePushA("DecodeBatch");
   KALDI_ASSERT(corr_ids.size() > 0);
   KALDI_ASSERT(corr_ids.size() == wave_samples.size());
-  KALDI_ASSERT(corr_ids.size() == is_last_chunk.size());
+  KALDI_ASSERT(corr_ids.size() == end_of_sequence.size());
 
   nvtxRangePushA("H2H Wave");
   for (int i = 0; i < wave_samples.size(); ++i) {
     const SubVector<BaseFloat> &src = wave_samples[i];
     int size = src.Dim();
+    if (end_of_sequence[i]) {
+      if (size > 0)
+        KALDI_WARN << "If end_of_sequence is set, the right context will be "
+                      "flushed and used as chunk. wave_samples should be empty";
+      n_samples_valid_[i] = 0;
+      continue;
+    }
     n_samples_valid_[i] = size;
     const BaseFloat *wave_src = src.Data();
     BaseFloat *wave_dst = h_all_waveform_.RowData(i);
@@ -150,18 +157,20 @@ void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
 
   std::vector<int> channels;
   ListIChannelsInBatch(corr_ids, &channels);
+  KALDI_ASSERT(channels.size() == corr_ids.size());
 
   d_all_features_.Resize(max_batch_size_ * input_frames_per_chunk_, input_dim_,
                          kUndefined);
   std::vector<int32> start_of_utt(channels.size(), 0);
-  std::vector<int32> end_of_utt(channels.size(), 0);
-  KALDI_ASSERT(channels.size() == is_last_chunk.size());
+  std::vector<int32> end_of_utt(
+      channels.size(),
+      0);  // used because of type mismatch in cuda_features_extractor_
 
   std::set<int> new_ichannels;  // TODO clean that
   for (int32 ichannel : list_channels_first_chunk_)
     new_ichannels.insert(ichannel);
-  for (int i = 0; i < is_last_chunk.size(); ++i) {
-    end_of_utt[i] = is_last_chunk[i];
+  for (int i = 0; i < end_of_sequence.size(); ++i) {
+    end_of_utt[i] = end_of_sequence[i];
     start_of_utt[i] = new_ichannels.count(channels[i]);
   }
 
@@ -182,7 +191,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
   }
   int features_frame_stride = d_all_features_.Stride();
   DecodeBatch(corr_ids, d_features, features_frame_stride,
-              n_input_frames_valid_, d_ivectors, is_last_chunk, &channels);
+              n_input_frames_valid_, d_ivectors, end_of_sequence, &channels);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
@@ -190,7 +199,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
     const std::vector<BaseFloat *> &d_features, const int features_frame_stride,
     const std::vector<int> &n_input_frames_valid,
     const std::vector<BaseFloat *> &d_ivectors,
-    const std::vector<bool> &is_last_chunk, std::vector<int> *channels) {
+    const std::vector<bool> &end_of_sequence, std::vector<int> *channels) {
   nvtxRangePushA("DecodeBatch");
   std::vector<int> buf;  // TODO
   if (!channels) {
@@ -204,10 +213,10 @@ void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
     cuda_decoder_->InitDecoding(list_channels_first_chunk_);
 
   RunNnet3(*channels, d_features, features_frame_stride, n_input_frames_valid,
-           d_ivectors);
+           d_ivectors, end_of_sequence);
   RunDecoder(*channels);
 
-  BuildLatticesAndRunCallbacks(corr_ids, *channels, is_last_chunk);
+  BuildLatticesAndRunCallbacks(corr_ids, *channels, end_of_sequence);
   list_channels_first_chunk_.clear();
   nvtxRangePop();
 }
@@ -261,10 +270,12 @@ void BatchedThreadedNnet3CudaOnlinePipeline::RunNnet3(
     const std::vector<int> &channels,
     const std::vector<BaseFloat *> &d_features, const int features_stride,
     const std::vector<int> &n_input_frames_valid,
-    const std::vector<BaseFloat *> &d_ivectors) {
+    const std::vector<BaseFloat *> &d_ivectors,
+    const std::vector<bool> &end_of_sequence) {
+  const std::vector<bool> &flush_context = end_of_sequence;
   cuda_nnet3_->RunBatch(channels, d_features, features_stride, d_ivectors,
-                        n_input_frames_valid, &d_all_log_posteriors_,
-                        &n_output_frames_valid_);
+                        n_input_frames_valid, flush_context,
+                        &d_all_log_posteriors_, &n_output_frames_valid_);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::RunDecoder(

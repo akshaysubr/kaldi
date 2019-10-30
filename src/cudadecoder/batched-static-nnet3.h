@@ -73,6 +73,7 @@ class BatchedStaticNnet3 {
                 const int features_stride,
                 const std::vector<BaseFloat *> &d_ivectors,
                 const std::vector<int> &n_input_frames_valid,
+                const std::vector<bool> &flush_context,
                 CuMatrix<BaseFloat> *d_all_log_posteriors,
                 std::vector<int> *n_output_frames_valid);
 
@@ -110,6 +111,7 @@ class BatchedStaticNnet3 {
                           const int features_stride,
                           const std::vector<BaseFloat *> &d_ivectors,
                           const std::vector<int> &n_input_frames_valid,
+                          const std::vector<bool> &flush_context,
                           std::vector<int> *n_output_frames_valid);
 
   BatchedStaticNnet3Config config_;
