@@ -31,7 +31,7 @@
 namespace kaldi {
 namespace cuda_decoder {
 struct BatchedThreadedNnet3CudaPipelineConfig {
-  BatchedThreadedNnet3CudaPipelineConfig() : use_online_ivectors(true) {}
+  BatchedThreadedNnet3CudaPipelineConfig() : use_online_ivectors(false) {}
   BatchedThreadedNnet3CudaOnlinePipelineConfig cuda_online_pipeline_opts;
   bool use_online_ivectors;
   void Register(OptionsItf *po) { cuda_online_pipeline_opts.Register(po); }
@@ -58,7 +58,6 @@ class BatchedThreadedNnet3CudaPipeline {
     std::atomic<int> *group_cnt;
     std::function<void(CompactLattice &)> callback;
     bool auto_close_after_callback;
-    bool last_chunk_sent;
 
     std::unique_ptr<CuMatrix<BaseFloat>>
         d_features;  // Used only when use_online_ivectors == false

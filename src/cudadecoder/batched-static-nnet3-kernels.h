@@ -32,7 +32,6 @@ struct BatchSlotAssignment {
   int ichannel;
   int n_frames_already_in_context;
   int n_new_frames;
-  bool flush_context;  // set for eos
 };
 
 struct BatchedStaticNnet3KernelParams {

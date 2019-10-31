@@ -55,16 +55,9 @@ namespace cuda_decoder {
 						int src_iframe_in_saved_context = iframe-n_left_context_frames_from_frame0;
 						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[src_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
 					} else {
-						BaseFloat *dst = &d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim];
-						if(batch_assign.flush_context) {
-							int last_iframe_in_saved_context = batch_assign.n_frames_already_in_context-1;
-							if(last_iframe_in_saved_context>=0)
-								*dst = d_channel_context[last_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
-						} else {
-							// Now we are moving the frames coming from the new chunk
-							int src_iframe_in_new_chunk = iframe-n_left_context_frames_from_frame0-batch_assign.n_frames_already_in_context;
-							*dst = d_batch_slot_features[src_iframe_in_new_chunk*params.d_features_frame_stride + idim];
-						}
+						// Now we are moving the frames coming from the new chunk
+						int src_iframe_in_new_chunk = iframe-n_left_context_frames_from_frame0-batch_assign.n_frames_already_in_context;
+						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_batch_slot_features[src_iframe_in_new_chunk*params.d_features_frame_stride + idim];
 					}
 				}
 
