@@ -136,18 +136,13 @@ void BatchedStaticNnet3::BatchContextSwitch(
     const std::vector<BaseFloat *> &d_features, const int features_frame_stride,
     const std::vector<BaseFloat *> &d_ivectors,
     const std::vector<int> &n_input_frames_valid,
-    const std::vector<bool> &flush_context,
     std::vector<int> *n_output_frames_valid) {
   int batch_size = channels.size();
   n_output_frames_valid->resize(batch_size);
   for (int i = 0; i < channels.size(); ++i) {
     int channel = channels[i];
     int nframes_in_context = channel_n_frames_in_context_[channel];
-    bool slot_flush_context = flush_context[i];
-    int ninput_frames = slot_flush_context ? std::min(nframes_in_context,
-                                                      total_nnet_right_context_)
-                                           : n_input_frames_valid[i];
-
+    int ninput_frames = n_input_frames_valid[i];
     KALDI_ASSERT(ninput_frames <= input_frames_per_chunk_);
     h_batch_slot_assignement_[i].d_features = d_features[i];
     h_batch_slot_assignement_[i].d_ivectors = d_ivectors[i];
@@ -155,7 +150,6 @@ void BatchedStaticNnet3::BatchContextSwitch(
     h_batch_slot_assignement_[i].n_frames_already_in_context =
         nframes_in_context;
     h_batch_slot_assignement_[i].n_new_frames = ninput_frames;
-    h_batch_slot_assignement_[i].flush_context = slot_flush_context;
 
     // Left context will be generated as necessary (copying first frame)
     // However we must have a full right context to start decoding frames
@@ -254,12 +248,10 @@ void BatchedStaticNnet3::RunBatch(const std::vector<int> &channels,
                                   const int features_stride,
                                   const std::vector<BaseFloat *> &d_ivectors,
                                   const std::vector<int> &n_input_frames_valid,
-                                  const std::vector<bool> &flush_context,
                                   CuMatrix<BaseFloat> *d_all_log_posteriors,
                                   std::vector<int> *n_output_frames_valid) {
   KALDI_ASSERT(d_features.size() == channels.size());
   KALDI_ASSERT(d_ivectors.size() == channels.size());
-  KALDI_ASSERT(flush_context.size() == channels.size());
 
   // TODO support case without ivectors
   // AcceptInput destroys input, resizing
@@ -268,8 +260,7 @@ void BatchedStaticNnet3::RunBatch(const std::vector<int> &channels,
   d_batch_ivectors_.Resize(max_batch_size_, ivector_dim_);
 
   BatchContextSwitch(channels, d_features, features_stride, d_ivectors,
-                     n_input_frames_valid, flush_context,
-                     n_output_frames_valid);
+                     n_input_frames_valid, n_output_frames_valid);
 
   RunNnet3(d_all_log_posteriors, channels.size());
 

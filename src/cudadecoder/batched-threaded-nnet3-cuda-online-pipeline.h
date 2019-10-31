@@ -131,7 +131,7 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
   // asynchronously. The callback for that utterance will then be called
   void DecodeBatch(const std::vector<CorrelationID> &corr_ids,
                    const std::vector<SubVector<BaseFloat>> &wave_samples,
-                   const std::vector<bool> &end_of_sequence);
+                   const std::vector<bool> &is_last_chunk);
   // Version providing directly the features. Only runs nnet3 & decoder
   // Used when we want to provide the final ivectors (offline case)
   // channels can be provided if they are known (internal use)
@@ -140,13 +140,16 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
                    const int features_frame_stride,
                    const std::vector<int> &n_input_frames_valid,
                    const std::vector<BaseFloat *> &d_ivectors,
-                   const std::vector<bool> &end_of_sequence,
+                   const std::vector<bool> &is_last_chunk,
                    std::vector<int> *channels = NULL);
 
   // Maximum number of samples per chunk
   int32 GetNSampsPerChunk() { return samples_per_chunk_; }
   int32 GetNInputFramesPerChunk() { return input_frames_per_chunk_; }
   float GetModelFrequency() { return model_frequency_; }
+  int GetTotalNnet3RightContext() {
+    return cuda_nnet3_->GetTotalNnet3RightContext();
+  }
   // Maximum number of seconds per chunk
   BaseFloat GetSecondsPerChunk() { return seconds_per_chunk_; }
 
@@ -185,14 +188,11 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
     static_cast<BatchedThreadedNnet3CudaOnlinePipeline *>(obj)
         ->ComputeOneFeature(element);
   }
-
   void RunNnet3(const std::vector<int> &channels,
                 const std::vector<BaseFloat *> &d_features,
-                const int features_stride,
+                const int feature_stride,
                 const std::vector<int> &n_input_frames_valid,
-                const std::vector<BaseFloat *> &d_ivectors,
-                const std::vector<bool> &end_of_sequence);
-
+                const std::vector<BaseFloat *> &d_ivectors);
   void RunDecoder(const std::vector<int> &channels);
 
   void BuildLatticesAndRunCallbacks(const std::vector<CorrelationID> &corr_ids,
@@ -230,7 +230,7 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
 
   // corr_id -> callback,  w/ mutex
   // the callback is called once the final lattice is ready
-  std::unordered_map<CorrelationID,
+  std::unordered_map<int,
                      std::unique_ptr<std::function<void(CompactLattice &)>>>
       corrid2callbacks_;
   std::mutex corrid2callbacks_m_;
