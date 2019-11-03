@@ -1,4 +1,4 @@
-ARG FROM_IMAGE_NAME=gitlab-master.nvidia.com:5005/dl/dgx/cuda:10.2-devel-ubuntu18.04--master
+ARG FROM_IMAGE_NAME=gitlab-master.nvidia.com:5005/dl/dgx/cuda:10.2-devel-ubuntu18.04--19.11
 FROM ${FROM_IMAGE_NAME}
 
 ARG KALDI_VERSION
