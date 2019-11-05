@@ -192,6 +192,7 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
                 const std::vector<BaseFloat *> &d_features,
                 const int feature_stride,
                 const std::vector<int> &n_input_frames_valid,
+                const std::vector<bool> &is_last_chunk,
                 const std::vector<BaseFloat *> &d_ivectors);
   void RunDecoder(const std::vector<int> &channels);
 
@@ -239,8 +240,10 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
   // their first batch
   std::vector<int32> list_channels_first_chunk_;
 
-  std::vector<int> n_samples_valid_, n_input_frames_valid_,
-      n_output_frames_valid_;
+  std::vector<int> n_samples_valid_, n_input_frames_valid_;
+
+  std::vector<std::vector<std::pair<int, BaseFloat *>>>
+      all_frames_log_posteriors_;
 
   // Channels done after current batch. We've just received
   // their last chunk

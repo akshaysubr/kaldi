@@ -28,7 +28,7 @@
 // latency and increase the arithmetic intensity of the GEMMs
 // not not bigger so that running partial batches is faster
 // (e.g. running a batch size = 72 with max_batch_size_=512)
-#define MAX_COMPUTE_BATCH_SIZE 128
+#define MAX_COMPUTE_BATCH_SIZE 64
 
 #include "cudadecoder/batched-static-nnet3-kernels.h"
 #include "nnet3/am-nnet-simple.h"
@@ -73,19 +73,10 @@ class BatchedStaticNnet3 {
                 const int features_stride,
                 const std::vector<BaseFloat *> &d_ivectors,
                 const std::vector<int> &n_input_frames_valid,
+                const std::vector<bool> &is_last_chunk,
                 CuMatrix<BaseFloat> *d_all_log_posteriors,
-                std::vector<int> *n_output_frames_valid);
-
-  /*
-  void RunBatch(const std::vector<int> &ichannels,
-                CuMatrix<BaseFloat> *d_all_features,
-                const std::vector<int> &n_input_frames_valid,
-                CuMatrix<BaseFloat> *d_all_log_posteriors,
-                std::vector<int> *n_output_frames_valid) {
-    RunBatch(ichannels, d_all_features, NULL, n_input_frames_valid,
-             d_all_log_posteriors, n_output_frames_valid);
-  }
-  */
+                std::vector<std::vector<std::pair<int, BaseFloat *>>>
+                    *all_frames_log_posteriors);
 
   void InitChannel(int32 ichannel) {
     KALDI_ASSERT(ichannel < nchannels_);
@@ -110,7 +101,8 @@ class BatchedStaticNnet3 {
                           const int features_stride,
                           const std::vector<BaseFloat *> &d_ivectors,
                           const std::vector<int> &n_input_frames_valid,
-                          std::vector<int> *n_output_frames_valid);
+                          const std::vector<bool> &is_last_chunk,
+                          bool flush_eos_context);
 
   BatchedStaticNnet3Config config_;
   cudaStream_t st_;
@@ -141,6 +133,8 @@ class BatchedStaticNnet3 {
   CuMatrix<BaseFloat> d_nnet3_ivectors_;
   CuMatrix<BaseFloat> d_nnet3_output_;
   CuMatrix<BaseFloat> d_batch_ivectors_;
+  CuMatrix<BaseFloat> d_all_log_posteriors;
+  CuMatrix<BaseFloat> d_all_eos_log_posteriors;
   // batch slot assignement. Size [max_batch_size]
   BatchSlotAssignment *d_batch_slot_assignement_;
   BatchSlotAssignment *h_batch_slot_assignement_;
@@ -149,6 +143,7 @@ class BatchedStaticNnet3 {
   // Size [nchannels]
   // If channel not initialized, equals to -1
   std::vector<int> channel_n_frames_in_context_;
+  std::vector<int> n_output_frames_valid_;
 
   std::unique_ptr<nnet3::CachingOptimizingCompiler> compiler_;
   std::shared_ptr<const nnet3::NnetComputation>

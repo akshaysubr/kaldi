@@ -752,110 +752,102 @@ void CudaDecoder::ConcatenateData() {
 }
 
 void CudaDecoder::AdvanceDecoding(
-    const std::vector<ChannelId> &channels,
-    std::vector<DecodableCuMatrixMapped *> &decodables, int32 max_num_frames) {
-  if (channels.size() == 0) return;  // nothing to do
+    const std::vector<std::pair<ChannelId, BaseFloat *>> &lanes_assignements) {
+  if (lanes_assignements.size() == 0) return;  // nothing to do
   // Context switch : Loading the channels state in lanes
-  LoadChannelsStateToLanes(channels);
-  KALDI_ASSERT(nlanes_used_ > 0);
-
-  // We'll decode nframes_to_decode, such as all channels have at least that
-  // number
-  // of frames available
-  int32 nframes_to_decode =
-      NumFramesToDecode(channels, decodables, max_num_frames);
 
   // Looping over the frames that we will compute
-  for (int32 iframe = 0; iframe < nframes_to_decode; ++iframe) {
-    // Loglikelihoods from the acoustic model
-    // Setting the loglikelihoods pointers for that frame
-    for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
-      ChannelId ichannel = channel_to_compute_[ilane];
-      int32 frame = num_frames_decoded_[ichannel];
-      h_lanes_counters_.lane(ilane)->loglikelihoods =
-          decodables[ilane]->GetLogLikelihoodsCudaPointer(frame);
-    }
-    cudaMemcpyAsync(d_lanes_counters_.MutableData(), h_lanes_counters_.lane(0),
-                    nlanes_used_ * sizeof(*h_lanes_counters_.lane(0)),
-                    cudaMemcpyHostToDevice, compute_st_);
-    // compute_st_ will wait for nnet3 to complete
-    cudaEventRecord(nnet3_done_evt_, cudaStreamPerThread);
-    cudaStreamWaitEvent(compute_st_, nnet3_done_evt_, 0);
-
-    // Estimating cutoff using argmin from last frame
-    ResetForFrameAndEstimateCutoffKernel(
-        KaldiCudaDecoderNumBlocks(1, nlanes_used_), KALDI_CUDA_DECODER_1D_BLOCK,
-        compute_st_, *h_device_params_, *h_kernel_params_);
-    // Reset max active status. If necessary, ApplyMaxActiveAndReduceBeam will
-    // switch it back on
-    compute_max_active_ = false;
-
-    // Processing emitting arcs. We've done the preprocess stage at the end of
-    // the previous frame
-    ExpandArcsEmitting();
-    // We'll loop until we have a small enough number of non-emitting arcs
-    // in the token queue. We'll then break the loop
-    for (int i = 0; i < KALDI_CUDA_DECODER_N_NON_EMITTING_MAIN_ITERATIONS;
-         ++i) {
-      // If one of the aux_q contains more than max_active_ tokens,
-      // we'll reduce the beam to only keep max_active_ tokens
-      ApplyMaxActiveAndReduceBeam(AUX_Q);
-      // Prune the aux_q. Apply the latest beam (using the one from
-      // ApplyMaxActiveAndReduceBeam if triggered)
-      // move the survival tokens to the main queue
-      // and do the preprocessing necessary for the next ExpandArcs
-      PruneAndPreprocess();
-
-      // "heavy duty" kernel for non-emitting. The long tail of small
-      // non-emitting iterations will be done in
-      // FinalizeProcessNonEmittingKernel
-      ExpandArcsNonEmitting();
-    }
-    ApplyMaxActiveAndReduceBeam(AUX_Q);
-    PruneAndPreprocess();
-    // Finalizing process non emitting. Takes care of the long tail,
-    // the final iterations with a small numbers of arcs. Do the work inside a
-    // single CTA (per lane),
-    FinalizeProcessNonEmittingKernel(KaldiCudaDecoderNumBlocks(1, nlanes_used_),
-                                     KALDI_CUDA_DECODER_LARGEST_1D_BLOCK,
-                                     compute_st_, *h_device_params_,
-                                     *h_kernel_params_);
-
-    // We now have our final token main queues for that frame
-
-    // Post processing the tokens for that frame
-    // - do the preprocess necessary for the next emitting expand (will happen
-    // with next frame)
-    // - if a state S has more than one token associated to it, generate the
-    // list of those tokens
-    // It allows to backtrack efficiently in GetRawLattice
-    // - compute the extra costs
-    PostProcessingMainQueue();
-
-    // Waiting on previous d2h before writing on same device memory
-    cudaStreamWaitEvent(compute_st_, d2h_copy_extra_prev_tokens_evt_, 0);
-    // Concatenating the data that will be moved to host into large arrays
-    ConcatenateData();
-    // Copying the final lane counters for that frame
-    CopyLaneCountersToHostSync();
-    CheckOverflow();
-
-    // Moving the data necessary for GetRawLattice/GetBestPath back to host for
-    // storage
-    CopyMainQueueDataToHost();
-
-    for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
-      const ChannelId ichannel = channel_to_compute_[ilane];
-      // We're done processing that frame
-      ++num_frames_decoded_[ichannel];
-      const int32 main_q_end =
-          h_lanes_counters_.lane(ilane)->main_q_narcs_and_end.y;
-      // Saving frame offsets for GetRawLattice
-      frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() +
-                                         main_q_end);
-    }
+  // Loglikelihoods from the acoustic model
+  // Setting the loglikelihoods pointers for that frame
+  std::vector<ChannelId> channels;  // TODO
+  channels.reserve(lanes_assignements.size());
+  for (LaneId ilane = 0; ilane < lanes_assignements.size(); ++ilane) {
+    ChannelId ichannel = lanes_assignements[ilane].first;
+    channels.push_back(ichannel);
+    channel_to_compute_[ilane] = ichannel;
+    h_lanes_counters_.lane(ilane)->loglikelihoods =
+        lanes_assignements[ilane].second;
   }
+  LoadChannelsStateToLanes(channels);
+  KALDI_ASSERT(nlanes_used_ > 0);
+  cudaMemcpyAsync(d_lanes_counters_.MutableData(), h_lanes_counters_.lane(0),
+                  nlanes_used_ * sizeof(*h_lanes_counters_.lane(0)),
+                  cudaMemcpyHostToDevice, compute_st_);
+  // compute_st_ will wait for nnet3 to complete
+  cudaEventRecord(nnet3_done_evt_, cudaStreamPerThread);
+  cudaStreamWaitEvent(compute_st_, nnet3_done_evt_, 0);
 
+  // Estimating cutoff using argmin from last frame
+  ResetForFrameAndEstimateCutoffKernel(
+      KaldiCudaDecoderNumBlocks(1, nlanes_used_), KALDI_CUDA_DECODER_1D_BLOCK,
+      compute_st_, *h_device_params_, *h_kernel_params_);
+  // Reset max active status. If necessary, ApplyMaxActiveAndReduceBeam will
+  // switch it back on
+  compute_max_active_ = false;
+
+  // Processing emitting arcs. We've done the preprocess stage at the end of
+  // the previous frame
+  ExpandArcsEmitting();
+  // We'll loop until we have a small enough number of non-emitting arcs
+  // in the token queue. We'll then break the loop
+  for (int i = 0; i < KALDI_CUDA_DECODER_N_NON_EMITTING_MAIN_ITERATIONS; ++i) {
+    // If one of the aux_q contains more than max_active_ tokens,
+    // we'll reduce the beam to only keep max_active_ tokens
+    ApplyMaxActiveAndReduceBeam(AUX_Q);
+    // Prune the aux_q. Apply the latest beam (using the one from
+    // ApplyMaxActiveAndReduceBeam if triggered)
+    // move the survival tokens to the main queue
+    // and do the preprocessing necessary for the next ExpandArcs
+    PruneAndPreprocess();
+
+    // "heavy duty" kernel for non-emitting. The long tail of small
+    // non-emitting iterations will be done in
+    // FinalizeProcessNonEmittingKernel
+    ExpandArcsNonEmitting();
+  }
+  ApplyMaxActiveAndReduceBeam(AUX_Q);
+  PruneAndPreprocess();
+  // Finalizing process non emitting. Takes care of the long tail,
+  // the final iterations with a small numbers of arcs. Do the work inside a
+  // single CTA (per lane),
+  FinalizeProcessNonEmittingKernel(KaldiCudaDecoderNumBlocks(1, nlanes_used_),
+                                   KALDI_CUDA_DECODER_LARGEST_1D_BLOCK,
+                                   compute_st_, *h_device_params_,
+                                   *h_kernel_params_);
+
+  // We now have our final token main queues for that frame
+
+  // Post processing the tokens for that frame
+  // - do the preprocess necessary for the next emitting expand (will happen
+  // with next frame)
+  // - if a state S has more than one token associated to it, generate the
+  // list of those tokens
+  // It allows to backtrack efficiently in GetRawLattice
+  // - compute the extra costs
+  PostProcessingMainQueue();
+
+  // Waiting on previous d2h before writing on same device memory
+  cudaStreamWaitEvent(compute_st_, d2h_copy_extra_prev_tokens_evt_, 0);
+  // Concatenating the data that will be moved to host into large arrays
+  ConcatenateData();
+  // Copying the final lane counters for that frame
+  CopyLaneCountersToHostSync();
+  CheckOverflow();
+
+  // Moving the data necessary for GetRawLattice/GetBestPath back to host for
+  // storage
+  CopyMainQueueDataToHost();
+
+  for (LaneId ilane = 0; ilane < nlanes_used_; ++ilane) {
+    const ChannelId ichannel = channel_to_compute_[ilane];
+    // We're done processing that frame
+    ++num_frames_decoded_[ichannel];
+    const int32 main_q_end =
+        h_lanes_counters_.lane(ilane)->main_q_narcs_and_end.y;
+    // Saving frame offsets for GetRawLattice
+    frame_offsets_[ichannel].push_back(frame_offsets_[ichannel].back() +
+                                       main_q_end);
+  }
   SaveChannelsStateFromLanes();
 }
 
@@ -865,7 +857,8 @@ void CudaDecoder::CheckOverflow() {
     bool q_overflow = lane_counters->q_overflow;
     if (q_overflow != OVERFLOW_NONE) {
       // An overflow was prevented in a kernel
-      // The algorithm can still go on but quality of the result can be reduced
+      // The algorithm can still go on but quality of the result can be
+      // reduced
       // (less tokens were generated)
 
       if ((q_overflow & OVERFLOW_MAIN_Q) == OVERFLOW_MAIN_Q) {
@@ -873,7 +866,8 @@ void CudaDecoder::CheckOverflow() {
         KALDI_WARN
             << "Preventing overflow of main_q. Continuing "
             << "execution but the quality of the output may be decreased. "
-            << "To prevent this from happening, please increase the parameter "
+            << "To prevent this from happening, please increase the "
+               "parameter "
                "--main-q-capacity"
             << " and/or decrease --max-active";
       }
@@ -882,7 +876,8 @@ void CudaDecoder::CheckOverflow() {
         KALDI_WARN
             << "Preventing overflow of aux_q. Continuing "
             << "execution but the quality of the output may be decreased. "
-            << "To prevent this from happening, please increase the parameter "
+            << "To prevent this from happening, please increase the "
+               "parameter "
                "--aux-q-capacity"
             << " and/or decrease --beam";
       }
@@ -930,7 +925,8 @@ void CudaDecoder::GetBestCost(const std::vector<ChannelId> &channels,
       KALDI_CUDA_DECODER_1D_BLOCK, compute_st_, *h_device_params_,
       *h_kernel_params_, use_final_costs, StdWeight::Zero().Value());
 
-  // Step2: Now that we now what the minimum cost is, we list all tokens within
+  // Step2: Now that we now what the minimum cost is, we list all tokens
+  // within
   // [min_cost; min_cost+lattice_beam]
   // min_cost takes into account the final costs if use_final_costs is true,
   // AND if a final state is is present in the last token queue
@@ -999,7 +995,8 @@ void CudaDecoder::GetBestPath(const std::vector<ChannelId> &channels,
     const ChannelId ichannel = channels[ilane];
     const int32 token_with_best_cost = argmins_[ilane].first;
     std::unique_lock<std::mutex> channel_lk(channel_lock_[ichannel]);
-    // If that token in that frame f is available, then all tokens in that frame
+    // If that token in that frame f is available, then all tokens in that
+    // frame
     // f are available
     WaitForH2HCopies();
     const bool isfinal = has_reached_final_[ilane];
@@ -1170,7 +1167,8 @@ void CudaDecoder::AddFinalTokensToLattice(
     decltype(curr_f_raw_lattice_state->end()) map_it;
     bool inserted;
 
-    // We need to create the fst_lattice_state linked to our internal id in the
+    // We need to create the fst_lattice_state linked to our internal id in
+    // the
     // lattice if it doesn't already exists
     // Inserts only if the key doesn't exist in the map
     std::tie(map_it, inserted) = curr_f_raw_lattice_state->insert(
@@ -1243,7 +1241,8 @@ void CudaDecoder::AddArcToLattice(
   // We will now add this arc to the output lattice
   // We know the destination state of the arc (to_fst_lattice_state)
   // We need to figure out its source
-  // And propagate the extra cost from the destination to the source of that arc
+  // And propagate the extra cost from the destination to the source of that
+  // arc
   // (we go backward)
   OutputLatticeState from_fst_lattice_state;
   // Having the predecessor in the previous frame
@@ -1296,7 +1295,8 @@ void CudaDecoder::AddArcToLattice(
       from_map_it->second.token_extra_cost = prev_token_extra_cost;
     }
 
-    // Reading the OutputLatticeState of the source state in the output lattice
+    // Reading the OutputLatticeState of the source state in the output
+    // lattice
     from_fst_lattice_state = from_map_it->second.fst_lattice_state;
   } else {
     from_fst_lattice_state =
@@ -1794,7 +1794,8 @@ void CudaDecoder::ComputeH2HCopies() {
         &h_all_tokens_extra_prev_tokens_extra_and_acoustic_cost_);
   }
 
-  // If we're the last cpu thread to complete the current tasks, notify the main
+  // If we're the last cpu thread to complete the current tasks, notify the
+  // main
   // thread
   bool all_done;
   {
