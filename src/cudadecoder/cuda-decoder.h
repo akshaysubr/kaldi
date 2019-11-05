@@ -212,9 +212,8 @@ class CudaDecoder {
   //
   // If max_num_frames is >= 0 it will decode no more than
   // that many frames.
-  void AdvanceDecoding(const std::vector<ChannelId> &channels,
-                       std::vector<DecodableCuMatrixMapped *> &decodables,
-                       int32 max_num_frames = -1);
+  void AdvanceDecoding(
+      const std::vector<std::pair<ChannelId, BaseFloat *>> &lanes_assignements);
 
   // Returns the number of frames already decoded in a given channel
   int32 NumFramesDecoded(ChannelId ichannel) const;

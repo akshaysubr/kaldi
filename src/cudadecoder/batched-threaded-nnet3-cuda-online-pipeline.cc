@@ -74,7 +74,6 @@ void BatchedThreadedNnet3CudaOnlinePipeline::AllocateAndInitializeData(
   cuda_decoder_->SetThreadPoolAndStartCPUWorkers(thread_pool_.get(), 4);
   n_samples_valid_.resize(max_batch_size_);
   n_input_frames_valid_.resize(max_batch_size_);
-  n_output_frames_valid_.resize(max_batch_size_);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::SetLatticeCallback(
@@ -83,35 +82,34 @@ void BatchedThreadedNnet3CudaOnlinePipeline::SetLatticeCallback(
   std::unique_ptr<std::function<void(CompactLattice &)>> callback_ptr(
       new std::function<void(CompactLattice &)>(callback));
 
-  std::lock_guard<std::mutex> lk(
-		  corrid2callbacks_m_);
+  std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
   bool inserted;
   std::tie(std::ignore, inserted) =
-	  corrid2callbacks_.emplace(corr_id, std::move(callback_ptr));
+      corrid2callbacks_.emplace(corr_id, std::move(callback_ptr));
   KALDI_ASSERT(inserted);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::InitCorrID(CorrelationID corr_id) {
   bool inserted;
   decltype(corr_id2channel_.end()) it;
-  std::tie(it, inserted) =
-      corr_id2channel_.insert({corr_id, -1});
+  std::tie(it, inserted) = corr_id2channel_.insert({corr_id, -1});
   int32 ichannel;
-  if(inserted) {
-	  // The corr_id was not in use
-	  std::lock_guard<std::mutex> lk(available_channels_m_);
-	  KALDI_ASSERT(!available_channels_.empty());
-	  ichannel = available_channels_.back();
-	  available_channels_.pop_back();
-	  it->second = ichannel;
+  if (inserted) {
+    // The corr_id was not in use
+    std::lock_guard<std::mutex> lk(available_channels_m_);
+    KALDI_ASSERT(!available_channels_.empty());
+    ichannel = available_channels_.back();
+    available_channels_.pop_back();
+    it->second = ichannel;
   } else {
-	  // This corr id was already in use but not closed 
-	  // It can happen if for instance a channel lost connection and did not send its last chunk 
-	  // Cleaning up 
-	  KALDI_WARN << "This corr_id was already in use";
-	  ichannel = it->second; 
-	  std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
-	  corrid2callbacks_.erase(corr_id);
+    // This corr id was already in use but not closed
+    // It can happen if for instance a channel lost connection and did not send
+    // its last chunk
+    // Cleaning up
+    KALDI_WARN << "This corr_id was already in use";
+    ichannel = it->second;
+    std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
+    corrid2callbacks_.erase(corr_id);
   }
 
   channel_frame_offset_[ichannel] = 0;
@@ -204,7 +202,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::DecodeBatch(
     cuda_decoder_->InitDecoding(list_channels_first_chunk_);
 
   RunNnet3(*channels, d_features, features_frame_stride, n_input_frames_valid,
-           d_ivectors);
+           is_last_chunk, d_ivectors);
   RunDecoder(*channels);
 
   BuildLatticesAndRunCallbacks(corr_ids, *channels, is_last_chunk);
@@ -261,45 +259,17 @@ void BatchedThreadedNnet3CudaOnlinePipeline::RunNnet3(
     const std::vector<int> &channels,
     const std::vector<BaseFloat *> &d_features, const int features_stride,
     const std::vector<int> &n_input_frames_valid,
+    const std::vector<bool> &is_last_chunk,
     const std::vector<BaseFloat *> &d_ivectors) {
   cuda_nnet3_->RunBatch(channels, d_features, features_stride, d_ivectors,
-                        n_input_frames_valid, &d_all_log_posteriors_,
-                        &n_output_frames_valid_);
+                        n_input_frames_valid, is_last_chunk,
+                        &d_all_log_posteriors_, &all_frames_log_posteriors_);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::RunDecoder(
     const std::vector<int> &channels) {
-  decoder_decodables_.clear();
-  decoder_ichannels_.clear();
-  for (int32 element = 0; element < channels.size(); ++element) {
-    int32 ichannel = channels[element];
-    decodables_[element].SetValidNRowsInMatrix(n_output_frames_valid_[element]);
-    int32 previous_offset = channel_frame_offset_[ichannel];
-    int32 n_output_frames = n_output_frames_valid_[element];
-    channel_frame_offset_[ichannel] = previous_offset + n_output_frames;
-
-    decodables_[element].SetFrameOffset(previous_offset);
-    decoder_ichannels_.push_back(ichannel);
-    decoder_decodables_.push_back(&decodables_[element]);
-  }
-
-  while (!decoder_ichannels_.empty()) {
-    cuda_decoder_->AdvanceDecoding(decoder_ichannels_, decoder_decodables_);
-    // Looking for utterances with more frames to process
-    decoder_ichannels_.swap(prev_decoder_ichannels_);
-    decoder_decodables_.swap(prev_decoder_decodables_);
-    decoder_decodables_.clear();
-    decoder_ichannels_.clear();
-    for (int32 i = 0; i < prev_decoder_ichannels_.size(); ++i) {
-      int32 ichannel = prev_decoder_ichannels_[i];
-      DecodableCuMatrixMapped *decodable = prev_decoder_decodables_[i];
-      bool is_done = (decodable->NumFramesReady() ==
-                      cuda_decoder_->NumFramesDecoded(ichannel));
-      if (!is_done) {
-        decoder_ichannels_.push_back(ichannel);
-        decoder_decodables_.push_back(decodable);
-      }
-    }
+  for (int iframe = 0; iframe < all_frames_log_posteriors_.size(); ++iframe) {
+    cuda_decoder_->AdvanceDecoding(all_frames_log_posteriors_[iframe]);
   }
 }
 
@@ -372,18 +342,17 @@ void BatchedThreadedNnet3CudaOnlinePipeline::FinalizeDecoding(
 
     std::unique_ptr<std::function<void(CompactLattice &)>> callback;
     {
-	    std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
-	    auto it =
-		    corrid2callbacks_.find(corr_id);  // TODO remove map, use ichannel
-	    if (it != corrid2callbacks_.end()) {
-		    callback = std::move(it->second);
-		    corrid2callbacks_.erase(it);
-	    }
-
+      std::lock_guard<std::mutex> lk(corrid2callbacks_m_);
+      auto it =
+          corrid2callbacks_.find(corr_id);  // TODO remove map, use ichannel
+      if (it != corrid2callbacks_.end()) {
+        callback = std::move(it->second);
+        corrid2callbacks_.erase(it);
+      }
     }
     // if ptr set and if callback func callable
     if (callback && *callback) {
-	    (*callback)(dlat);
+      (*callback)(dlat);
     }
 
     // TODO erase it
