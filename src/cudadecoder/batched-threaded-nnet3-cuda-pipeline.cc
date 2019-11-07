@@ -204,40 +204,23 @@ void BatchedThreadedNnet3CudaPipeline::ComputeOfflineFeatures() {
     }
     KALDI_ASSERT(task.h_wave);
     SubVector<BaseFloat> &h_wave = *task.h_wave;
-    int32 right_context = cuda_online_pipeline_.GetTotalNnet3RightContext();
-    int32 nsamp_one_frame = 160;  // TODO
-    int32 nsamp_with_context =
-        h_wave.Dim() + ((h_wave.Dim() > nsamp_one_frame)
-                            ? (nsamp_one_frame * right_context)
-                            : 0);
+    int32 nsamp = h_wave.Dim();
 
     cudaEventSynchronize(wave_buffer_->evt);
-    if (nsamp_with_context > wave_buffer_->size) {
-      wave_buffer_->Reallocate(nsamp_with_context);
+    if (nsamp > wave_buffer_->size) {
+      wave_buffer_->Reallocate(nsamp);
     }
     std::memcpy(wave_buffer_->h_data, h_wave.Data(),
                 h_wave.Dim() * sizeof(BaseFloat));
     // Used to flush the right context. Should ideally be done elsewhere, but
     // doing it here removes a lot of code
-    if (h_wave.Dim() > nsamp_one_frame) {
-      float *src = h_wave.Data() + h_wave.Dim() - nsamp_one_frame;
-      for (int i = 0; i < right_context; ++i) {
-        float *dst = wave_buffer_->h_data + h_wave.Dim() + i * nsamp_one_frame;
-        for (int j = 0; j < nsamp_one_frame; ++j) {
-          dst[j] = src[j];
-        }
-      }
-    }
-    std::memcpy(wave_buffer_->h_data, h_wave.Data(),
-                h_wave.Dim() * sizeof(BaseFloat));
-
     cudaMemcpyAsync(wave_buffer_->d_data, wave_buffer_->h_data,
-                    sizeof(BaseFloat) * nsamp_with_context,
-                    cudaMemcpyHostToDevice, cudaStreamPerThread);
+                    sizeof(BaseFloat) * nsamp, cudaMemcpyHostToDevice,
+                    cudaStreamPerThread);
 
     task.d_features.reset(new CuMatrix<BaseFloat>());
     task.d_ivectors.reset(new CuVector<BaseFloat>());
-    CuSubVector<BaseFloat> wrapper(wave_buffer_->d_data, nsamp_with_context);
+    CuSubVector<BaseFloat> wrapper(wave_buffer_->d_data, nsamp);
     cuda_features_->ComputeFeatures(
         wrapper, cuda_online_pipeline_.GetModelFrequency(),
         task.d_features.get(), task.d_ivectors.get());
