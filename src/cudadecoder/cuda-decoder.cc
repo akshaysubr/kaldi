@@ -558,32 +558,6 @@ void CudaDecoder::ApplyMaxActiveAndReduceBeam(enum QUEUE_ID queue_id) {
       compute_st_, *h_device_params_, *h_kernel_params_, use_aux_q);
 }
 
-int32 CudaDecoder::NumFramesToDecode(
-    const std::vector<ChannelId> &channels,
-    std::vector<DecodableCuMatrixMapped *> &decodables, int32 max_num_frames) {
-  int32 nframes_to_decode = INT_MAX;
-  // std::vector<int> debug_ntokens;
-  // std::vector<int> debug_narcs;
-  for (int32 ilane = 0; ilane < nlanes_used_; ++ilane) {
-    const ChannelId ichannel = channels[ilane];
-    const int32 num_frames_decoded = num_frames_decoded_[ichannel];
-    KALDI_ASSERT(num_frames_decoded >= 0 &&
-                 "You must call InitDecoding() before AdvanceDecoding()");
-    int32 num_frames_ready = decodables[ilane]->NumFramesReady();
-    // num_frames_ready must be >= num_frames_decoded, or else
-    // the number of frames ready must have decreased (which doesn't
-    // make sense) or the decodable object changed between calls
-    // (which isn't allowed).
-    KALDI_ASSERT(num_frames_ready >= num_frames_decoded);
-    int32 channel_nframes_to_decode = num_frames_ready - num_frames_decoded;
-    nframes_to_decode = std::min(nframes_to_decode, channel_nframes_to_decode);
-  }
-  if (max_num_frames >= 0)
-    nframes_to_decode = std::min(nframes_to_decode, max_num_frames);
-
-  return nframes_to_decode;
-}
-
 void CudaDecoder::ExpandArcsEmitting() {
   ExpandArcsKernel<true>(KaldiCudaDecoderNumBlocks(nlanes_used_),
                          KALDI_CUDA_DECODER_1D_BLOCK, compute_st_,

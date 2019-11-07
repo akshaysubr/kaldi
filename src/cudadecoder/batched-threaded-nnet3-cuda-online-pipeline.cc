@@ -52,16 +52,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::AllocateAndInitializeData(
             0);  // 0,1,2,3..
   corr_id2channel_.reserve(config_.num_channels);
   channel_frame_offset_.resize(config_.num_channels, 0);
-  decodables_.reserve(max_batch_size_);
-  for (int32 i = 0; i < max_batch_size_; ++i) {
-    CuSubMatrix<BaseFloat> this_log_posteriors = d_all_log_posteriors_.RowRange(
-        i * output_frames_per_chunk_, output_frames_per_chunk_);
-    decodables_.emplace_back(*trans_model_, this_log_posteriors);
-  }
-  decoder_ichannels_.reserve(max_batch_size_);
-  prev_decoder_ichannels_.reserve(max_batch_size_);
-  decoder_decodables_.reserve(max_batch_size_);
-  prev_decoder_decodables_.reserve(max_batch_size_);
+
   KALDI_ASSERT(config_.feature_opts.feature_type == "mfcc");
   cuda_features_extractor_.reset(new OnlineCudaBatchedFeaturePipeline(
       config_.feature_opts, max_batch_size_, 8000, config_.num_channels, 100,
