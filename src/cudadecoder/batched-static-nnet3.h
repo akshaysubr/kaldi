@@ -147,6 +147,7 @@ class BatchedStaticNnet3 {
   BatchSlotAssignment *d_batch_slot_assignement_;
   BatchSlotAssignment *h_batch_slot_assignement_;
   BatchedStaticNnet3KernelParams context_switch_kernel_params_;
+  cudaEvent_t batch_slot_assignement_copy_evt_;
   // Number of frames already stored in context
   // Size [nchannels]
   // If channel not initialized, equals to -1

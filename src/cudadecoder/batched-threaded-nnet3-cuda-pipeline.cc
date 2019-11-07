@@ -212,8 +212,6 @@ void BatchedThreadedNnet3CudaPipeline::ComputeOfflineFeatures() {
     }
     std::memcpy(wave_buffer_->h_data, h_wave.Data(),
                 h_wave.Dim() * sizeof(BaseFloat));
-    // Used to flush the right context. Should ideally be done elsewhere, but
-    // doing it here removes a lot of code
     cudaMemcpyAsync(wave_buffer_->d_data, wave_buffer_->h_data,
                     sizeof(BaseFloat) * nsamp, cudaMemcpyHostToDevice,
                     cudaStreamPerThread);

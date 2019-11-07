@@ -76,6 +76,7 @@ void BatchedStaticNnet3::PresetKernelParams() {
 }
 
 void BatchedStaticNnet3::Allocate() {
+  cudaEventCreate(&batch_slot_assignement_copy_evt_);
   d_all_context_frames_.Resize(nchannels_ * total_nnet_context_, input_dim_);
   d_batch_with_context_.Resize(
       max_batch_size_ * input_frames_per_chunk_with_context_, input_dim_);
@@ -92,6 +93,7 @@ void BatchedStaticNnet3::Allocate() {
 void BatchedStaticNnet3::Deallocate() {
   cudaFreeHost(h_batch_slot_assignement_);
   cudaFreeHost(d_batch_slot_assignement_);
+  cudaEventDestroy(batch_slot_assignement_copy_evt_);
 }
 
 void BatchedStaticNnet3::CompileNnet3() {
@@ -148,6 +150,9 @@ void BatchedStaticNnet3::BatchContextSwitch(
   d_batch_ivectors_.Resize(max_batch_size_, ivector_dim_);
 
   n_output_frames_valid->resize(batch_size);
+
+  cudaEventSynchronize(
+      batch_slot_assignement_copy_evt_);  // reusing same pinned memory
   for (int i = 0; i < channels.size(); ++i) {
     int channel = channels[i];
     int nframes_in_context = channel_n_frames_in_context_[channel];
@@ -201,6 +206,7 @@ void BatchedStaticNnet3::BatchContextSwitch(
   cudaMemcpyAsync(d_batch_slot_assignement_, h_batch_slot_assignement_,
                   batch_size * sizeof(*d_batch_slot_assignement_),
                   cudaMemcpyHostToDevice, st_);
+  cudaEventRecord(batch_slot_assignement_copy_evt_, st_);
 
   dim3 grid = {1,
                static_cast<unsigned int>(input_frames_per_chunk_with_context_),
@@ -214,8 +220,6 @@ void BatchedStaticNnet3::BatchContextSwitch(
                                 context_switch_kernel_params_);
     SaveContextFromBatchKernel(grid, block, st_, context_switch_kernel_params_);
   }
-  cudaDeviceSynchronize();  // TODO keep an evt sync we reuse pinned memory
-  printf("err=%i\n", cudaGetLastError());
 }
 
 void BatchedStaticNnet3::RunNnet3(CuMatrix<BaseFloat> *d_all_log_posteriors,
@@ -317,7 +321,6 @@ void BatchedStaticNnet3::RunBatch(
   }
   if (!eos_channels_.empty()) {
     // TODO resize d_all_eos_log
-    printf("EOS %zu \n", eos_channels_.size());
     BatchContextSwitch(eos_channels_, d_eos_features_, 0, d_eos_ivectors_,
                        eos_n_input_frames_valid_, true,
                        &eos_n_output_frames_valid_);
