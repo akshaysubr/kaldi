@@ -55,16 +55,9 @@ namespace cuda_decoder {
 						int src_iframe_in_saved_context = iframe-n_left_context_frames_from_frame0;
 						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[src_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
 					} else {
-						BaseFloat *dst = &d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim];
-						if(batch_assign.flush_context) {
-							int last_iframe_in_saved_context = batch_assign.n_frames_already_in_context-1;
-							if(last_iframe_in_saved_context>=0)
-								*dst = d_channel_context[last_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
-						} else {
-							// Now we are moving the frames coming from the new chunk
-							int src_iframe_in_new_chunk = iframe-n_left_context_frames_from_frame0-batch_assign.n_frames_already_in_context;
-							*dst = d_batch_slot_features[src_iframe_in_new_chunk*params.d_features_frame_stride + idim];
-						}
+						// Now we are moving the frames coming from the new chunk
+						int src_iframe_in_new_chunk = iframe-n_left_context_frames_from_frame0-batch_assign.n_frames_already_in_context;
+						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_batch_slot_features[src_iframe_in_new_chunk*params.d_features_frame_stride + idim];
 					}
 				}
 
@@ -81,6 +74,50 @@ void BuildBatchWithContextKernel(const dim3 &grid, const dim3 &block,
                                  const cudaStream_t &stream,
                                  const BatchedStaticNnet3KernelParams &params) {
   build_batch_with_context_kernel<<<grid, block, 0, stream>>>(params);
+}
+
+	__global__ void build_batch_with_context_context_flush_kernel(
+			BatchedStaticNnet3KernelParams params) {
+		for (int batch_slot = blockIdx.z; batch_slot < params.batch_size;
+				batch_slot += gridDim.z) {
+
+			BatchSlotAssignment batch_assign =
+				params.d_batch_slot_assignement[batch_slot];
+			BaseFloat *d_channel_context = &params.d_all_context_frames[batch_assign.ichannel *
+				params.d_all_context_frames_channel_stride];
+			BaseFloat *d_batch_slot_with_context = &params.d_batch_with_context[params.d_batch_with_context_batch_stride * batch_slot];
+
+
+			int n_frames_in_context =
+				batch_assign.n_frames_already_in_context;
+			int n_frames_to_set = n_frames_in_context + params.total_nnet_right_context;  
+
+			for (int iframe = blockIdx.y; iframe < n_frames_to_set;
+					iframe += gridDim.y) {
+				for (int idim = threadIdx.x; idim < params.input_dim; idim += blockDim.x) {
+					if(iframe < n_frames_in_context) {
+						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[iframe*params.d_all_context_frames_frame_stride + idim]; // frame 0
+					}
+					else if (iframe < n_frames_to_set) {
+						// Generating right context from last frame
+						int src_iframe_in_saved_context = n_frames_in_context-1;
+						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[src_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
+					} 
+				}
+
+				if(iframe == 0) { // one CTA moves the ivectors
+					for (int idim = threadIdx.x; idim < params.ivector_dim; idim += blockDim.x) {
+						params.d_batch_ivectors[batch_slot*params.d_batch_ivectors_stride +idim] = batch_assign.d_ivectors[idim];
+					}
+				}
+			}
+		} 
+	}
+
+void BuildBatchWithContextKernelContextFlush(const dim3 &grid, const dim3 &block,
+                                 const cudaStream_t &stream,
+                                 const BatchedStaticNnet3KernelParams &params) {
+  build_batch_with_context_context_flush_kernel<<<grid, block, 0, stream>>>(params);
 }
 
 __global__ void save_context_from_batch_kernel(BatchedStaticNnet3KernelParams params) {
