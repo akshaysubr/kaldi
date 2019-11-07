@@ -317,16 +317,16 @@ void BatchedStaticNnet3::RunBatch(
   }
   if (!eos_channels_.empty()) {
     // TODO resize d_all_eos_log
+    printf("EOS %zu \n", eos_channels_.size());
     BatchContextSwitch(eos_channels_, d_eos_features_, 0, d_eos_ivectors_,
                        eos_n_input_frames_valid_, true,
                        &eos_n_output_frames_valid_);
-    /*
-      RunNnet3(&d_all_eos_log_posteriors_, channels.size());
-      FormatOutputPtrs(eos_channels_, &d_all_eos_log_posteriors_,
-                       all_frames_log_posteriors_ptrs,
-      eos_n_output_frames_valid_,
-                       &eos_n_output_frames_offset_);
-      */
+    d_all_eos_log_posteriors_.Resize(d_all_log_posteriors->NumRows(),
+                                     d_all_log_posteriors->NumCols());
+    RunNnet3(&d_all_eos_log_posteriors_, channels.size());
+    FormatOutputPtrs(eos_channels_, &d_all_eos_log_posteriors_,
+                     all_frames_log_posteriors_ptrs, eos_n_output_frames_valid_,
+                     &eos_n_output_frames_offset_);
   }
 }
 
@@ -336,7 +336,7 @@ void BatchedStaticNnet3::FormatOutputPtrs(
         *all_frames_log_posteriors_ptrs,
     const std::vector<int> &n_output_frames_valid,
     const std::vector<int> *n_output_frames_valid_offset) {
-  KALDI_ASSERT(channels.size() == n_output_frames_valid_.size());
+  KALDI_ASSERT(channels.size() == n_output_frames_valid.size());
   for (int i = 0; i < channels.size(); ++i) {
     int ichannel = channels[i];
     int offset =
