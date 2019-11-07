@@ -28,7 +28,6 @@
 #include "cudadecoder/cuda-decoder.h"
 #include "cudadecoder/thread-pool.h"
 #include "cudafeat/online-cuda-batched-feature-pipeline.h"
-#include "decodable-cumatrix.h"
 #include "feat/wave-reader.h"
 #include "lat/determinize-lattice-pruned.h"
 #include "nnet3/am-nnet-simple.h"
@@ -252,18 +251,6 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
 
   // Feature pipelines, associated to a decoder channel
   std::vector<std::unique_ptr<OnlineNnet2FeaturePipeline>> feature_pipelines_;
-
-  // Decoder channels used in the curr_batch, double buffering
-  std::vector<int32> decoder_ichannels_, prev_decoder_ichannels_;
-  // Decodables associated with those channels, double buffering
-  std::vector<DecodableCuMatrixMapped *> decoder_decodables_,
-      prev_decoder_decodables_;
-
-  // The decodables are just views into log_posteriors_
-  // List of all decodables possible (one per channel)
-  // If in used in curr_batch, it will be placed in
-  // decoder_decodables_
-  std::vector<DecodableCuMatrixMapped> decodables_;
 
   // Number of frames already computed in channel (before
   // curr_batch_)

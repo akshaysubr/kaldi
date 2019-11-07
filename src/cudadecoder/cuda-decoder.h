@@ -20,7 +20,6 @@
 
 #include "cudadecoder/cuda-decoder-common.h"
 #include "cudadecoder/cuda-fst.h"
-#include "cudadecoder/decodable-cumatrix.h"
 #include "cudadecoder/thread-pool.h"
 #include "nnet3/decodable-online-looped.h"
 
@@ -296,14 +295,6 @@ class CudaDecoder {
   // the registers of a CPU)
   void LoadChannelsStateToLanes(const std::vector<ChannelId> &channels);
   void SaveChannelsStateFromLanes();
-  // We compute the decodes by batch. Each decodable in the batch has a
-  // different number of frames ready
-  // We compute the min number of frames ready (so that the full batch is
-  // executing). If max_num_frames
-  // is > 0, we apply that ceiling to the NumFramesToDecode.
-  int32 NumFramesToDecode(const std::vector<ChannelId> &channels,
-                          std::vector<DecodableCuMatrixMapped *> &decodables,
-                          int32 max_num_frames);
   // Expand the arcs, emitting stage. Must be called after
   // a preprocess_in_place, which happens in PostProcessingMainQueue.
   // ExpandArcsEmitting is called first when decoding a frame,
