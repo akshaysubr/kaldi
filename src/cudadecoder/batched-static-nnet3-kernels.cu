@@ -96,7 +96,7 @@ void BuildBatchWithContextKernel(const dim3 &grid, const dim3 &block,
 					iframe += gridDim.y) {
 				for (int idim = threadIdx.x; idim < params.input_dim; idim += blockDim.x) {
 					if(iframe < n_frames_in_context) {
-						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[iframe*params.d_all_context_frames_frame_stride + idim]; // frame 0
+						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[iframe*params.d_all_context_frames_frame_stride + idim];
 					}
 					else if (iframe < n_frames_to_set) {
 						// Generating right context from last frame
