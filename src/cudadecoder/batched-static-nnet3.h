@@ -78,6 +78,14 @@ class BatchedStaticNnet3 {
                 std::vector<std::vector<std::pair<int, BaseFloat *>>>
                     *all_frames_log_posteriors);
 
+  void FormatOutputPtrs(
+      const std::vector<int> &channels,
+      CuMatrix<BaseFloat> *d_all_log_posteriors,
+      std::vector<std::vector<std::pair<int, BaseFloat *>>>
+          *all_frames_log_posteriors_ptrs,
+      const std::vector<int> &n_output_frames_valid,
+      const std::vector<int> *n_output_frames_valid_offset = NULL);
+
   void InitChannel(int32 ichannel) {
     KALDI_ASSERT(ichannel < nchannels_);
     channel_n_frames_in_context_[ichannel] = 0;
@@ -101,8 +109,8 @@ class BatchedStaticNnet3 {
                           const int features_stride,
                           const std::vector<BaseFloat *> &d_ivectors,
                           const std::vector<int> &n_input_frames_valid,
-                          const std::vector<bool> &is_last_chunk,
-                          bool flush_eos_context);
+                          bool flush_eos_context,
+                          std::vector<int> *n_output_frames_valid);
 
   BatchedStaticNnet3Config config_;
   cudaStream_t st_;
@@ -133,8 +141,8 @@ class BatchedStaticNnet3 {
   CuMatrix<BaseFloat> d_nnet3_ivectors_;
   CuMatrix<BaseFloat> d_nnet3_output_;
   CuMatrix<BaseFloat> d_batch_ivectors_;
-  CuMatrix<BaseFloat> d_all_log_posteriors;
-  CuMatrix<BaseFloat> d_all_eos_log_posteriors;
+  CuMatrix<BaseFloat> d_all_log_posteriors_;
+  CuMatrix<BaseFloat> d_all_eos_log_posteriors_;
   // batch slot assignement. Size [max_batch_size]
   BatchSlotAssignment *d_batch_slot_assignement_;
   BatchSlotAssignment *h_batch_slot_assignement_;
@@ -144,6 +152,14 @@ class BatchedStaticNnet3 {
   // If channel not initialized, equals to -1
   std::vector<int> channel_n_frames_in_context_;
   std::vector<int> n_output_frames_valid_;
+
+  // Used to flush context at eos
+  std::vector<int> eos_channels_;
+  std::vector<BaseFloat *> d_eos_features_;
+  std::vector<BaseFloat *> d_eos_ivectors_;
+  std::vector<int> eos_n_input_frames_valid_;
+  std::vector<int> eos_n_output_frames_valid_;
+  std::vector<int> eos_n_output_frames_offset_;
 
   std::unique_ptr<nnet3::CachingOptimizingCompiler> compiler_;
   std::shared_ptr<const nnet3::NnetComputation>

@@ -32,7 +32,6 @@ struct BatchSlotAssignment {
   int ichannel;
   int n_frames_already_in_context;
   int n_new_frames;
-  bool flush_context;  // set for eos
 };
 
 struct BatchedStaticNnet3KernelParams {
@@ -53,12 +52,16 @@ struct BatchedStaticNnet3KernelParams {
   int ivector_dim;
   int total_nnet_context;
   int total_nnet_left_context;
+  int total_nnet_right_context;
   int input_frames_per_chunk_with_context;
 };
 
 void BuildBatchWithContextKernel(const dim3 &grid, const dim3 &block,
                                  const cudaStream_t &stream,
                                  const BatchedStaticNnet3KernelParams &params);
+void BuildBatchWithContextKernelContextFlush(
+    const dim3 &grid, const dim3 &block, const cudaStream_t &stream,
+    const BatchedStaticNnet3KernelParams &params);
 void SaveContextFromBatchKernel(const dim3 &grid, const dim3 &block,
                                 const cudaStream_t &stream,
                                 const BatchedStaticNnet3KernelParams &params);

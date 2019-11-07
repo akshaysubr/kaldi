@@ -69,6 +69,8 @@ void BatchedStaticNnet3::PresetKernelParams() {
   context_switch_kernel_params_.total_nnet_context = total_nnet_context_;
   context_switch_kernel_params_.total_nnet_left_context =
       total_nnet_left_context_;
+  context_switch_kernel_params_.total_nnet_right_context =
+      total_nnet_right_context_;
   context_switch_kernel_params_.input_frames_per_chunk_with_context =
       input_frames_per_chunk_with_context_;
 }
@@ -135,17 +137,21 @@ void BatchedStaticNnet3::BatchContextSwitch(
     const std::vector<int> &channels,
     const std::vector<BaseFloat *> &d_features, const int features_frame_stride,
     const std::vector<BaseFloat *> &d_ivectors,
-    const std::vector<int> &n_input_frames_valid,
-    const std::vector<bool> &is_last_chunk, bool flush_eos_context) {
+    const std::vector<int> &n_input_frames_valid, bool flush_eos_context,
+    std::vector<int> *n_output_frames_valid) {
   int batch_size = channels.size();
-  n_output_frames_valid_.resize(channels.size());
+
+  // AcceptInput destroys input, resizing
+  // TODO should be ok to replace max_batch_size_ with batch_size
+  d_batch_with_context_.Resize(
+      max_batch_size_ * input_frames_per_chunk_with_context_, input_dim_);
+  d_batch_ivectors_.Resize(max_batch_size_, ivector_dim_);
+
+  n_output_frames_valid->resize(batch_size);
   for (int i = 0; i < channels.size(); ++i) {
     int channel = channels[i];
     int nframes_in_context = channel_n_frames_in_context_[channel];
-    bool slot_flush_context = is_last_chunk[i] && false;
-    int ninput_frames = slot_flush_context ? std::min(nframes_in_context,
-                                                      total_nnet_right_context_)
-                                           : n_input_frames_valid[i];
+    int ninput_frames = n_input_frames_valid[i];
 
     KALDI_ASSERT(ninput_frames <= input_frames_per_chunk_);
     h_batch_slot_assignement_[i].d_features = d_features[i];
@@ -154,13 +160,21 @@ void BatchedStaticNnet3::BatchContextSwitch(
     h_batch_slot_assignement_[i].n_frames_already_in_context =
         nframes_in_context;
     h_batch_slot_assignement_[i].n_new_frames = ninput_frames;
-    h_batch_slot_assignement_[i].flush_context = slot_flush_context;  // TODO
 
     // Left context will be generated as necessary (copying first frame)
     // However we must have a full right context to start decoding frames
-    int nframes_in_batch =
-        ninput_frames + ((nframes_in_context > 0) ? nframes_in_context
-                                                  : total_nnet_left_context_);
+    KALDI_ASSERT(!flush_eos_context || ninput_frames == 0);
+    int nframes_in_batch = ninput_frames;
+    if (nframes_in_context == 0)
+      nframes_in_batch +=
+          total_nnet_left_context_;  // using frame0 as left context
+    else
+      nframes_in_batch += nframes_in_context;
+    if (flush_eos_context)
+      nframes_in_batch +=
+          total_nnet_right_context_;  // using last frame as right context
+    KALDI_ASSERT(input_frames_per_chunk_ >= total_nnet_right_context_);  // TODO
+
     channel_n_frames_in_context_[channel] =
         std::min(nframes_in_batch, total_nnet_context_);
 
@@ -170,7 +184,7 @@ void BatchedStaticNnet3::BatchContextSwitch(
     int total_output_nframes =
         (total_nframes_minus_context + subsampling_factor_ - 1) /
         subsampling_factor_;  // TODO
-    n_output_frames_valid_[i] = total_output_nframes;
+    (*n_output_frames_valid)[i] = total_output_nframes;
   }
   context_switch_kernel_params_.batch_size = batch_size;
   context_switch_kernel_params_.d_features_frame_stride = features_frame_stride;
@@ -192,8 +206,16 @@ void BatchedStaticNnet3::BatchContextSwitch(
                static_cast<unsigned int>(input_frames_per_chunk_with_context_),
                static_cast<unsigned int>(batch_size)};
   dim3 block = {64, 1, 1};  // TODO comments
-  BuildBatchWithContextKernel(grid, block, st_, context_switch_kernel_params_);
-  SaveContextFromBatchKernel(grid, block, st_, context_switch_kernel_params_);
+  if (flush_eos_context) {
+    BuildBatchWithContextKernelContextFlush(grid, block, st_,
+                                            context_switch_kernel_params_);
+  } else {
+    BuildBatchWithContextKernel(grid, block, st_,
+                                context_switch_kernel_params_);
+    SaveContextFromBatchKernel(grid, block, st_, context_switch_kernel_params_);
+  }
+  cudaDeviceSynchronize();  // TODO keep an evt sync we reuse pinned memory
+  printf("err=%i\n", cudaGetLastError());
 }
 
 void BatchedStaticNnet3::RunNnet3(CuMatrix<BaseFloat> *d_all_log_posteriors,
@@ -239,13 +261,17 @@ void BatchedStaticNnet3::RunNnet3(CuMatrix<BaseFloat> *d_all_log_posteriors,
       // Copy nnet3 minibatch output to batch
       CuSubMatrix<BaseFloat> src =
           d_nnet3_output_.RowRange(0, output_rows_per_minibatch);
-
       CuSubMatrix<BaseFloat> dst = d_all_log_posteriors->RowRange(
           off * output_frames_per_chunk_, output_rows_per_minibatch);
       dst.CopyFromMat(src);
     }
   }
   //    *d_all_log_posteriors = computer.GetOutput("output");
+
+  if (log_priors_.Dim() != 0)
+    d_all_log_posteriors->AddVecToRows(-1.0, log_priors_);
+  if (config_.compute_opts.acoustic_scale != 1.0f)
+    d_all_log_posteriors->Scale(config_.compute_opts.acoustic_scale);
 }
 
 void BatchedStaticNnet3::RunBatch(
@@ -260,21 +286,65 @@ void BatchedStaticNnet3::RunBatch(
   KALDI_ASSERT(d_features.size() == channels.size());
   KALDI_ASSERT(d_ivectors.size() == channels.size());
   KALDI_ASSERT(is_last_chunk.size() == channels.size());
-  // AcceptInput destroys input, resizing
-  d_batch_with_context_.Resize(
-      max_batch_size_ * input_frames_per_chunk_with_context_, input_dim_);
-  d_batch_ivectors_.Resize(max_batch_size_, ivector_dim_);
+
+  all_frames_log_posteriors_ptrs
+      ->clear();  // will start setting output frames now
+
+  //
+  // Processing chunks in d_features
+  //
   BatchContextSwitch(channels, d_features, features_stride, d_ivectors,
-                     n_input_frames_valid, is_last_chunk, false);
+                     n_input_frames_valid, false, &n_output_frames_valid_);
   RunNnet3(d_all_log_posteriors, channels.size());
-  all_frames_log_posteriors_ptrs->clear();
+  FormatOutputPtrs(channels, d_all_log_posteriors,
+                   all_frames_log_posteriors_ptrs, n_output_frames_valid_);
+
+  //
+  // Flushing context for chunks with is_last_chunk set
+  //
+  eos_channels_.clear();
+  d_eos_features_.clear();
+  d_eos_ivectors_.clear();
+  eos_n_input_frames_valid_.clear();
+  eos_n_output_frames_offset_.clear();
+  for (int i = 0; i < channels.size(); ++i) {
+    if (!is_last_chunk[i]) continue;
+    eos_channels_.push_back(channels[i]);
+    d_eos_features_.push_back(NULL);  // the context will serve as features
+    d_eos_ivectors_.push_back(d_ivectors[i]);
+    eos_n_input_frames_valid_.push_back(0);
+    eos_n_output_frames_offset_.push_back(n_output_frames_valid_[i]);
+  }
+  if (!eos_channels_.empty()) {
+    // TODO resize d_all_eos_log
+    BatchContextSwitch(eos_channels_, d_eos_features_, 0, d_eos_ivectors_,
+                       eos_n_input_frames_valid_, true,
+                       &eos_n_output_frames_valid_);
+    /*
+      RunNnet3(&d_all_eos_log_posteriors_, channels.size());
+      FormatOutputPtrs(eos_channels_, &d_all_eos_log_posteriors_,
+                       all_frames_log_posteriors_ptrs,
+      eos_n_output_frames_valid_,
+                       &eos_n_output_frames_offset_);
+      */
+  }
+}
+
+void BatchedStaticNnet3::FormatOutputPtrs(
+    const std::vector<int> &channels, CuMatrix<BaseFloat> *d_all_log_posteriors,
+    std::vector<std::vector<std::pair<int, BaseFloat *>>>
+        *all_frames_log_posteriors_ptrs,
+    const std::vector<int> &n_output_frames_valid,
+    const std::vector<int> *n_output_frames_valid_offset) {
   KALDI_ASSERT(channels.size() == n_output_frames_valid_.size());
   for (int i = 0; i < channels.size(); ++i) {
     int ichannel = channels[i];
-    int total_output_nframes = n_output_frames_valid_[i];
+    int offset =
+        (n_output_frames_valid_offset) ? (*n_output_frames_valid_offset)[i] : 0;
+    int total_output_nframes = offset + n_output_frames_valid[i];
     if (all_frames_log_posteriors_ptrs->size() < total_output_nframes)
       all_frames_log_posteriors_ptrs->resize(total_output_nframes);
-    for (int iframe = 0; iframe < total_output_nframes; ++iframe) {
+    for (int iframe = offset; iframe < total_output_nframes; ++iframe) {
       std::vector<std::pair<int, BaseFloat *>> &this_frame =
           (*all_frames_log_posteriors_ptrs)[iframe];
       CuSubVector<BaseFloat> out =
@@ -283,11 +353,8 @@ void BatchedStaticNnet3::RunBatch(
       this_frame.push_back({ichannel, frame});
     }
   }
-  if (log_priors_.Dim() != 0)
-    d_all_log_posteriors->AddVecToRows(-1.0, log_priors_);
-  if (config_.compute_opts.acoustic_scale != 1.0f)
-    d_all_log_posteriors->Scale(config_.compute_opts.acoustic_scale);
 }
+
 }  // cuda_decoder
 }  // kaldi
 
