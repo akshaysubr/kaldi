@@ -70,6 +70,7 @@ function run_benchmark() {
       #multiple iteration passes change the key, so we need to set up gold text to match
       for (( iter=0 ; iter < $ITERATIONS ; iter++ )); do
         cat $RESULT_PATH/gold_text_ints | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_ints_combined
+        cat $RESULT_PATH/gold_text | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_combined
       done
     else
       #no iterations so not modification of gold text necessary
@@ -101,7 +102,7 @@ function run_benchmark() {
           }
           print "\n";
         }' > $LOCAL_RESULT_PATH/trans.chars
-      cat $RESULT_PATH/gold_text | perl -CSDA -ane '
+      cat $LOCAL_RESULT_PATH/gold_text_combined | perl -CSDA -ane '
         {
           print $F[0];
           foreach $s (@F[1..$#F]) {
