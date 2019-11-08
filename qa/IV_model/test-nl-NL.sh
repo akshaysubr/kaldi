@@ -2,6 +2,8 @@
 
 source gold.inc
 
+MODEL=iv_nl-NL
+
 GPU_NAME=UNKNOWN
 if [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla V100" | wc -l) -gt 0 ]]; then
 	GPU_NAME="V100"
@@ -14,14 +16,14 @@ elif [[ $(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | grep "Tesla T4
 fi
 
 pushd .
-cd /workspace/nvidia-examples/iv_en-US
+cd /workspace/nvidia-examples/$MODEL
 
 bash -ex ./prepare_data.sh
 
 NUM_GPUS=`nvidia-smi -L | wc -l`
 
 
-NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER["iv_en-US"]} EXPECTED_PERF=${GOLD_PERF["${GPU_NAME}x${NUM_GPUS}_iv_en-US"]} bash -e ./run_benchmark.sh
+NUM_PROCESSES=$NUM_GPUS EXPECTED_WER=${GOLD_WER[$MODEL]} bash -e ./run_benchmark.sh
 
 
 popd

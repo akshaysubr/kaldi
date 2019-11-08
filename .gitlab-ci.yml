@@ -302,27 +302,30 @@ gather:
 #"Run all L2 tests":
 #    <<: *MANUAL_TEST_TRIGGER
 
-.P100_4GPU: &P100_4GPU
+.P100_1GPU: &P100_1GPU
     tags:
     - P100
-    - 4GPU
+    - 1GPU
 
-.P40_R384_2GPU: &P40_R384_2GPU
+.P40_1GPU: &P40_1GPU
     tags:
     - P40
-    - R384
-    - 2GPU
+    - 1GPU
 
 .V100_8GPU: &V100_8GPU
     tags:
     - V100
     - 8GPU
 
-.T4_R410_2GPU: &T4_R410_2GPU
+.V100_1GPU: &V100_1GPU
+    tags:
+    - V100
+    - 1GPU
+
+.T4_1GPU: &T4_1GPU
     tags:
     - T4
-    - R410
-    - 2GPU
+    - 1GPU
 
 ######################################################
 ##
@@ -351,78 +354,225 @@ gather:
 ##
 ######################################################
 
-L0_make_test--P100_4GPU:
+L0_make_test--P100_1GPU:
     <<: *L0_TEST
-    <<: *P100_4GPU
+    <<: *P100_1GPU
 
-L0_make_test--P40_R384_2GPU:
+L0_make_test--P40_1GPU:
     <<: *L0_TEST
-    <<: *P40_R384_2GPU
+    <<: *P40_1GPU
 
-L0_make_test--V100_8GPU:
+L0_make_test--V100_1GPU:
     <<: *L0_TEST
-    <<: *V100_8GPU
+    <<: *V100_1GPU
 
-L0_make_test--T4_R410_2GPU:
+L0_make_test--T4_1GPU:
     <<: *L0_TEST
-    <<: *T4_R410_2GPU
+    <<: *T4_1GPU
 
-L0_egs_voxforge--P100_4GPU:
+L0_egs_voxforge--P100_1GPU:
     <<: *L0_TEST
-    <<: *P100_4GPU
+    <<: *P100_1GPU
 
-L0_librispeech--P100_4GPU:
+L0_librispeech--P100_1GPU:
     <<: *L0_TEST
-    <<: *P100_4GPU
+    <<: *P100_1GPU
 
-L0_librispeech--P40_R384_2GPU:
+L0_librispeech--P40_1GPU:
     <<: *L0_TEST
-    <<: *P40_R384_2GPU
+    <<: *P40_1GPU
 
 L0_librispeech--V100_8GPU:
     <<: *L0_TEST
     <<: *V100_8GPU
 
-L0_librispeech--T4_R410_2GPU:
+L0_librispeech--T4_1GPU:
     <<: *L0_TEST
-    <<: *T4_R410_2GPU
+    <<: *T4_1GPU
 
-L0_aspire--P100_4GPU:
+L0_aspire--P100_1GPU:
     <<: *L0_TEST
-    <<: *P100_4GPU
+    <<: *P100_1GPU
 
-L0_aspire--P40_R384_2GPU:
+L0_aspire--P40_1GPU:
     <<: *L0_TEST
-    <<: *P40_R384_2GPU
+    <<: *P40_1GPU
 
-L0_aspire--V100_8GPU:
+L0_aspire--V100_1GPU:
     <<: *L0_TEST
-    <<: *V100_8GPU
+    <<: *V100_1GPU
 
-L0_aspire--T4_R410_2GPU:
+L0_aspire--T4_1GPU:
     <<: *L0_TEST
-    <<: *T4_R410_2GPU
+    <<: *T4_1GPU
 
-L1_igbo--P100_4GPU:
+L1_igbo--P100_1GPU:
     <<: *L1_TEST
-    <<: *P100_4GPU
+    <<: *P100_1GPU
 
-L1_igbo--P40_R384_2GPU:
+L1_igbo--P40_1GPU:
     <<: *L1_TEST
-    <<: *P40_R384_2GPU
+    <<: *P40_1GPU
 
-L1_igbo--V100_8GPU:
+L1_igbo--V100_1GPU:
     <<: *L1_TEST
-    <<: *V100_8GPU
+    <<: *V100_1GPU
 
-L1_igbo--T4_R410_2GPU:
+L1_igbo--T4_1GPU:
     <<: *L1_TEST
-    <<: *T4_R410_2GPU
+    <<: *T4_1GPU
 
-IV_en-US--V100_8GPU:
+IV_en-US--V100_1GPU:
     <<: *IV_TEST
-    <<: *V100_8GPU
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-en-US.sh"
 
-IV_en-US--T4_R410_2GPU:
+IV_en-GB--V100_1GPU:
     <<: *IV_TEST
-    <<: *T4_R410_2GPU
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-en-GB.sh"
+
+IV_en-AU--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-en-AU.sh"
+
+IV_en-ZA--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-en-ZA.sh"
+
+IV_en-GL--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-en-GL.sh"
+
+IV_de-DE--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-de-DE.sh"
+
+IV_de-CH--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-de-CH.sh"
+
+IV_nl-NL--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-nl-NL.sh"
+
+IV_nl-BE--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-nl-BE.sh"
+
+IV_es-ES--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-es-ES.sh"
+
+IV_es-MX--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-es-MX.sh"
+
+IV_pt-BR--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-pt-BR.sh"
+
+IV_fr-FR--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-fr-FR.sh"
+
+IV_da-DK--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-da-DK.sh"
+
+IV_nb-NO--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-nb-NO.sh"
+
+IV_ca-ES--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-ca-ES.sh"
+
+IV_cmn-CH--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-cmn-CH.sh"
+
+IV_cmn-TW--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-cmn-TW.sh"
+
+IV_ko-KR--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-ko-KR.sh"
+
+IV_ja-JP--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-ja-JP.sh"
+
+IV_ru-RU--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-ru-RU.sh"
+
+IV_tl-PH--V100_1GPU:
+    <<: *IV_TEST
+    <<: *V100_1GPU
+    variables:
+      TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
+      TEST_SCRIPT: "./test-tl-PH.sh"
+

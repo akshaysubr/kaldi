@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ITERATIONS=${ITERATIONS:-400}
+ITERATIONS=${ITERATIONS:-24}
 
 WORKSPACE=${WORKSPACE:-"/workspace/"}
 
