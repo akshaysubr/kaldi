@@ -52,7 +52,6 @@ void BatchedThreadedNnet3CudaOnlinePipeline::AllocateAndInitializeData(
             0);  // 0,1,2,3..
   corr_id2channel_.reserve(config_.num_channels);
   channel_frame_offset_.resize(config_.num_channels, 0);
-
   KALDI_ASSERT(config_.feature_opts.feature_type == "mfcc");
   cuda_features_extractor_.reset(new OnlineCudaBatchedFeaturePipeline(
       config_.feature_opts, max_batch_size_, 8000, config_.num_channels, 100,
@@ -216,7 +215,8 @@ void BatchedThreadedNnet3CudaOnlinePipeline::BuildLatticesAndRunCallbacks(
   // Storing number of callbacks not done. Used if  WaitForLatticeCallbacks()
   // is
   // called
-  n_lattice_callbacks_not_done_.store(list_channels_last_chunk_.size());
+  n_lattice_callbacks_not_done_.fetch_add(list_channels_last_chunk_.size(),
+                                          std::memory_order_acquire);
 
   // delete data used for decoding that corr_id
   for (int32 i = 0; i < list_channels_last_chunk_.size(); ++i) {
@@ -240,6 +240,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::ListIChannelsInBatch(
   for (int i = 0; i < corr_ids.size(); ++i) {
     int corr_id = corr_ids[i];
     auto it = corr_id2channel_.find(corr_id);
+    if (it == corr_id2channel_.end()) printf("CHANNEL %i \n", corr_id);
     KALDI_ASSERT(it != corr_id2channel_.end());
     int ichannel = it->second;
     channels->push_back(ichannel);
@@ -348,7 +349,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::FinalizeDecoding(
 
     // TODO erase it
   }
-  n_lattice_callbacks_not_done_.fetch_sub(1);
+  n_lattice_callbacks_not_done_.fetch_sub(1, std::memory_order_release);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::WaitForLatticeCallbacks() {

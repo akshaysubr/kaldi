@@ -231,7 +231,8 @@ void CuDevice::SelectGpuId(std::string use_gpu) {
     KALDI_WARN << "Not in compute-exclusive mode.  Suggestion: use "
                   "'nvidia-smi -c 3' to set compute exclusive mode";
     // We want to choose the device more carefully, so release the CUDA context.
-    e = cudaDeviceReset();
+    //    e = cudaDeviceReset();
+    e = cudaSuccess;
     if (e != cudaSuccess) {
       KALDI_CUDA_ERR(e, "Failed to release CUDA context on a GPU");
     }
