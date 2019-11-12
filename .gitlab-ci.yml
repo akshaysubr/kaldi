@@ -416,6 +416,22 @@ L1_igbo--T4_1GPU:
     <<: *L1_TEST
     <<: *T4_1GPU
 
+L1_georgian--P100_1GPU:
+    <<: *L1_TEST
+    <<: *P100_1GPU
+
+L1_georgian--P40_1GPU:
+    <<: *L1_TEST
+    <<: *P40_1GPU
+
+L1_georgian--V100_1GPU:
+    <<: *L1_TEST
+    <<: *V100_1GPU
+
+L1_georgian--T4_1GPU:
+    <<: *L1_TEST
+    <<: *T4_1GPU
+
 IV_en-US--V100_1GPU:
     <<: *IV_TEST
     <<: *V100_1GPU

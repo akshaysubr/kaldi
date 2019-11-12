@@ -12,6 +12,7 @@ trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 function run_benchmark() {
 
+  FAIL=0
   LOG_FILE="$LOCAL_RESULT_PATH/output.log"
   RTF_FILE="$LOCAL_RESULT_PATH/rtf"
   WER_FILE="$LOCAL_RESULT_PATH/wer"
@@ -33,6 +34,24 @@ function run_benchmark() {
 
   RTF=`cat $LOG_FILE | grep RealTimeX | cut -d' ' -f 3-`
   echo "  $RTF" &> $RTF_FILE
+
+  if [ -f "$MODEL_PATH/phones/word_boundary.int" ]; then
+    ALIGN_LOG="$LOCAL_RESULT_PATH/align.log"
+    #align words and add penalty
+    #we don't use this but it shows how to create a word aligned lattice
+    $KALDI_ROOT/src/latbin/lattice-add-penalty --word-ins-penalty=0 \
+      "ark:gunzip -c $LOCAL_RESULT_PATH/lat.gz |" "ark:-" | \
+      $KALDI_ROOT/src/latbin/lattice-align-words \
+      $MODEL_PATH/phones/word_boundary.int $MODEL_PATH/final.mdl \
+      "ark:-" "ark,t:|gzip -c > $LOCAL_RESULT_PATH/lat_aligned.gz" \
+      >> $ALIGN_LOG 2>&1
+    cat $ALIGN_LOG >> $LOG_FILE
+    WARNING=$(cat $ALIGN_LOG | grep "WARNING" || true)
+    if [ ! -z "$WARNING" ]; then
+      echo "$WARNING"
+      FAIL=1
+    fi
+  fi
 
   # convert lattice to transcript
   $KALDI_ROOT/src/latbin/lattice-best-path \
@@ -66,16 +85,11 @@ function run_benchmark() {
   #score if necessary
   if [ -f $RESULT_PATH/gold_text_ints ]; then
  
-    if [ $ITERATIONS -gt 1 ]; then
-      #multiple iteration passes change the key, so we need to set up gold text to match
-      for (( iter=0 ; iter < $ITERATIONS ; iter++ )); do
-        cat $RESULT_PATH/gold_text_ints | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_ints_combined
-        cat $RESULT_PATH/gold_text | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_combined
-      done
-    else
-      #no iterations so not modification of gold text necessary
-      ln -s $RESULT_PATH/gold_text_ints  $LOCAL_RESULT_PATH/gold_text_ints_combined
-    fi
+    #multiple iteration passes change the key, so we need to set up gold text to match
+    for (( iter=0 ; iter < $ITERATIONS ; iter++ )); do
+      cat $RESULT_PATH/gold_text_ints | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_ints_combined
+      cat $RESULT_PATH/gold_text | sed "s/[^ ]*/$iter-&/" >> $LOCAL_RESULT_PATH/gold_text_combined
+    done
   
     $KALDI_ROOT/egs/wsj/s5/utils/int2sym.pl -f 2- $RESULT_PATH/words.txt $LOCAL_RESULT_PATH/gold_text_ints_combined > $LOCAL_RESULT_PATH/gold_trans_combined
 
@@ -139,6 +153,8 @@ function run_benchmark() {
   else
     echo "No gold transcripts found.  Skipping scoring." >> $WER_FILE
   fi
+
+  exit $FAIL
 }
 
 #NVPROF="nvprof -f -o profile.out"
@@ -269,7 +285,7 @@ CPUFLAGS=""
 if [ $USE_GPU -eq 1 ]; then
   NUM_CHANNELS=$(($MAX_BATCH_SIZE + $MAX_BATCH_SIZE/2))
   #Set CUDA decoder specific flags
-  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --file-limit=$FILE_LIMIT --cuda-decoder-copy-threads=$COPY_THREADS"
+  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --cuda-decoder-copy-threads=$COPY_THREADS"
   SPK2UTT=""
 else
   SPK2UTT=ark:$RESULT_PATH/spk2utt.ark
@@ -279,7 +295,7 @@ else
 fi
 
 #Set Generic flags
-FLAGS="--frame-subsampling-factor=$FRAME_SUBSAMPLING_FACTOR --frames-per-chunk=$FRAMES_PER_CHUNK --max-mem=100000000 --beam=$BEAM --lattice-beam=$LATTICE_BEAM --acoustic-scale=1.0 --determinize-lattice=true --max-active=$MAX_ACTIVE --iterations=$ITERATIONS"
+FLAGS="--frame-subsampling-factor=$FRAME_SUBSAMPLING_FACTOR --frames-per-chunk=$FRAMES_PER_CHUNK --max-mem=100000000 --beam=$BEAM --lattice-beam=$LATTICE_BEAM --acoustic-scale=1.0 --determinize-lattice=true --max-active=$MAX_ACTIVE --iterations=$ITERATIONS --file-limit=$FILE_LIMIT"
 
 PIDS=""
 echo "Launching processes in parallel"
@@ -322,22 +338,25 @@ for (( d = 0 ; d < $NUM_PROCESSES ; d++ )); do
   else
     RTF=`cat $LOCAL_RESULT_PATH/rtf | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 11`
   fi
-  WER=`cat $LOCAL_RESULT_PATH/wer  | grep WER | cut -d " " -f 4`
   TOTAL_RTF=`echo "$RTF + ${TOTAL_RTF}" | bc`
-  TOTAL_WER=`echo "$WER + ${TOTAL_WER}" | bc`
+  
+  if [ -f  $DATASET/text ]; then
+    WER=`cat $LOCAL_RESULT_PATH/wer  | grep WER | cut -d " " -f 4`
+    TOTAL_WER=`echo "$WER + ${TOTAL_WER}" | bc`
 
-  if [ ! -z "$EXPECTED_WER" ]; then
-    PASS=`echo "$WER <= $EXPECTED_WER" | bc`
-    if [ $PASS -ne "1" ]; then
-      echo "              Error:  WER rate ($WER) greater than  $EXPECTED_WER"
-      FAIL=1
+    if [ ! -z "$EXPECTED_WER" ]; then
+      PASS=`echo "$WER <= $EXPECTED_WER" | bc`
+      if [ $PASS -ne "1" ]; then
+        echo "              Error:  WER rate ($WER) greater than  $EXPECTED_WER"
+        FAIL=1
+      fi
     fi
-  fi
-  if [ ! -z "$EXPECTED_PERF" ]; then
-    PASS=`echo "$RTF >= $EXPECTED_PERF" | bc`
-    if [ $PASS -ne "1" ]; then
-      echo "              Error:  PERF ($RTF) less than than  $EXPECTED_PERF"
-      FAIL=1
+    if [ ! -z "$EXPECTED_PERF" ]; then
+      PASS=`echo "$RTF >= $EXPECTED_PERF" | bc`
+      if [ $PASS -ne "1" ]; then
+        echo "              Error:  PERF ($RTF) less than than  $EXPECTED_PERF"
+        FAIL=1
+      fi
     fi
   fi
 done
