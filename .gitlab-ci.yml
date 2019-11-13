@@ -74,14 +74,6 @@ before_script:
     - export -p > "${CI_TMPDIR}/.env" # Save environment (to restore it in after_script).
     except:
     - tags
-    after_script:
-    - export CI_TMPDIR="${PWD}/${CI_JOB_ID}"
-    - source ${CI_TMPDIR}/.env
-    - export CONTAMERDIR="${CI_TMPDIR}/contamer" && echo "CONTAMERDIR=${CONTAMERDIR}"
-    - git clone -b master --single-branch "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-master.nvidia.com/pstooling/VulnAnalysis/contamer.git" "${CONTAMERDIR}"
-    - cd "${CONTAMERDIR}"
-    - pip3 install -r requirements.txt
-    - python3 contamer.py "${BASE_IMAGE_NAME_VERSIONED}"
 
 #py2-base:
 #    stage: build base
@@ -576,3 +568,21 @@ IV_tl-PH--V100_1GPU:
       TEST_WORK_DIR: "/opt/kaldi/qa/IV_model"
       TEST_SCRIPT: "./test-tl-PH.sh"
 
+##### contamer vulnerability analysis test
+L1_contamer:
+    stage: test
+    script:
+    - export CI_TMPDIR="${PWD}/${CI_JOB_ID}"
+    - export CONTAMERDIR="${CI_TMPDIR}/contamer" && echo "CONTAMERDIR=${CONTAMERDIR}"
+    - git clone -b master --single-branch "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-master.nvidia.com/pstooling/VulnAnalysis/contamer.git" "${CONTAMERDIR}"
+    - cd "${CONTAMERDIR}"
+    - pip3 install -r requirements.txt
+    - docker pull "${BASE_IMAGE_NAME_VERSIONED}"
+    - python3 contamer.py "${BASE_IMAGE_NAME_VERSIONED}"
+    only:
+    - /^.*-devel$/
+    - /^master$/
+    except:
+    - tags
+    tags:
+    - contamer
