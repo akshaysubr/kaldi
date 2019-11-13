@@ -64,6 +64,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::AllocateAndInitializeData(
   cuda_decoder_->SetThreadPoolAndStartCPUWorkers(thread_pool_.get(), 4);
   n_samples_valid_.resize(max_batch_size_);
   n_input_frames_valid_.resize(max_batch_size_);
+  n_lattice_callbacks_not_done_.store(0);
 }
 
 void BatchedThreadedNnet3CudaOnlinePipeline::SetLatticeCallback(
