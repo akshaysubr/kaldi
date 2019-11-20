@@ -58,10 +58,12 @@ before_script:
               "qa" > .dockerignore
     - docker pull "${BASE_IMAGE_NAME}" ||
       docker pull "${MASTER_BASE_IMAGE_NAME}" || true
+    - export FROM_IMAGE_ARG=$(docker pull "${FROM_IMAGE_NAME}" >& /dev/null && echo "--build-arg FROM_IMAGE_NAME=${FROM_IMAGE_NAME}")
     - docker build --pull
                    --cache-from "${BASE_IMAGE_NAME}"
                    --cache-from "${MASTER_BASE_IMAGE_NAME}"
                    -t "${BASE_IMAGE_NAME}" -t "${BASE_IMAGE_NAME_VERSIONED}"
+                   ${FROM_IMAGE_ARG}
                    --build-arg "NVIDIA_BUILD_REF=${CI_COMMIT_SHA}"
                    --build-arg "NVIDIA_BUILD_ID=${CI_JOB_ID}"
                    --build-arg "NVIDIA_KALDI_VERSION=${RELEASE_BRANCH_NAME}"
