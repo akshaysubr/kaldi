@@ -224,14 +224,12 @@ void BatchedStaticNnet3::BatchContextSwitch(
 
 void BatchedStaticNnet3::RunNnet3(CuMatrix<BaseFloat> *d_all_log_posteriors,
                                   int batch_size) {
-  printf("BS=%i \n", batch_size);
   for (int off = 0; off < batch_size; off += nnet3_batch_size_) {
     d_nnet3_input_.Resize(
         nnet3_batch_size_ * input_frames_per_chunk_with_context_, input_dim_);
     d_nnet3_ivectors_.Resize(nnet3_batch_size_, ivector_dim_);
 
     int minibatch_size = std::min(nnet3_batch_size_, batch_size - off);
-    printf("MINISIZE=%i \n", minibatch_size);
     {
       // Copy minibatch from batch : mfcc
       int frames_per_minibatch =
@@ -323,7 +321,6 @@ void BatchedStaticNnet3::RunBatch(
   }
 
   if (!eos_channels_.empty()) {
-    printf("================== EOS %zu \n", eos_channels_.size());
     BatchContextSwitch(eos_channels_, d_eos_features_, 0, d_eos_ivectors_,
                        eos_n_input_frames_valid_, true,
                        &eos_n_output_frames_valid_);
@@ -333,7 +330,6 @@ void BatchedStaticNnet3::RunBatch(
     FormatOutputPtrs(eos_channels_, &d_all_eos_log_posteriors_,
                      all_frames_log_posteriors_ptrs, eos_n_output_frames_valid_,
                      &eos_n_output_frames_offset_);
-    printf("================== END EOS %zu \n", eos_channels_.size());
   }
 }
 
@@ -351,7 +347,6 @@ void BatchedStaticNnet3::FormatOutputPtrs(
     int total_output_nframes = offset + n_output_frames_valid[i];
     if (all_frames_log_posteriors_ptrs->size() < total_output_nframes)
       all_frames_log_posteriors_ptrs->resize(total_output_nframes);
-    printf("total=%i \n", n_output_frames_valid[i]);
     for (int iframe = offset; iframe < total_output_nframes; ++iframe) {
       std::vector<std::pair<int, BaseFloat *>> &this_frame =
           (*all_frames_log_posteriors_ptrs)[iframe];
