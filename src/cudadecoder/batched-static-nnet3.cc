@@ -333,6 +333,7 @@ void BatchedStaticNnet3::RunBatch(
     FormatOutputPtrs(eos_channels_, &d_all_eos_log_posteriors_,
                      all_frames_log_posteriors_ptrs, eos_n_output_frames_valid_,
                      &eos_n_output_frames_offset_);
+    printf("================== END EOS %zu \n", eos_channels_.size());
   }
 }
 
@@ -350,11 +351,13 @@ void BatchedStaticNnet3::FormatOutputPtrs(
     int total_output_nframes = offset + n_output_frames_valid[i];
     if (all_frames_log_posteriors_ptrs->size() < total_output_nframes)
       all_frames_log_posteriors_ptrs->resize(total_output_nframes);
+    printf("total=%i \n", n_output_frames_valid[i]);
     for (int iframe = offset; iframe < total_output_nframes; ++iframe) {
       std::vector<std::pair<int, BaseFloat *>> &this_frame =
           (*all_frames_log_posteriors_ptrs)[iframe];
-      CuSubVector<BaseFloat> out =
-          d_all_log_posteriors->Row(i * output_frames_per_chunk_ + iframe);
+      int local_iframe = iframe - offset;
+      CuSubVector<BaseFloat> out = d_all_log_posteriors->Row(
+          i * output_frames_per_chunk_ + local_iframe);
       BaseFloat *frame = out.Data();
       this_frame.push_back({ichannel, frame});
     }
