@@ -91,17 +91,20 @@ void BuildBatchWithContextKernel(const dim3 &grid, const dim3 &block,
 			int n_frames_in_context =
 				batch_assign.n_frames_already_in_context;
 			int n_frames_to_set = n_frames_in_context + params.total_nnet_right_context;  
+//			printf("will set %i frames, %i in context \n", n_frames_to_set, n_frames_in_context);
 
 			for (int iframe = blockIdx.y; iframe < n_frames_to_set;
 					iframe += gridDim.y) {
 				for (int idim = threadIdx.x; idim < params.input_dim; idim += blockDim.x) {
 					if(iframe < n_frames_in_context) {
-						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[iframe*params.d_all_context_frames_frame_stride + idim];
+float f=						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[iframe*params.d_all_context_frames_frame_stride + idim];
+//						if(batch_slot==0) printf("A f%02dd%02d=%f\n", iframe, idim, f);
 					}
 					else if (iframe < n_frames_to_set) {
 						// Generating right context from last frame
 						int src_iframe_in_saved_context = n_frames_in_context-1;
-						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[src_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
+float f =						d_batch_slot_with_context[iframe * params.d_batch_with_context_frame_stride+ idim] = d_channel_context[src_iframe_in_saved_context*params.d_all_context_frames_frame_stride+ idim];
+//						if(batch_slot==0) printf("B f%02dd%02d=%f\n", iframe, idim, f);
 					} 
 				}
 
