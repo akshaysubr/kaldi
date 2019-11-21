@@ -231,8 +231,7 @@ void CuDevice::SelectGpuId(std::string use_gpu) {
     KALDI_WARN << "Not in compute-exclusive mode.  Suggestion: use "
                   "'nvidia-smi -c 3' to set compute exclusive mode";
     // We want to choose the device more carefully, so release the CUDA context.
-    //    e = cudaDeviceReset();
-    e = cudaSuccess;
+    e = cudaDeviceReset();
     if (e != cudaSuccess) {
       KALDI_CUDA_ERR(e, "Failed to release CUDA context on a GPU");
     }
@@ -353,6 +352,41 @@ bool CuDevice::IsComputeExclusive() {
   }
 }
 
+bool CuDevice::SelectGpuId(int dev_id) {
+  KALDI_LOG << "Trying to select device: " << dev_id;
+  cudaError_t e = cudaSetDevice(dev_id);
+  if (e != cudaSuccess) {
+    KALDI_WARN << "Cannot select this device: return code " << e
+               << ", Error message: \"" << cudaGetErrorString(e) << "\"";
+    return false;
+  } else {
+    e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) {
+      KALDI_WARN << "Cannot select this device: return code " << e
+                 << ", Error message: \"" << cudaGetErrorString(e) << "\"";
+      return false;
+    }
+  }
+
+  std::string debug_str;
+  int num_gpus = dev_id + 1;  // used for debugging purposes
+  bool got_context = GetCudaContext(num_gpus, &debug_str);
+  if (!got_context) {
+    KALDI_WARN << "Cannot get Cuda Context, Error message: \"" << debug_str
+               << "\"";
+  }
+
+  return true;
+}
+
+bool CuDevice::SelectAndInitializeGpuIdWithExistingCudaContext(int dev_id) {
+  // Make sure the global allocator object has the up-to-date options.
+  g_cuda_allocator.SetOptions(g_allocator_options);
+  if (!CuDevice::SelectGpuId(dev_id)) return false;
+  FinalizeActiveGpu();
+  return true;
+}
+
 template <typename TA, typename TB>
 bool greater_pair(const std::pair<TA, TB> &left,
                   const std::pair<TA, TB> &right) {
@@ -430,6 +464,7 @@ bool CuDevice::SelectGpuIdAuto() {
 
   int dev_id;
   float mem_ratio;
+  bool success;
   do {
     // try to select the GPU in the best to worst order
     // Note we have to check the return codes manually, as the CU_SAFE_CALL
@@ -438,21 +473,11 @@ bool CuDevice::SelectGpuIdAuto() {
     dev_id = free_mem_ratio[max_id].first;
     mem_ratio = free_mem_ratio[max_id].second;
 
-    KALDI_LOG << "Trying to select device: " << dev_id
-              << " (automatically), mem_ratio: " << mem_ratio;
-    e = cudaSetDevice(dev_id);
-    if (e != cudaSuccess) {
-      KALDI_WARN << "Cannot select this device: return code " << e
-                 << ", Error message: \"" << cudaGetErrorString(e) << "\"";
-    } else {
-      e = cudaDeviceSynchronize();
-      if (e != cudaSuccess) {
-        KALDI_WARN << "Cannot select this device: return code " << e
-                   << ", Error message: \"" << cudaGetErrorString(e) << "\"";
-      }
-    }
+    KALDI_LOG << "Device: " << dev_id << ", mem_ratio: " << mem_ratio;
+    success = SelectGpuId(dev_id);
+
     max_id++;
-  } while ((e != cudaSuccess) && (max_id < free_mem_ratio.size()));
+  } while (success && (max_id < free_mem_ratio.size()));
 
   if (e != cudaSuccess) {
     KALDI_WARN << "Failed to (automatically) select any device";
