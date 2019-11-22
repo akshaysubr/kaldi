@@ -241,7 +241,6 @@ void BatchedThreadedNnet3CudaOnlinePipeline::ListIChannelsInBatch(
   for (int i = 0; i < corr_ids.size(); ++i) {
     int corr_id = corr_ids[i];
     auto it = corr_id2channel_.find(corr_id);
-    if (it == corr_id2channel_.end()) printf("CHANNEL %i \n", corr_id);
     KALDI_ASSERT(it != corr_id2channel_.end());
     int ichannel = it->second;
     channels->push_back(ichannel);
