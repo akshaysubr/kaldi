@@ -181,13 +181,11 @@ if [ $USE_GPU -eq 1 ]; then
   DECODER=$GPU_DECODER
   CPU_THREADS=$THREADS_PER_PROCESS
   #these are GPU specific parameters
-  echo "GPU_FEATURE: $GPU_FEATURE"
   echo "CPU_THREADS: $CPU_THREADS"
   echo "GPU_THREADS: $GPU_THREADS"
   echo "COPY_THREADS: $COPY_THREADS"
   echo "WORKER_THREADS: $WORKER_THREADS"
   echo "MAX_BATCH_SIZE: $MAX_BATCH_SIZE"
-  echo "BATCH_DRAIN_SIZE: $BATCH_DRAIN_SIZE"
   echo "FILE_LIMIT: $FILE_LIMIT"
   echo "MAIN_Q_CAPACITY=$MAIN_Q_CAPACITY"
   echo "AUX_Q_CAPACITY=$AUX_Q_CAPACITY"
@@ -285,7 +283,7 @@ CPUFLAGS=""
 if [ $USE_GPU -eq 1 ]; then
   NUM_CHANNELS=$(($MAX_BATCH_SIZE + $MAX_BATCH_SIZE/2))
   #Set CUDA decoder specific flags
-  CUDAFLAGS="--gpu-feature-extract=$GPU_FEATURE --num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-control-threads=$GPU_THREADS --batch-drain-size=$BATCH_DRAIN_SIZE --cuda-worker-threads=$WORKER_THREADS  --cuda-decoder-copy-threads=$COPY_THREADS"
+  CUDAFLAGS="--num-channels=$NUM_CHANNELS --cuda-use-tensor-cores=true --main-q-capacity=$MAIN_Q_CAPACITY --aux-q-capacity=$AUX_Q_CAPACITY --cuda-memory-proportion=.5 --max-batch-size=$MAX_BATCH_SIZE --cuda-worker-threads=$WORKER_THREADS  --file-limit=$FILE_LIMIT --cuda-decoder-copy-threads=$COPY_THREADS"
   SPK2UTT=""
 else
   SPK2UTT=ark:$RESULT_PATH/spk2utt.ark
