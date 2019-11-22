@@ -167,7 +167,6 @@ int main(int argc, char *argv[]) {
     nnet3::NnetSimpleLoopedComputationOptions decodable_opts;
     LatticeFasterDecoderConfig decoder_opts;
 
-    int cur = 0;
     bool write_lattice = true;
     int num_todo = -1;
     int iterations = 1;
@@ -240,7 +239,7 @@ int main(int argc, char *argv[]) {
         KALDI_ERR << "Could not read symbol table from file "
                   << word_syms_rxfilename;
 
-    int32 num_task_submitted = 0, num_err = 0;
+    int32 num_done = 0, num_err = 0;
     int64 num_frames = 0;
     double tot_like = 0.0;
     double total_audio = 0;
@@ -285,25 +284,26 @@ int main(int argc, char *argv[]) {
         p.tot_like = &tot_like;
         p.clat_write_mutex = &clat_write_mutex;
         p.write_lattice = write_lattice;
-#if 1
-        // enqueue work in thread pool
-        futures.push_back(work_pool.enqueue(ProcessOneWave, p));
+#if 0
+        //enqueue work in thread pool
+        futures.push_back( work_pool.enqueue(ProcessOneWave, p));
 #else
         ProcessOneWave(p);
 #endif
-        num_task_submitted++;
-        if (num_todo != -1 && num_task_submitted >= num_todo) break;
+        num_done++;
       }
     }
 
-    for (int i = 0; i < futures.size(); i++) {
-      futures[i].get();
-    }
+    /*
+for(int i=0;i<futures.size();i++) {
+futures[i].get();
+}
+*/
 
     // number of seconds elapsed since the creation of timer
     double total_time = timer.Elapsed();
 
-    KALDI_LOG << "Decoded " << num_task_submitted << " utterances, " << num_err
+    KALDI_LOG << "Decoded " << num_done << " utterances, " << num_err
               << " with errors.";
     KALDI_LOG << "Overall likelihood per frame was " << (tot_like / num_frames)
               << " per frame over " << num_frames << " frames.";
