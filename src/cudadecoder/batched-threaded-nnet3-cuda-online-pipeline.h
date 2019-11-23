@@ -44,7 +44,8 @@ struct BatchedThreadedNnet3CudaOnlinePipelineConfig {
       : max_batch_size(400),
         num_channels(600),
         num_worker_threads(-1),
-        determinize_lattice(true) {}
+        determinize_lattice(true),
+        num_decoder_copy_threads(2) {}
   void Register(OptionsItf *po) {
     po->Register("max-batch-size", &max_batch_size,
                  "The maximum batch size to be used by the decoder. "
@@ -61,6 +62,9 @@ struct BatchedThreadedNnet3CudaOnlinePipelineConfig {
                  "process CPU tasks. -1 = use std::hardware_concurrency()");
     po->Register("determinize-lattice", &determinize_lattice,
                  "Determinize the lattice before output.");
+    po->Register("cuda-decoder-copy-threads", &num_decoder_copy_threads,
+                 "Advanced - Number of worker threads used in the decoder for "
+                 "the host to host copies.");
     feature_opts.Register(po);
     decoder_opts.Register(po);
     det_opts.Register(po);
@@ -70,6 +74,7 @@ struct BatchedThreadedNnet3CudaOnlinePipelineConfig {
   int num_channels;
   int num_worker_threads;
   bool determinize_lattice;
+  int num_decoder_copy_threads;
 
   OnlineNnet2FeaturePipelineConfig feature_opts;       // constant readonly
   CudaDecoderConfig decoder_opts;                      // constant readonly
