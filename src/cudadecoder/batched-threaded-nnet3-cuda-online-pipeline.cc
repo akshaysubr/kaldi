@@ -61,7 +61,8 @@ void BatchedThreadedNnet3CudaOnlinePipeline::AllocateAndInitializeData(
   cuda_fst_->Initialize(decode_fst, trans_model_);
   cuda_decoder_.reset(new CudaDecoder(*cuda_fst_, config_.decoder_opts,
                                       max_batch_size_, config_.num_channels));
-  cuda_decoder_->SetThreadPoolAndStartCPUWorkers(thread_pool_.get(), 4);
+  cuda_decoder_->SetThreadPoolAndStartCPUWorkers(
+      thread_pool_.get(), config_.num_decoder_copy_threads);
   n_samples_valid_.resize(max_batch_size_);
   n_input_frames_valid_.resize(max_batch_size_);
   n_lattice_callbacks_not_done_.store(0);
