@@ -182,7 +182,6 @@ if [ $USE_GPU -eq 1 ]; then
   CPU_THREADS=$THREADS_PER_PROCESS
   #these are GPU specific parameters
   echo "CPU_THREADS: $CPU_THREADS"
-  echo "GPU_THREADS: $GPU_THREADS"
   echo "COPY_THREADS: $COPY_THREADS"
   echo "WORKER_THREADS: $WORKER_THREADS"
   echo "MAX_BATCH_SIZE: $MAX_BATCH_SIZE"
