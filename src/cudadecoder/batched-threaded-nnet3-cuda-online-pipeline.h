@@ -98,7 +98,7 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
     // TODO move that in config struct
     KALDI_ASSERT(config_.max_batch_size > 0);
     int min_nchannels =
-        config_.max_batch_size * 1.5;  // TODO handle available_channels_ empty
+        config_.max_batch_size * 2;  // TODO handle available_channels_ empty
     config_.num_channels = std::max(config.num_channels, min_nchannels);
 
     int num_worker_threads = (config_.num_worker_threads > 0)
@@ -112,7 +112,8 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
   // Called when a new utterance will be decoded w/ correlation id corr_id
   // When this utterance will be done (when it will receive a chunk with
   // last_chunk=true)
-  void InitCorrID(CorrelationID corr_id);
+  // Returns true if a channel was available
+  bool InitCorrID(CorrelationID corr_id);
 
   // Set the callback function to call with the final lattice
   void SetLatticeCallback(

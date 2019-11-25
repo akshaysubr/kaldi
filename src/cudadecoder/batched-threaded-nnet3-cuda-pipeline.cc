@@ -274,7 +274,10 @@ void BatchedThreadedNnet3CudaPipeline::AcquireTasks() {
     // If still empty, break
     if (outstanding_utt_.size() == 0) break;
     UtteranceTask &task = outstanding_utt_.front();
-    cuda_online_pipeline_.InitCorrID(task.corr_id);
+    bool was_created = cuda_online_pipeline_.InitCorrID(task.corr_id);
+    // No channel was available. Breaking for now
+    if (!was_created) break;
+
     auto &callback = task.callback;
     bool auto_close_after_callback = task.auto_close_after_callback;
     auto &key = task.key;
