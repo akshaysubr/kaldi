@@ -83,7 +83,7 @@ void BatchedThreadedNnet3CudaOnlinePipeline::SetLatticeCallback(
   KALDI_ASSERT(inserted);
 }
 
-void BatchedThreadedNnet3CudaOnlinePipeline::InitCorrID(CorrelationID corr_id) {
+bool BatchedThreadedNnet3CudaOnlinePipeline::InitCorrID(CorrelationID corr_id) {
   bool inserted;
   decltype(corr_id2channel_.end()) it;
   std::tie(it, inserted) = corr_id2channel_.insert({corr_id, -1});
@@ -91,10 +91,15 @@ void BatchedThreadedNnet3CudaOnlinePipeline::InitCorrID(CorrelationID corr_id) {
   if (inserted) {
     // The corr_id was not in use
     std::lock_guard<std::mutex> lk(available_channels_m_);
-    KALDI_ASSERT(!available_channels_.empty());
-    ichannel = available_channels_.back();
-    available_channels_.pop_back();
-    it->second = ichannel;
+    if (available_channels_.empty()) {
+      // We cannot use that corr_id
+      corr_id2channel_.erase(it);
+      return false;
+    } else {
+      ichannel = available_channels_.back();
+      available_channels_.pop_back();
+      it->second = ichannel;
+    }
   } else {
     // This corr id was already in use but not closed
     // It can happen if for instance a channel lost connection and did not send
@@ -109,7 +114,9 @@ void BatchedThreadedNnet3CudaOnlinePipeline::InitCorrID(CorrelationID corr_id) {
   channel_frame_offset_[ichannel] = 0;
   list_channels_first_chunk_.push_back(ichannel);
   cuda_nnet3_->InitChannel(ichannel);
+  return true;
 }
+
 /*
 void BatchedThreadedNnet3CudaOnlinePipeline::RunCUDAFeatureExtraction() {
   mfcc.ComputeBatchedFeatures(cu_waveform, samp_freq, vtln_warp, &cu_features);
