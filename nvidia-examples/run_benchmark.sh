@@ -330,11 +330,8 @@ for (( d = 0 ; d < $NUM_PROCESSES ; d++ )); do
   cat $LOCAL_RESULT_PATH/rtf
   cat $LOCAL_RESULT_PATH/wer
 
-  if [ $USE_GPU -eq 1 ]; then
-    RTF=`cat $LOCAL_RESULT_PATH/rtf | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 10`
-  else
-    RTF=`cat $LOCAL_RESULT_PATH/rtf | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 11`
-  fi
+  RTF=`cat $LOCAL_RESULT_PATH/rtf | grep Aggregate | tail -n 1 | tr -s " " | cut -d " " -f 11`
+  WER=`cat $LOCAL_RESULT_PATH/wer  | grep WER | cut -d " " -f 4`
   TOTAL_RTF=`echo "$RTF + ${TOTAL_RTF}" | bc`
   
   if [ -f  $DATASET/text ]; then
