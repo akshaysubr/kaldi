@@ -76,11 +76,10 @@ struct BatchedThreadedNnet3CudaOnlinePipelineConfig {
   bool determinize_lattice;
   int num_decoder_copy_threads;
 
-  OnlineNnet2FeaturePipelineConfig feature_opts;       // constant readonly
-  CudaDecoderConfig decoder_opts;                      // constant readonly
-  fst::DeterminizeLatticePhonePrunedOptions det_opts;  // constant readonly
-  nnet3::NnetSimpleComputationOptions compute_opts;    // constant readonly
-  // TODO asserts
+  OnlineNnet2FeaturePipelineConfig feature_opts;
+  CudaDecoderConfig decoder_opts;
+  fst::DeterminizeLatticePhonePrunedOptions det_opts;
+  nnet3::NnetSimpleComputationOptions compute_opts;
 };
 
 class BatchedThreadedNnet3CudaOnlinePipeline {
@@ -97,6 +96,7 @@ class BatchedThreadedNnet3CudaOnlinePipeline {
         word_syms_(NULL) {
     // TODO move that in config struct
     KALDI_ASSERT(config_.max_batch_size > 0);
+    config_.compute_opts.CheckAndFixConfigs(am_nnet_->GetNnet().Modulus());
     int min_nchannels =
         config_.max_batch_size * 2;  // TODO handle available_channels_ empty
     config_.num_channels = std::max(config.num_channels, min_nchannels);
