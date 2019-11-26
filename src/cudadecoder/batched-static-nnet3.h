@@ -60,7 +60,7 @@ class BatchedStaticNnet3 {
     nchannels_ = (config.nchannels != -1) ? config.nchannels : max_batch_size_;
     KALDI_ASSERT(max_batch_size_ > 0);
     nnet3_batch_size_ = std::min(max_batch_size_, MAX_COMPUTE_BATCH_SIZE);
-    KALDI_ASSERT(nchannels_ > max_batch_size_);
+    KALDI_ASSERT(nchannels_ >= max_batch_size_);
     ReadParametersFromModelAndConfig();
     CompileNnet3();
     Allocate();

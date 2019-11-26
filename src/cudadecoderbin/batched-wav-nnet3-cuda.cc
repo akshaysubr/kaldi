@@ -127,7 +127,6 @@ int main(int argc, char *argv[]) {
     double total_audio = 0;
 
     nvtxRangePush("Global Timer");
-
     // starting timer here so we
     // can measure throughput
     // without allocation
@@ -138,12 +137,10 @@ int main(int argc, char *argv[]) {
     for (int iter = 0; iter < iterations; iter++) {
       num_task_submitted = 0;
       SequentialTableReader<WaveHolder> wav_reader(wav_rspecifier);
-      if (iter > 0)
-        write_lattice =
-            false;  // write the lattices only on the first iteration
       for (; !wav_reader.Done(); wav_reader.Next()) {
         std::string utt = wav_reader.Key();
         std::string key = utt;
+        if (iterations > 0) key = std::to_string(iter) + "-" + key;
         std::shared_ptr<WaveData> wave_data = std::make_shared<WaveData>();
         wave_data->Swap(&wav_reader.Value());
         if (iter == 0) {
