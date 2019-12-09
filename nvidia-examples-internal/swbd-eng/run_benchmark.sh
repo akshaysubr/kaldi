@@ -1,0 +1,1 @@
+/kaldi_host/nvidia-examples/run_benchmark.sh
