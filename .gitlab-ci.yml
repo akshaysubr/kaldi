@@ -400,37 +400,21 @@ L0_aspire--T4_1GPU:
     <<: *L0_TEST
     <<: *T4_1GPU
 
-L1_igbo--P100_1GPU:
-    <<: *L1_TEST
-    <<: *P100_1GPU
-
-L1_igbo--P40_1GPU:
-    <<: *L1_TEST
-    <<: *P40_1GPU
-
 L1_igbo--V100_1GPU:
     <<: *L1_TEST
     <<: *V100_1GPU
-
-L1_igbo--T4_1GPU:
-    <<: *L1_TEST
-    <<: *T4_1GPU
-
-L1_georgian--P100_1GPU:
-    <<: *L1_TEST
-    <<: *P100_1GPU
-
-L1_georgian--P40_1GPU:
-    <<: *L1_TEST
-    <<: *P40_1GPU
 
 L1_georgian--V100_1GPU:
     <<: *L1_TEST
     <<: *V100_1GPU
 
-L1_georgian--T4_1GPU:
+L1_swbd-eng--V100_1GPU:
     <<: *L1_TEST
-    <<: *T4_1GPU
+    <<: *V100_1GPU
+
+L1_multi-cn--V100_1GPU:
+    <<: *L1_TEST
+    <<: *V100_1GPU
 
 IV_en-US--V100_1GPU:
     <<: *IV_TEST
