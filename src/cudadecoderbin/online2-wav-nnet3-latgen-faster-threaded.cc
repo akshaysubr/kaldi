@@ -249,7 +249,6 @@ int main(int argc, char *argv[]) {
 
     clat_writer.Open(clat_wspecifier);
 
-    std::vector<std::future<void> > futures;
     Timer timer;
 
     for (int iter = 0; iter < iterations; iter++) {
@@ -316,7 +315,7 @@ futures[i].get();
 
     delete decode_fst;
     delete word_syms;  // will delete if non-NULL.
-    return (num_task_submitted != 0 ? 0 : 1);
+    return (num_done != 0 ? 0 : 1);
   } catch (const std::exception &e) {
     std::cerr << e.what();
     return -1;
