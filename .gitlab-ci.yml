@@ -416,6 +416,22 @@ L1_igbo--T4_1GPU:
     <<: *L1_TEST
     <<: *T4_1GPU
 
+L1_georgian--P100_1GPU:
+    <<: *L1_TEST
+    <<: *P100_1GPU
+
+L1_georgian--P40_1GPU:
+    <<: *L1_TEST
+    <<: *P40_1GPU
+
+L1_georgian--V100_1GPU:
+    <<: *L1_TEST
+    <<: *V100_1GPU
+
+L1_georgian--T4_1GPU:
+    <<: *L1_TEST
+    <<: *T4_1GPU
+
 IV_en-US--V100_1GPU:
     <<: *IV_TEST
     <<: *V100_1GPU
@@ -576,11 +592,13 @@ L1_contamer:
     script:
     - export CI_TMPDIR="${PWD}/${CI_JOB_ID}"
     - export CONTAMERDIR="${CI_TMPDIR}/contamer" && echo "CONTAMERDIR=${CONTAMERDIR}"
-    - git clone -b stable --single-branch "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-master.nvidia.com/pstooling/VulnAnalysis/contamer.git" "${CONTAMERDIR}"
+    # git clone based on tag 2.0.0
+    - git config --global advice.detachedHead false
+    - git clone --branch 2.0.0 --single-branch "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-master.nvidia.com/pstooling/VulnAnalysis/contamer.git" "${CONTAMERDIR}"
     - cd "${CONTAMERDIR}"
     - pip3 install -r requirements.txt
     - docker pull "${BASE_IMAGE_NAME_VERSIONED}"
-    - python3 contamer.py "${BASE_IMAGE_NAME_VERSIONED}"
+    - python3 contamer.py -ls "${BASE_IMAGE_NAME_VERSIONED}"
     only:
     - /^.*-devel$/
     - /^master$/

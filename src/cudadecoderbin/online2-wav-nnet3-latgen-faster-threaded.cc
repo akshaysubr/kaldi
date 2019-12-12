@@ -76,7 +76,7 @@ void GetDiagnosticsAndPrintOutput(const std::string &utt,
     }
   }
 }
-}
+}  // namespace kaldi
 
 using namespace kaldi;
 using namespace fst;
@@ -168,6 +168,7 @@ int main(int argc, char *argv[]) {
     LatticeFasterDecoderConfig decoder_opts;
 
     bool write_lattice = true;
+    int num_todo = -1;
     int iterations = 1;
     int num_threads = 1;
 

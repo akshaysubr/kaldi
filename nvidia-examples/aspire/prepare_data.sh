@@ -94,6 +94,7 @@ if [[ "$SKIP_MODEL_DOWNLOAD" -ne "1" ]]; then
   ln -sf `pwd`/exp/tdnn_7b_chain_online/graph_pp/words.txt
   ln -sf `pwd`/exp/tdnn_7b_chain_online/final.mdl 
   ln -sf `pwd`/exp/tdnn_7b_chain_online/conf/
+  ln -sf `pwd`/exp/tdnn_7b_chain_online/graph_pp/phones
 
   #filter out unsupported options
   cp ./conf/online.conf ./conf/online.conf.backup

@@ -289,7 +289,8 @@ void BatchedThreadedNnet3CudaOnlinePipeline::ReadParametersFromModel() {
   BaseFloat frame_shift = feature_info_->FrameShiftInSeconds();
   input_frames_per_chunk_ = config_.compute_opts.frames_per_chunk;
   seconds_per_chunk_ = input_frames_per_chunk_ * frame_shift;
-  samples_per_chunk_ = seconds_per_chunk_ * model_frequency_;
+  int samp_per_frame = static_cast<int>(model_frequency_*frame_shift);
+  samples_per_chunk_ = input_frames_per_chunk_ * samp_per_frame;
   BatchedStaticNnet3Config nnet3_config;
   nnet3_config.compute_opts = config_.compute_opts;
   nnet3_config.max_batch_size = max_batch_size_;

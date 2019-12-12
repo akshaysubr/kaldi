@@ -31,4 +31,7 @@ done
 popd
 sed -i "s@workspace@$WORKSPACE@g" $WORKSPACE/datasets/iv/$MODEL_NAME/wav.scp
 
+pushd $WORKSPACE/models/iv/$MODEL_NAME/
+ln -sf graph/phones/ ./phones
+popd
 ln -sf ../run_benchmark.sh
